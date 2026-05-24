@@ -1,8 +1,30 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
+type OpenCodeSidecarStatus = {
+  state: 'stopped' | 'starting' | 'connected' | 'error'
+  url: string | null
+  version: string | null
+  pid: number | null
+  message: string
+  updatedAt: number
+}
+
 // Custom APIs for renderer
-const api = {}
+const api = {
+  getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>
+    ipcRenderer.invoke('opencode:get-status'),
+  restartOpenCode: (): Promise<OpenCodeSidecarStatus> => ipcRenderer.invoke('opencode:restart'),
+  onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: OpenCodeSidecarStatus): void =>
+      callback(status)
+
+    ipcRenderer.on('opencode:status', listener)
+    return (): void => {
+      ipcRenderer.removeListener('opencode:status', listener)
+    }
+  }
+}
 
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
