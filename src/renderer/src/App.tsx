@@ -2,11 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 
 type OpenCodeSidecarStatus = Awaited<ReturnType<Window['api']['getOpenCodeStatus']>>
 type OpenCodeConnection = Awaited<ReturnType<Window['api']['getOpenCodeConnection']>>
-type RendererHealth = 'waiting' | 'checking' | 'connected' | 'error'
-type RendererHealthResult = {
-  updatedAt: number
-  health: Extract<RendererHealth, 'connected' | 'error'>
-}
 type OpenCodeConnectionResult = {
   updatedAt: number
   connection: OpenCodeConnection
@@ -24,7 +19,6 @@ const initialStatus: OpenCodeSidecarStatus = {
 function App(): React.JSX.Element {
   const [status, setStatus] = useState<OpenCodeSidecarStatus>(initialStatus)
   const [connection, setConnection] = useState<OpenCodeConnectionResult | null>(null)
-  const [rendererHealth, setRendererHealth] = useState<RendererHealthResult | null>(null)
   const [isRestarting, setIsRestarting] = useState(false)
 
   useEffect(() => {
@@ -53,21 +47,8 @@ function App(): React.JSX.Element {
       .getOpenCodeConnection()
       .then(async (connection) => {
         if (isMounted) setConnection({ updatedAt: status.updatedAt, connection })
-
-        const response = await fetch(`${connection.url}/global/health`, {
-          headers: {
-            authorization: `Basic ${btoa(`${connection.username}:${connection.password}`)}`
-          }
-        })
-
-        if (!response.ok) throw new Error(`Health check failed with ${response.status}.`)
-        const data = (await response.json()) as { healthy?: boolean }
-        if (!data.healthy) throw new Error('OpenCode health check returned unhealthy.')
-        if (isMounted) setRendererHealth({ updatedAt: status.updatedAt, health: 'connected' })
       })
-      .catch(() => {
-        if (isMounted) setRendererHealth({ updatedAt: status.updatedAt, health: 'error' })
-      })
+      .catch(() => undefined)
 
     return () => {
       isMounted = false
@@ -94,12 +75,6 @@ function App(): React.JSX.Element {
       second: '2-digit'
     }).format(new Date(status.updatedAt))
   }, [status.updatedAt])
-
-  const displayedRendererHealth = useMemo((): RendererHealth => {
-    if (status.state !== 'connected') return 'waiting'
-    if (rendererHealth?.updatedAt !== status.updatedAt) return 'checking'
-    return rendererHealth.health
-  }, [rendererHealth, status.state, status.updatedAt])
 
   const displayedConnection = useMemo((): OpenCodeConnection | null => {
     if (status.state !== 'connected') return null
@@ -134,9 +109,6 @@ function App(): React.JSX.Element {
         <dt>Updated</dt>
         <dd>{updatedAt}</dd>
 
-        <dt>Renderer HTTP</dt>
-        <dd>{formatRendererHealth(displayedRendererHealth)}</dd>
-
         <dt>Username</dt>
         <dd>{displayedConnection?.username ?? 'Waiting'}</dd>
 
@@ -160,19 +132,6 @@ function App(): React.JSX.Element {
       </button>
     </main>
   )
-}
-
-function formatRendererHealth(health: RendererHealth): string {
-  switch (health) {
-    case 'connected':
-      return 'Connected'
-    case 'checking':
-      return 'Checking'
-    case 'error':
-      return 'Failed'
-    case 'waiting':
-      return 'Waiting'
-  }
 }
 
 export default App
