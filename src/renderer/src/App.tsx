@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 
 type OpenCodeSidecarStatus = Awaited<ReturnType<Window['api']['getOpenCodeStatus']>>
+type OpenCodeConnection = Awaited<ReturnType<Window['api']['getOpenCodeConnection']>>
 type RendererHealth = 'waiting' | 'checking' | 'connected' | 'error'
 type RendererHealthResult = {
   updatedAt: number
   health: Extract<RendererHealth, 'connected' | 'error'>
+}
+type OpenCodeConnectionResult = {
+  updatedAt: number
+  connection: OpenCodeConnection
 }
 
 const initialStatus: OpenCodeSidecarStatus = {
@@ -18,6 +23,7 @@ const initialStatus: OpenCodeSidecarStatus = {
 
 function App(): React.JSX.Element {
   const [status, setStatus] = useState<OpenCodeSidecarStatus>(initialStatus)
+  const [connection, setConnection] = useState<OpenCodeConnectionResult | null>(null)
   const [rendererHealth, setRendererHealth] = useState<RendererHealthResult | null>(null)
   const [isRestarting, setIsRestarting] = useState(false)
 
@@ -46,6 +52,8 @@ function App(): React.JSX.Element {
     window.api
       .getOpenCodeConnection()
       .then(async (connection) => {
+        if (isMounted) setConnection({ updatedAt: status.updatedAt, connection })
+
         const response = await fetch(`${connection.url}/global/health`, {
           headers: {
             authorization: `Basic ${btoa(`${connection.username}:${connection.password}`)}`
@@ -93,6 +101,12 @@ function App(): React.JSX.Element {
     return rendererHealth.health
   }, [rendererHealth, status.state, status.updatedAt])
 
+  const displayedConnection = useMemo((): OpenCodeConnection | null => {
+    if (status.state !== 'connected') return null
+    if (connection?.updatedAt !== status.updatedAt) return null
+    return connection.connection
+  }, [connection, status.state, status.updatedAt])
+
   const restartOpenCode = async (): Promise<void> => {
     setIsRestarting(true)
 
@@ -122,7 +136,20 @@ function App(): React.JSX.Element {
 
         <dt>Renderer HTTP</dt>
         <dd>{formatRendererHealth(displayedRendererHealth)}</dd>
+
+        <dt>Username</dt>
+        <dd>{displayedConnection?.username ?? 'Waiting'}</dd>
+
+        <dt>Password</dt>
+        <dd>{displayedConnection?.password ?? 'Waiting'}</dd>
       </dl>
+
+      {displayedConnection ? (
+        <pre>
+          curl -u {displayedConnection.username}:{displayedConnection.password}{' '}
+          {displayedConnection.url}/global/health
+        </pre>
+      ) : null}
 
       <button
         type="button"
