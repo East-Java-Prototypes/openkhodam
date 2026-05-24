@@ -51,7 +51,7 @@ const startupTimeoutMs = 30_000
 const shutdownTimeoutMs = 5_000
 
 export function createOpenCodeSidecar(): OpenCodeSidecar {
-  let child: UtilityProcess | null = null
+  let opencodeChildProcess: UtilityProcess | null = null
   let connection: OpenCodeConnection | null = null
   let stopping = false
   let startPromise: Promise<OpenCodeSidecarStatus> | null = null
@@ -65,7 +65,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
 
   async function start(): Promise<OpenCodeSidecarStatus> {
     if (startPromise) return startPromise
-    if (child && status.state === 'connected') return status
+    if (opencodeChildProcess && status.state === 'connected') return status
 
     startPromise = startInner().finally(() => {
       startPromise = null
@@ -86,7 +86,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
   }
 
   async function stop(): Promise<OpenCodeSidecarStatus> {
-    const current = child
+    const current = opencodeChildProcess
     if (!current) {
       connection = null
       setStatus(createStatus('stopped', 'OpenCode sidecar is not running.'))
@@ -103,7 +103,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       })
     ]).catch(() => undefined)
 
-    child = null
+    opencodeChildProcess = null
     connection = null
     stopping = false
     setStatus(createStatus('stopped', 'OpenCode sidecar stopped.'))
@@ -143,20 +143,20 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       pid: null
     })
 
-    const nextChild = utilityProcess.fork(sidecarPath, [], {
+    const sidecarProcess = utilityProcess.fork(sidecarPath, [], {
       cwd: process.cwd(),
       env: createSidecarEnv(password),
       serviceName,
       stdio: 'pipe'
     })
 
-    child = nextChild
+    opencodeChildProcess = sidecarProcess
     connection = nextConnection
 
     let exited = false
     const ready = createDeferred<void>()
 
-    nextChild.on('message', (message: SidecarMessage) => {
+    sidecarProcess.on('message', (message: SidecarMessage) => {
       if (message.type === 'stdout') {
         console.log(`[opencode] ${message.message}`)
         return
@@ -176,7 +176,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
         ready.reject(
           Object.assign(new Error(message.error.message), { stack: message.error.stack })
         )
-        if (child === nextChild) {
+        if (opencodeChildProcess === sidecarProcess) {
           setStatus(
             createStatus('error', `Failed to start OpenCode sidecar: ${message.error.message}`, url)
           )
@@ -189,15 +189,15 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       }
     })
 
-    nextChild.once('error', (error) => {
+    sidecarProcess.once('error', (error) => {
       ready.reject(error)
       setStatus(createStatus('error', `Failed to start OpenCode sidecar: ${String(error)}`, url))
     })
 
-    nextChild.once('exit', (code) => {
+    sidecarProcess.once('exit', (code) => {
       exited = true
-      if (child === nextChild) {
-        child = null
+      if (opencodeChildProcess === sidecarProcess) {
+        opencodeChildProcess = null
         connection = null
       }
       if (stopping) return
@@ -207,7 +207,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       )
     })
 
-    nextChild.postMessage({
+    sidecarProcess.postMessage({
       type: 'start',
       cliPath,
       hostname,
@@ -228,15 +228,15 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
         state: 'connected',
         url,
         version: health.version ?? null,
-        pid: nextChild.pid ?? null,
+        pid: sidecarProcess.pid ?? null,
         message: 'OpenCode server is connected.',
         updatedAt: Date.now()
       })
       console.log(`[opencode] connected to ${url} (${health.version ?? 'unknown version'})`)
     } catch (error) {
-      if (child === nextChild) {
-        nextChild.kill()
-        child = null
+      if (opencodeChildProcess === sidecarProcess) {
+        sidecarProcess.kill()
+        opencodeChildProcess = null
         connection = null
       }
 
@@ -302,21 +302,23 @@ function withLoopbackNoProxy(value: string | undefined): string {
 }
 
 function resolveCorsOrigins(): string[] {
+  const configured = parseCorsOrigins(process.env.OPENCODE_CORS_ORIGINS)
+  if (configured.length > 0) return configured
+
+  const rendererOrigin = resolveRendererOrigin(process.env.ELECTRON_RENDERER_URL)
+  return rendererOrigin ? [rendererOrigin] : []
+}
+
+function parseCorsOrigins(value: string | undefined): string[] {
   return unique(
-    [
-      resolveRendererOrigin(),
-      process.env.ELECTRON_RENDERER_URL,
-      'http://localhost:5173',
-      'http://localhost:5174',
-      'http://127.0.0.1:5173',
-      'http://127.0.0.1:5174',
-      'file://'
-    ].filter((origin): origin is string => Boolean(origin))
+    (value ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean)
   )
 }
 
-function resolveRendererOrigin(): string | undefined {
-  const rendererUrl = process.env.ELECTRON_RENDERER_URL
+function resolveRendererOrigin(rendererUrl: string | undefined): string | undefined {
   if (!rendererUrl) return
 
   try {
