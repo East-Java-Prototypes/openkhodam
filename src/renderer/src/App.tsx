@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import Versions from './components/Versions'
 
 type OpenCodeSidecarStatus = Awaited<ReturnType<Window['api']['getOpenCodeStatus']>>
 type RendererHealth = 'waiting' | 'checking' | 'connected' | 'error'
@@ -105,56 +104,33 @@ function App(): React.JSX.Element {
   }
 
   return (
-    <main className="app-shell">
-      <section className="status-panel" aria-live="polite">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">OpenKhodam</p>
-            <h1>OpenCode Server</h1>
-          </div>
-          <span className={`status-pill ${status.state}`}>
-            <span className="status-dot" />
-            {statusText}
-          </span>
-        </div>
+    <main>
+      <h1>OpenCode Server</h1>
+      <p>Status: {statusText}</p>
+      <p>Message: {status.message}</p>
+      <p>Endpoint: {status.url ?? 'Waiting for port'}</p>
 
-        <div className="connection-row">
-          <div>
-            <p className="label">Endpoint</p>
-            <p className="value">{status.url ?? 'Waiting for port'}</p>
-          </div>
-          <button
-            type="button"
-            onClick={restartOpenCode}
-            disabled={isRestarting || status.state === 'starting'}
-          >
-            {isRestarting ? 'Restarting' : 'Restart'}
-          </button>
-        </div>
+      <dl>
+        <dt>Version</dt>
+        <dd>{status.version ?? 'Unknown'}</dd>
 
-        <p className="message">{status.message}</p>
+        <dt>PID</dt>
+        <dd>{status.pid ?? 'None'}</dd>
 
-        <dl className="metrics">
-          <div>
-            <dt>Version</dt>
-            <dd>{status.version ?? 'Unknown'}</dd>
-          </div>
-          <div>
-            <dt>PID</dt>
-            <dd>{status.pid ?? 'None'}</dd>
-          </div>
-          <div>
-            <dt>Updated</dt>
-            <dd>{updatedAt}</dd>
-          </div>
-          <div>
-            <dt>Renderer HTTP</dt>
-            <dd>{formatRendererHealth(displayedRendererHealth)}</dd>
-          </div>
-        </dl>
-      </section>
+        <dt>Updated</dt>
+        <dd>{updatedAt}</dd>
 
-      <Versions />
+        <dt>Renderer HTTP</dt>
+        <dd>{formatRendererHealth(displayedRendererHealth)}</dd>
+      </dl>
+
+      <button
+        type="button"
+        onClick={restartOpenCode}
+        disabled={isRestarting || status.state === 'starting'}
+      >
+        {isRestarting ? 'Restarting' : 'Restart'}
+      </button>
     </main>
   )
 }

@@ -310,12 +310,10 @@ function resolveCorsOrigins(): string[] {
 }
 
 function parseCorsOrigins(value: string | undefined): string[] {
-  return unique(
-    (value ?? '')
-      .split(',')
-      .map((origin) => origin.trim())
-      .filter(Boolean)
-  )
+  return (value ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
 }
 
 function resolveRendererOrigin(rendererUrl: string | undefined): string | undefined {
@@ -326,10 +324,6 @@ function resolveRendererOrigin(rendererUrl: string | undefined): string | undefi
   } catch {
     return rendererUrl
   }
-}
-
-function unique(values: string[]): string[] {
-  return [...new Set(values)]
 }
 
 function resolveOpenCodeCliPath(): string {
