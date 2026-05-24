@@ -262,7 +262,7 @@ function formatRendererHttpState(state: RendererHttpHealthState): string {
 function formatRendererHttpError(error: unknown): string {
   const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
   if (message.includes('Failed to fetch')) {
-    return `${message}. Check that CORS Origins includes ${window.location.origin}.`
+    return `${message}. Check that CORS Origins includes ${window.location.origin} and renderer CSP allows the OpenCode endpoint.`
   }
 
   return message
