@@ -13,6 +13,7 @@ export type OpenCodeConnection = {
   url: string
   username: string
   password: string
+  corsOrigins: string[]
 }
 
 export type OpenKhodamAPI = {

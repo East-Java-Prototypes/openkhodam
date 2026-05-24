@@ -14,6 +14,7 @@ type OpenCodeConnection = {
   url: string
   username: string
   password: string
+  corsOrigins: string[]
 }
 
 // Custom APIs for renderer

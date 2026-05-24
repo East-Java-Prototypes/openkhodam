@@ -9,6 +9,7 @@ export type OpenCodeConnection = {
   url: string
   username: string
   password: string
+  corsOrigins: string[]
 }
 
 export type OpenCodeSidecarStatus = {
@@ -135,7 +136,8 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
     const port = await resolvePort()
     const password = randomUUID()
     const url = `http://${hostname}:${port}`
-    const nextConnection: OpenCodeConnection = { url, username, password }
+    const corsOrigins = resolveCorsOrigins()
+    const nextConnection: OpenCodeConnection = { url, username, password, corsOrigins }
 
     setStatus({
       ...createStatus('starting', 'Starting OpenCode server sidecar...'),
@@ -212,7 +214,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       cliPath,
       hostname,
       port,
-      corsOrigins: resolveCorsOrigins()
+      corsOrigins
     })
 
     try {
