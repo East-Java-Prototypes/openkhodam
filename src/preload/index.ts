@@ -10,8 +10,16 @@ type OpenCodeSidecarStatus = {
   updatedAt: number
 }
 
+type OpenCodeConnection = {
+  url: string
+  username: string
+  password: string
+}
+
 // Custom APIs for renderer
 const api = {
+  getOpenCodeConnection: (): Promise<OpenCodeConnection> =>
+    ipcRenderer.invoke('opencode:get-connection'),
   getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>
     ipcRenderer.invoke('opencode:get-status'),
   restartOpenCode: (): Promise<OpenCodeSidecarStatus> => ipcRenderer.invoke('opencode:restart'),

@@ -53,6 +53,7 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('opencode:get-status', () => opencodeSidecar.getStatus())
+  ipcMain.handle('opencode:get-connection', () => opencodeSidecar.getConnection())
   ipcMain.handle('opencode:restart', () => opencodeSidecar.restart())
 
   opencodeSidecar.onStatusChange((status) => {

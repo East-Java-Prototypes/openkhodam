@@ -9,7 +9,14 @@ export type OpenCodeSidecarStatus = {
   updatedAt: number
 }
 
+export type OpenCodeConnection = {
+  url: string
+  username: string
+  password: string
+}
+
 export type OpenKhodamAPI = {
+  getOpenCodeConnection: () => Promise<OpenCodeConnection>
   getOpenCodeStatus: () => Promise<OpenCodeSidecarStatus>
   restartOpenCode: () => Promise<OpenCodeSidecarStatus>
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void) => () => void

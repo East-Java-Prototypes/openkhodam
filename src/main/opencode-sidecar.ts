@@ -1,10 +1,15 @@
-import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { dirname, join, sep } from 'node:path'
-import { app } from 'electron'
+import { app, utilityProcess, type UtilityProcess } from 'electron'
+
+export type OpenCodeConnection = {
+  url: string
+  username: string
+  password: string
+}
 
 export type OpenCodeSidecarStatus = {
   state: 'stopped' | 'starting' | 'connected' | 'error'
@@ -20,9 +25,17 @@ type HealthResponse = {
   version?: string
 }
 
+type SidecarMessage =
+  | { type: 'ready' }
+  | { type: 'stopped' }
+  | { type: 'stdout'; message: string }
+  | { type: 'stderr'; message: string }
+  | { type: 'error'; error: { message: string; stack?: string } }
+
 type StatusListener = (status: OpenCodeSidecarStatus) => void
 
 export type OpenCodeSidecar = {
+  getConnection: () => Promise<OpenCodeConnection>
   getStatus: () => OpenCodeSidecarStatus
   onStatusChange: (listener: StatusListener) => () => void
   restart: () => Promise<OpenCodeSidecarStatus>
@@ -33,11 +46,13 @@ export type OpenCodeSidecar = {
 const require = createRequire(__filename)
 const hostname = '127.0.0.1'
 const username = 'opencode'
+const serviceName = 'opencode server'
 const startupTimeoutMs = 30_000
 const shutdownTimeoutMs = 5_000
 
 export function createOpenCodeSidecar(): OpenCodeSidecar {
-  let child: ChildProcess | null = null
+  let child: UtilityProcess | null = null
+  let connection: OpenCodeConnection | null = null
   let stopping = false
   let startPromise: Promise<OpenCodeSidecarStatus> | null = null
   let status = createStatus('stopped', 'OpenCode sidecar is not running.')
@@ -59,6 +74,12 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
     return startPromise
   }
 
+  async function getConnection(): Promise<OpenCodeConnection> {
+    await start()
+    if (!connection) throw new Error(status.message)
+    return connection
+  }
+
   async function restart(): Promise<OpenCodeSidecarStatus> {
     await stop()
     return start()
@@ -67,18 +88,23 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
   async function stop(): Promise<OpenCodeSidecarStatus> {
     const current = child
     if (!current) {
+      connection = null
       setStatus(createStatus('stopped', 'OpenCode sidecar is not running.'))
       return status
     }
 
     stopping = true
-    current.kill()
+    current.postMessage({ type: 'stop' })
 
-    await Promise.race([waitForExit(current), delay(shutdownTimeoutMs)]).catch(() => undefined)
-
-    if (!current.killed) current.kill('SIGKILL')
+    await Promise.race([
+      waitForExit(current),
+      delay(shutdownTimeoutMs).then(() => {
+        current.kill()
+      })
+    ]).catch(() => undefined)
 
     child = null
+    connection = null
     stopping = false
     setStatus(createStatus('stopped', 'OpenCode sidecar stopped.'))
     return status
@@ -99,9 +125,17 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       return status
     }
 
+    const sidecarPath = resolveSidecarPath()
+    if (!existsSync(sidecarPath)) {
+      const message = `OpenCode sidecar worker was not found at ${sidecarPath}. Run pnpm build.`
+      setStatus(createStatus('error', message))
+      return status
+    }
+
     const port = await resolvePort()
     const password = randomUUID()
     const url = `http://${hostname}:${port}`
+    const nextConnection: OpenCodeConnection = { url, username, password }
 
     setStatus({
       ...createStatus('starting', 'Starting OpenCode server sidecar...'),
@@ -109,50 +143,87 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       pid: null
     })
 
-    const nextChild = spawn(
-      cliPath,
-      [
-        'serve',
-        '--hostname',
-        hostname,
-        '--port',
-        String(port),
-        '--print-logs',
-        '--log-level',
-        'WARN'
-      ],
-      {
-        cwd: process.cwd(),
-        env: createSidecarEnv(password),
-        stdio: ['ignore', 'pipe', 'pipe']
-      }
-    )
-
-    child = nextChild
-
-    nextChild.stdout?.on('data', (chunk: Buffer) => {
-      const message = chunk.toString('utf8').trim()
-      if (message) console.log(`[opencode] ${message}`)
+    const nextChild = utilityProcess.fork(sidecarPath, [], {
+      cwd: process.cwd(),
+      env: createSidecarEnv(password),
+      serviceName,
+      stdio: 'pipe'
     })
 
-    nextChild.stderr?.on('data', (chunk: Buffer) => {
-      const message = chunk.toString('utf8').trim()
-      if (message) console.warn(`[opencode] ${message}`)
+    child = nextChild
+    connection = nextConnection
+
+    let exited = false
+    const ready = createDeferred<void>()
+
+    nextChild.on('message', (message: SidecarMessage) => {
+      if (message.type === 'stdout') {
+        console.log(`[opencode] ${message.message}`)
+        return
+      }
+
+      if (message.type === 'stderr') {
+        console.warn(`[opencode] ${message.message}`)
+        return
+      }
+
+      if (message.type === 'ready') {
+        ready.resolve()
+        return
+      }
+
+      if (message.type === 'error') {
+        ready.reject(
+          Object.assign(new Error(message.error.message), { stack: message.error.stack })
+        )
+        if (child === nextChild) {
+          setStatus(
+            createStatus('error', `Failed to start OpenCode sidecar: ${message.error.message}`, url)
+          )
+        }
+        return
+      }
+
+      if (message.type === 'stopped') {
+        ready.reject(new Error('OpenCode sidecar stopped before it became ready.'))
+      }
     })
 
     nextChild.once('error', (error) => {
-      setStatus(createStatus('error', `Failed to start OpenCode sidecar: ${error.message}`, url))
+      ready.reject(error)
+      setStatus(createStatus('error', `Failed to start OpenCode sidecar: ${String(error)}`, url))
     })
 
-    nextChild.once('exit', (code, signal) => {
-      if (child === nextChild) child = null
+    nextChild.once('exit', (code) => {
+      exited = true
+      if (child === nextChild) {
+        child = null
+        connection = null
+      }
       if (stopping) return
-      const detail = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`
-      setStatus(createStatus('error', `OpenCode sidecar exited with ${detail}.`, url))
+      ready.reject(new Error(`OpenCode sidecar exited with code ${code ?? 'unknown'}.`))
+      setStatus(
+        createStatus('error', `OpenCode sidecar exited with code ${code ?? 'unknown'}.`, url)
+      )
+    })
+
+    nextChild.postMessage({
+      type: 'start',
+      cliPath,
+      hostname,
+      port,
+      corsOrigins: resolveCorsOrigins()
     })
 
     try {
-      const health = await waitForHealth(url, password, nextChild)
+      await Promise.race([
+        ready.promise,
+        delay(startupTimeoutMs).then(() => {
+          throw new Error(`OpenCode sidecar did not signal ready within ${startupTimeoutMs}ms.`)
+        })
+      ])
+
+      const health = await waitForHealth(url, password, () => !exited)
       setStatus({
         state: 'connected',
         url,
@@ -166,6 +237,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       if (child === nextChild) {
         nextChild.kill()
         child = null
+        connection = null
       }
 
       const message = error instanceof Error ? error.message : String(error)
@@ -176,6 +248,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
   }
 
   return {
+    getConnection,
     getStatus: () => status,
     onStatusChange,
     restart,
@@ -228,6 +301,35 @@ function withLoopbackNoProxy(value: string | undefined): string {
   return items.join(',')
 }
 
+function resolveCorsOrigins(): string[] {
+  return unique(
+    [
+      resolveRendererOrigin(),
+      process.env.ELECTRON_RENDERER_URL,
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:5174',
+      'file://'
+    ].filter((origin): origin is string => Boolean(origin))
+  )
+}
+
+function resolveRendererOrigin(): string | undefined {
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL
+  if (!rendererUrl) return
+
+  try {
+    return new URL(rendererUrl).origin
+  } catch {
+    return rendererUrl
+  }
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)]
+}
+
 function resolveOpenCodeCliPath(): string {
   const packageJsonPath = require.resolve('opencode-ai/package.json')
   const cliPath = join(dirname(packageJsonPath), 'bin', 'opencode.exe')
@@ -235,6 +337,10 @@ function resolveOpenCodeCliPath(): string {
   if (!app.isPackaged) return cliPath
 
   return cliPath.replace(`${sep}app.asar${sep}`, `${sep}app.asar.unpacked${sep}`)
+}
+
+function resolveSidecarPath(): string {
+  return join(__dirname, 'opencode-sidecar-worker.js')
 }
 
 async function resolvePort(): Promise<number> {
@@ -261,14 +367,12 @@ async function resolvePort(): Promise<number> {
 async function waitForHealth(
   url: string,
   password: string,
-  current: ChildProcess
+  isAlive: () => boolean
 ): Promise<HealthResponse> {
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < startupTimeoutMs) {
-    if (current.exitCode !== null || current.signalCode !== null) {
-      throw new Error('OpenCode sidecar exited before it became healthy.')
-    }
+    if (!isAlive()) throw new Error('OpenCode sidecar exited before it became healthy.')
 
     const health = await checkHealth(url, password)
     if (health?.healthy) return health
@@ -296,10 +400,25 @@ async function checkHealth(url: string, password: string): Promise<HealthRespons
   }
 }
 
-function waitForExit(current: ChildProcess): Promise<void> {
+function waitForExit(current: UtilityProcess): Promise<void> {
   return new Promise((resolve) => {
     current.once('exit', () => resolve())
   })
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T | PromiseLike<T>) => void
+  reject: (reason?: unknown) => void
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve
+    reject = innerReject
+  })
+
+  return { promise, resolve, reject }
 }
 
 function delay(ms: number): Promise<void> {
