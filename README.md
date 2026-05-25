@@ -32,10 +32,10 @@ $ pnpm install
 $ pnpm dev
 ```
 
-On Linux, Electron may fail outside a fully configured desktop session with errors about the SUID sandbox helper or a missing `$DISPLAY`. For local desktop development, run from a graphical session. For headless observation, run Electron under Xvfb and disable the sandbox for that dev process:
+On Linux, Electron may fail outside a fully configured desktop session with errors about the SUID sandbox helper or a missing `$DISPLAY`. For local desktop development, run from a graphical session. For headless observation, the Nix shell includes `xvfb-run`; run Electron under Xvfb and disable the sandbox for that dev process:
 
 ```bash
-$ nix develop -c nix shell nixpkgs#xvfb-run -c xvfb-run -a env ELECTRON_DISABLE_SANDBOX=1 pnpm --filter @openkhodam/desktop exec electron-vite dev --remoteDebuggingPort 9222 --noSandbox -- --disable-gpu
+$ nix develop -c xvfb-run -a env ELECTRON_DISABLE_SANDBOX=1 pnpm --filter @openkhodam/desktop exec electron-vite dev --remoteDebuggingPort 9222 --noSandbox -- --disable-gpu
 ```
 
 When the app starts successfully, the renderer is served from `http://localhost:5173/` and the Electron window should show the OpenCode server status.
