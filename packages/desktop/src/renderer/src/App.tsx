@@ -1,17 +1,18 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type JSX } from 'react'
+import {
+  OpenCodeServerView,
+  type OpenCodeConnection,
+  type OpenCodeSidecarStatus,
+  type RendererHttpHealthSnapshot
+} from '@openkhodam/ui'
 
-type OpenCodeSidecarStatus = Awaited<ReturnType<Window['api']['getOpenCodeStatus']>>
-type OpenCodeConnection = Awaited<ReturnType<Window['api']['getOpenCodeConnection']>>
 type OpenCodeConnectionResult = {
   updatedAt: number
   connection: OpenCodeConnection
 }
-type RendererHttpHealthState = 'waiting' | 'checking' | 'connected' | 'error'
-type RendererHttpHealth = {
+
+type RendererHttpHealth = RendererHttpHealthSnapshot & {
   updatedAt: number
-  state: RendererHttpHealthState
-  statusCode: number | null
-  message: string
 }
 
 const initialStatus: OpenCodeSidecarStatus = {
@@ -23,7 +24,7 @@ const initialStatus: OpenCodeSidecarStatus = {
   updatedAt: Date.now()
 }
 
-function App(): React.JSX.Element {
+function App(): JSX.Element {
   const [status, setStatus] = useState<OpenCodeSidecarStatus>(initialStatus)
   const [connection, setConnection] = useState<OpenCodeConnectionResult | null>(null)
   const [rendererHttpHealth, setRendererHttpHealth] = useState<RendererHttpHealth | null>(null)
@@ -83,34 +84,13 @@ function App(): React.JSX.Element {
     }
   }, [status.state, status.updatedAt])
 
-  const statusText = useMemo(() => {
-    switch (status.state) {
-      case 'connected':
-        return 'Connected'
-      case 'starting':
-        return 'Starting'
-      case 'stopped':
-        return 'Stopped'
-      case 'error':
-        return 'Disconnected'
-    }
-  }, [status.state])
-
-  const updatedAt = useMemo(() => {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: 'numeric',
-      minute: '2-digit',
-      second: '2-digit'
-    }).format(new Date(status.updatedAt))
-  }, [status.updatedAt])
-
   const displayedConnection = useMemo((): OpenCodeConnection | null => {
     if (status.state !== 'connected') return null
     if (connection?.updatedAt !== status.updatedAt) return null
     return connection.connection
   }, [connection, status.state, status.updatedAt])
 
-  const displayedRendererHttpHealth = useMemo((): Omit<RendererHttpHealth, 'updatedAt'> => {
+  const displayedRendererHttpHealth = useMemo((): RendererHttpHealthSnapshot => {
     if (status.state !== 'connected') {
       return { state: 'waiting', statusCode: null, message: 'Waiting for OpenCode.' }
     }
@@ -137,65 +117,20 @@ function App(): React.JSX.Element {
   }
 
   return (
-    <main>
-      <h1>OpenCode Server</h1>
-      <p>Status: {statusText}</p>
-      <p>Message: {status.message}</p>
-      <p>Endpoint: {status.url ?? 'Waiting for port'}</p>
-
-      <dl>
-        <dt>Version</dt>
-        <dd>{status.version ?? 'Unknown'}</dd>
-
-        <dt>PID</dt>
-        <dd>{status.pid ?? 'None'}</dd>
-
-        <dt>Updated</dt>
-        <dd>{updatedAt}</dd>
-
-        <dt>Renderer Origin</dt>
-        <dd>{window.location.origin}</dd>
-
-        <dt>CORS Origins</dt>
-        <dd>{displayedConnection?.corsOrigins.join(', ') || 'None'}</dd>
-
-        <dt>Renderer HTTP</dt>
-        <dd>{formatRendererHttpState(displayedRendererHttpHealth.state)}</dd>
-
-        <dt>Renderer HTTP Status</dt>
-        <dd>{displayedRendererHttpHealth.statusCode ?? 'None'}</dd>
-
-        <dt>Renderer HTTP Detail</dt>
-        <dd>{displayedRendererHttpHealth.message}</dd>
-
-        <dt>Username</dt>
-        <dd>{displayedConnection?.username ?? 'Waiting'}</dd>
-
-        <dt>Password</dt>
-        <dd>{displayedConnection?.password ?? 'Waiting'}</dd>
-      </dl>
-
-      {displayedConnection ? (
-        <pre>
-          curl -u {displayedConnection.username}:{displayedConnection.password}{' '}
-          {displayedConnection.url}/global/health
-        </pre>
-      ) : null}
-
-      <button
-        type="button"
-        onClick={restartOpenCode}
-        disabled={isRestarting || status.state === 'starting'}
-      >
-        {isRestarting ? 'Restarting' : 'Restart'}
-      </button>
-    </main>
+    <OpenCodeServerView
+      status={status}
+      connection={displayedConnection}
+      rendererHttpHealth={displayedRendererHttpHealth}
+      rendererOrigin={window.location.origin}
+      isRestarting={isRestarting}
+      onRestart={restartOpenCode}
+    />
   )
 }
 
 async function checkRendererHttpHealth(
   connection: OpenCodeConnection
-): Promise<Omit<RendererHttpHealth, 'updatedAt'>> {
+): Promise<RendererHttpHealthSnapshot> {
   try {
     const response = await fetch(`${connection.url}/global/health`, {
       headers: {
@@ -243,19 +178,6 @@ async function readResponseJson(
     return (await response.json()) as { healthy?: boolean; version?: string }
   } catch {
     return {}
-  }
-}
-
-function formatRendererHttpState(state: RendererHttpHealthState): string {
-  switch (state) {
-    case 'connected':
-      return 'Connected'
-    case 'checking':
-      return 'Checking'
-    case 'error':
-      return 'Failed'
-    case 'waiting':
-      return 'Waiting'
   }
 }
 

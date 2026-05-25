@@ -4,22 +4,7 @@ import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { dirname, join, sep } from 'node:path'
 import { app, utilityProcess, type UtilityProcess } from 'electron'
-
-export type OpenCodeConnection = {
-  url: string
-  username: string
-  password: string
-  corsOrigins: string[]
-}
-
-export type OpenCodeSidecarStatus = {
-  state: 'stopped' | 'starting' | 'connected' | 'error'
-  url: string | null
-  version: string | null
-  pid: number | null
-  message: string
-  updatedAt: number
-}
+import type { OpenCodeConnection, OpenCodeSidecarStatus } from '@openkhodam/ui/types'
 
 type HealthResponse = {
   healthy?: boolean
