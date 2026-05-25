@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error"
+  },
+  "plugins": ["eslint", "typescript", "oxc", "react"],
+  "rules": {
+    "react/react-in-jsx-scope": "off"
+  },
+  "ignorePatterns": ["**/node_modules", "**/dist", "**/out"],
+  "settings": {
+    "react": {
+      "version": "19.2"
+    }
+  },
+  "env": {
+    "browser": true,
+    "node": true
+  }
+}
