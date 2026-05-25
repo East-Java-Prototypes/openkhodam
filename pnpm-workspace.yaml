@@ -1,6 +1,8 @@
 packages:
   - packages/*
 
+shamefullyHoist: true
+
 allowBuilds:
   electron: true
   electron-winstaller: true
