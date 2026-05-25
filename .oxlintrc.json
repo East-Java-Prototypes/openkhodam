@@ -7,7 +7,7 @@
   "rules": {
     "react/react-in-jsx-scope": "off"
   },
-  "ignorePatterns": ["**/node_modules", "**/dist", "**/out"],
+  "ignorePatterns": ["**/node_modules", "**/dist", "**/out", "**/routeTree.gen.ts"],
   "settings": {
     "react": {
       "version": "19.2"

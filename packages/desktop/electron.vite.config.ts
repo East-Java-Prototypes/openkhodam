@@ -1,6 +1,7 @@
 import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import tanstackRouter from '@tanstack/router-plugin/vite'
 
 export default defineConfig({
   main: {
@@ -21,6 +22,16 @@ export default defineConfig({
         '@openkhodam/ui': resolve('../ui/src')
       }
     },
-    plugins: [react()]
+    plugins: [
+      tanstackRouter({
+        target: 'react',
+        routesDirectory: './src/routes',
+        generatedRouteTree: './src/routeTree.gen.ts',
+        autoCodeSplitting: true,
+        quoteStyle: 'single',
+        semicolons: false
+      }),
+      react()
+    ]
   }
 })
