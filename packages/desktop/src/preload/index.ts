@@ -1,21 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-
-type OpenCodeSidecarStatus = {
-  state: 'stopped' | 'starting' | 'connected' | 'error'
-  url: string | null
-  version: string | null
-  pid: number | null
-  message: string
-  updatedAt: number
-}
-
-type OpenCodeConnection = {
-  url: string
-  username: string
-  password: string
-  corsOrigins: string[]
-}
+import type { OpenCodeConnection, OpenCodeSidecarStatus } from '@openkhodam/ui/types'
 
 // Custom APIs for renderer
 const api = {

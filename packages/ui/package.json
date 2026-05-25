@@ -1,0 +1,23 @@
+{
+  "name": "@openkhodam/ui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./styles.css": "./src/styles.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json --composite false"
+  },
+  "peerDependencies": {
+    "react": "^19.2.1"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@types/react": "^19.2.7",
+    "react": "^19.2.1",
+    "typescript": "^5.9.3"
+  }
+}
