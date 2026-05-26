@@ -1,5 +1,6 @@
 import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
+import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import tanstackRouter from '@tanstack/router-plugin/vite'
 
@@ -18,11 +19,13 @@ export default defineConfig({
   renderer: {
     resolve: {
       alias: {
+        '@': resolve('src/renderer/src'),
         '@renderer': resolve('src/renderer/src'),
         '@openkhodam/ui': resolve('../ui/src')
       }
     },
     plugins: [
+      tailwindcss(),
       tanstackRouter({
         target: 'react',
         routesDirectory: './src/routes',

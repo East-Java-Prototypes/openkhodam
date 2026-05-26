@@ -29,6 +29,7 @@
     "onlyBuiltDependencies": [
       "electron",
       "esbuild",
+      "msw",
       "opencode-ai"
     ]
   }
