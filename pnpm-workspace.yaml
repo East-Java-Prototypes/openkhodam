@@ -7,4 +7,5 @@ allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
+  msw: true
   opencode-ai: true
