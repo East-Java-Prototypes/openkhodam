@@ -1,5 +1,16 @@
 import type { JSX } from 'react'
 
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from '@/components/ui/input-group'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Separator } from '@/components/ui/separator'
+
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
 import { useChatInterfaceData } from '../../hooks/useChatInterfaceData'
 
@@ -21,19 +32,22 @@ type ProjectChatSidebarProps = {
 
 function ProjectChatSidebar({ projects, activeChat }: ProjectChatSidebarProps): JSX.Element {
   return (
-    <aside className="border-border bg-sidebar/70 border-r p-4" aria-labelledby="projects-heading">
-      <div className="mb-6">
-        <p className="text-muted-foreground text-sm font-medium">OpenKhodam</p>
-        <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
-          Project chats
-        </h1>
-      </div>
+    <aside className="relative bg-sidebar/70 p-4" aria-labelledby="projects-heading">
+      <ScrollArea className="h-full pr-2">
+        <div className="mb-6">
+          <p className="text-muted-foreground text-sm font-medium">OpenKhodam</p>
+          <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
+            Project chats
+          </h1>
+        </div>
 
-      <nav className="space-y-6" aria-label="Project chats">
-        {projects.map((project) => (
-          <ProjectChatSection key={project.id} project={project} activeChat={activeChat} />
-        ))}
-      </nav>
+        <nav className="flex flex-col gap-6" aria-label="Project chats">
+          {projects.map((project) => (
+            <ProjectChatSection key={project.id} project={project} activeChat={activeChat} />
+          ))}
+        </nav>
+      </ScrollArea>
+      <Separator orientation="vertical" className="absolute right-0 top-0 hidden h-full md:block" />
     </aside>
   )
 }
@@ -52,7 +66,7 @@ function ProjectChatSection({ project, activeChat }: ProjectChatSectionProps): J
       >
         {project.name}
       </h2>
-      <ul className="mt-2 space-y-1">
+      <ul className="mt-2 flex flex-col gap-1">
         {project.chats.map((chat) => (
           <ProjectChatListItem key={chat.id} chat={chat} isActive={chat.id === activeChat.id} />
         ))}
@@ -69,21 +83,17 @@ type ProjectChatListItemProps = {
 function ProjectChatListItem({ chat, isActive }: ProjectChatListItemProps): JSX.Element {
   return (
     <li>
-      <a
-        className={`block rounded-lg border px-3 py-2 transition-colors ${
-          isActive
-            ? 'border-border bg-card text-card-foreground shadow-sm'
-            : 'border-transparent text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-        }`}
-        href={`#${chat.id}`}
-        aria-current={isActive ? 'page' : undefined}
-      >
-        <span className="flex items-center justify-between gap-3">
-          <span className="truncate text-sm font-medium">{chat.title}</span>
-          <span className="text-muted-foreground shrink-0 text-xs">{chat.updatedAt}</span>
-        </span>
-        <span className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-5">{chat.summary}</span>
-      </a>
+      <Button asChild variant={isActive ? 'outline' : 'ghost'} className="h-auto w-full justify-start px-3 py-2">
+        <a href={`#${chat.id}`} aria-current={isActive ? 'page' : undefined}>
+          <span className="flex min-w-0 flex-1 flex-col items-stretch gap-1 text-left">
+            <span className="flex items-center justify-between gap-3">
+              <span className="truncate text-sm font-medium">{chat.title}</span>
+              <span className="text-muted-foreground shrink-0 text-xs">{chat.updatedAt}</span>
+            </span>
+            <span className="text-muted-foreground line-clamp-2 text-xs leading-5 whitespace-normal">{chat.summary}</span>
+          </span>
+        </a>
+      </Button>
     </li>
   )
 }
@@ -96,17 +106,16 @@ type ActiveChatPanelProps = {
 function ActiveChatPanel({ activeChat, messages }: ActiveChatPanelProps): JSX.Element {
   return (
     <section className="flex min-h-0 flex-col" aria-labelledby="active-chat-heading">
-      <header className="border-border flex items-center justify-between gap-4 border-b px-6 py-4">
+      <header className="flex items-center justify-between gap-4 px-6 py-4">
         <div>
           <p className="text-muted-foreground text-sm">Active chat</p>
           <h2 id="active-chat-heading" className="text-xl font-semibold tracking-tight">
             {activeChat.title}
           </h2>
         </div>
-        <div className="border-border bg-secondary text-secondary-foreground rounded-full border px-3 py-1 text-sm">
-          Mock data
-        </div>
+        <Badge variant="secondary">Mock data</Badge>
       </header>
+      <Separator />
 
       <ChatMessageList messages={messages} />
       <ChatPromptComposer />
@@ -120,11 +129,13 @@ type ChatMessageListProps = {
 
 function ChatMessageList({ messages }: ChatMessageListProps): JSX.Element {
   return (
-    <div className="flex-1 space-y-4 overflow-y-auto p-6">
-      {messages.map((message) => (
-        <ChatMessageBubble key={message.id} message={message} />
-      ))}
-    </div>
+    <ScrollArea className="flex-1">
+      <div className="flex flex-col gap-4 p-6">
+        {messages.map((message) => (
+          <ChatMessageBubble key={message.id} message={message} />
+        ))}
+      </div>
+    </ScrollArea>
   )
 }
 
@@ -157,25 +168,22 @@ function ChatMessageBubble({ message }: ChatMessageBubbleProps): JSX.Element {
 
 function ChatPromptComposer(): JSX.Element {
   return (
-    <form className="border-border bg-background border-t p-4" aria-label="Chat prompt">
+    <form className="bg-background p-4" aria-label="Chat prompt">
+      <Separator className="mb-4" />
       <label className="sr-only" htmlFor="chat-prompt">
         Message OpenKhodam
       </label>
-      <div className="border-input bg-card flex items-center gap-3 rounded-2xl border px-4 py-3 shadow-sm">
-        <input
+      <InputGroup className="h-auto rounded-2xl bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100">
+        <InputGroupTextarea
           id="chat-prompt"
-          className="placeholder:text-muted-foreground flex-1 bg-transparent text-sm outline-none"
+          className="min-h-11 text-sm"
           placeholder="Ask about this project..."
           disabled
         />
-        <button
-          className="bg-primary text-primary-foreground rounded-full px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
-          type="button"
-          disabled
-        >
-          Send
-        </button>
-      </div>
+        <InputGroupAddon align="inline-end">
+          <InputGroupButton disabled>Send</InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
       <p className="text-muted-foreground mt-2 text-xs">Static preview only. Real chat behavior is not wired yet.</p>
     </form>
   )
