@@ -152,7 +152,7 @@ function ChatMessageBubble({ message }: ChatMessageBubbleProps): JSX.Element {
       aria-label={`${message.author} message at ${message.createdAt}`}
     >
       <div
-        className={`max-w-2xl rounded-2xl border px-4 py-3 shadow-sm ${
+        className={`max-w-2xl border px-4 py-3 shadow-sm ${
           isUser ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-card-foreground'
         }`}
       >
@@ -173,7 +173,7 @@ function ChatPromptComposer(): JSX.Element {
       <label className="sr-only" htmlFor="chat-prompt">
         Message OpenKhodam
       </label>
-      <InputGroup className="h-auto rounded-2xl bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100">
+      <InputGroup className="h-auto bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100">
         <InputGroupTextarea
           id="chat-prompt"
           className="min-h-11 text-sm"
