@@ -3,13 +3,27 @@ import type { JSX } from 'react'
 import { useMemo, useState } from 'react'
 
 import { type OpenCodeProject, useOpenCodeProjects } from '../hooks/useOpenCodeProjects'
+import {
+  type OpenCodeSession,
+  type OpenCodeSessionDetails,
+  type OpenCodeSessionMessage,
+  useOpenCodeSession,
+  useProjectSessions,
+  useSessionMessages
+} from '../hooks/useOpenCodeSessions'
 
 export const Route = createFileRoute('/')({ component: IndexRoute })
 
 function IndexRoute(): JSX.Element {
   const { status, connection, connectionQuery, projectsQuery } = useOpenCodeProjects()
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null)
+  const [selectedSessionID, setSelectedSessionID] = useState<string | null>(null)
+  const { sessionsQuery } = useProjectSessions(selectedDirectory)
+  const { sessionQuery } = useOpenCodeSession(selectedDirectory, selectedSessionID)
+  const { messagesQuery } = useSessionMessages(selectedDirectory, selectedSessionID)
   const projects = projectsQuery.data ?? []
+  const sessions = sessionsQuery.data ?? []
+  const messages = messagesQuery.data ?? []
   const selectedProject = useMemo(
     () => projects.find((project) => getProjectDirectory(project) === selectedDirectory),
     [projects, selectedDirectory]
@@ -46,7 +60,14 @@ function IndexRoute(): JSX.Element {
 
               return (
                 <li key={id ?? directory ?? index}>
-                  <button type="button" onClick={() => setSelectedDirectory(directory)} disabled={!directory}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDirectory(directory)
+                      setSelectedSessionID(null)
+                    }}
+                    disabled={!directory}
+                  >
                     {isSelected ? 'Selected: ' : 'Select '}
                     {name}
                   </button>
@@ -65,14 +86,92 @@ function IndexRoute(): JSX.Element {
         ) : null}
         {selectedDirectory ? (
           <p>
-            Selected directory for the next stack: <code>{selectedDirectory}</code>
+            Selected directory: <code>{selectedDirectory}</code>
             {selectedProject ? null : ' (project no longer in list)'}
           </p>
         ) : null}
       </section>
 
+      <section>
+        <h2>Project sessions</h2>
+        {!selectedDirectory ? <p>Select a project to load sessions.</p> : null}
+        {selectedDirectory && connection === null ? <p>Waiting for an OpenCode sidecar connection before loading sessions.</p> : null}
+        {sessionsQuery.isLoading ? <p>Loading sessions...</p> : null}
+        {sessionsQuery.isError ? <p>Session load error: {formatError(sessionsQuery.error)}</p> : null}
+        {sessionsQuery.isSuccess && sessions.length === 0 ? <p>No root sessions found for this project.</p> : null}
+        {sessions.length > 0 ? (
+          <ul>
+            {sessions.map((session, index) => {
+              const sessionID = getSessionId(session)
+              const title = getSessionTitle(session) ?? sessionID ?? `Session ${index + 1}`
+              const isSelected = sessionID !== null && sessionID === selectedSessionID
+
+              return (
+                <li key={sessionID ?? index}>
+                  <button type="button" onClick={() => setSelectedSessionID(sessionID)} disabled={!sessionID}>
+                    {isSelected ? 'Selected: ' : 'Select '}
+                    {title}
+                  </button>
+                  <dl>
+                    <dt>ID</dt>
+                    <dd>{sessionID ?? 'Unknown'}</dd>
+                    <dt>Updated</dt>
+                    <dd>{getSessionTime(session) ?? 'Unknown'}</dd>
+                  </dl>
+                </li>
+              )
+            })}
+          </ul>
+        ) : null}
+      </section>
+
+      <section>
+        <h2>Selected session</h2>
+        {!selectedSessionID ? <p>Select a session to load details and messages.</p> : null}
+        {sessionQuery.isLoading ? <p>Loading session details...</p> : null}
+        {sessionQuery.isError ? <p>Session detail error: {formatError(sessionQuery.error)}</p> : null}
+        {sessionQuery.data ? <SessionDetails session={sessionQuery.data} /> : null}
+        {messagesQuery.isLoading ? <p>Loading messages...</p> : null}
+        {messagesQuery.isError ? <p>Message load error: {formatError(messagesQuery.error)}</p> : null}
+        {messagesQuery.isSuccess && messages.length === 0 ? <p>No messages found for this session.</p> : null}
+        {messages.length > 0 ? (
+          <ol>
+            {messages.map((message, index) => (
+              <li key={getMessageId(message) ?? index}>
+                <MessageSummary message={message} />
+              </li>
+            ))}
+          </ol>
+        ) : null}
+      </section>
+
       <Link to="/settings">Open settings</Link>
     </main>
+  )
+}
+
+function SessionDetails({ session }: { session: OpenCodeSessionDetails }): JSX.Element {
+  return (
+    <dl>
+      <dt>ID</dt>
+      <dd>{getSessionId(session) ?? 'Unknown'}</dd>
+      <dt>Title</dt>
+      <dd>{getSessionTitle(session) ?? 'Untitled'}</dd>
+      <dt>Updated</dt>
+      <dd>{getSessionTime(session) ?? 'Unknown'}</dd>
+    </dl>
+  )
+}
+
+function MessageSummary({ message }: { message: OpenCodeSessionMessage }): JSX.Element {
+  return (
+    <article>
+      <header>
+        <strong>{getMessageRole(message) ?? getMessageType(message) ?? 'Message'}</strong>
+        {getMessageTime(message) ? ` — ${getMessageTime(message)}` : null}
+      </header>
+      <p>{getMessageText(message)}</p>
+    </article>
   )
 }
 
@@ -106,4 +205,77 @@ function getStringProperty(project: OpenCodeProject, property: string): string |
   if (typeof project !== 'object' || project === null || !(property in project)) return null
   const value = (project as Record<string, unknown>)[property]
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function getSessionId(session: OpenCodeSession | OpenCodeSessionDetails): string | null {
+  return getStringFromRecord(session, 'id') ?? getStringFromRecord(session, 'sessionID')
+}
+
+function getSessionTitle(session: OpenCodeSession | OpenCodeSessionDetails): string | null {
+  return getStringFromRecord(session, 'title') ?? getStringFromRecord(session, 'name')
+}
+
+function getSessionTime(session: OpenCodeSession | OpenCodeSessionDetails): string | null {
+  return getStringFromRecord(session, 'updated') ?? getStringFromRecord(session, 'updatedAt') ?? getStringFromRecord(session, 'time')
+}
+
+function getMessageId(message: OpenCodeSessionMessage): string | null {
+  return getStringFromRecord(message, 'id') ?? getStringFromRecord(message, 'messageID')
+}
+
+function getMessageRole(message: OpenCodeSessionMessage): string | null {
+  const info = getRecordProperty(message, 'info')
+  return getStringFromRecord(info, 'role') ?? getStringFromRecord(message, 'role')
+}
+
+function getMessageType(message: OpenCodeSessionMessage): string | null {
+  const info = getRecordProperty(message, 'info')
+  return getStringFromRecord(info, 'type') ?? getStringFromRecord(message, 'type')
+}
+
+function getMessageTime(message: OpenCodeSessionMessage): string | null {
+  const info = getRecordProperty(message, 'info')
+  return getStringFromRecord(info, 'time') ?? getStringFromRecord(info, 'createdAt') ?? getStringFromRecord(message, 'time')
+}
+
+function getMessageText(message: OpenCodeSessionMessage): string {
+  const direct = getStringFromRecord(message, 'text') ?? getStringFromRecord(message, 'content')
+  if (direct) return direct
+
+  const parts = getArrayProperty(message, 'parts') ?? getArrayProperty(getRecordProperty(message, 'info'), 'parts')
+  if (!parts || parts.length === 0) return 'No text content.'
+
+  const text = parts.map(formatMessagePart).filter(Boolean).join('\n')
+  return text || `${parts.length} non-text message part${parts.length === 1 ? '' : 's'}.`
+}
+
+function formatMessagePart(part: unknown): string {
+  if (typeof part === 'string') return part
+  if (!isRecord(part)) return ''
+
+  const text = getStringFromRecord(part, 'text') ?? getStringFromRecord(part, 'content')
+  if (text) return text
+
+  const type = getStringFromRecord(part, 'type') ?? 'part'
+  return `[${type}]`
+}
+
+function getStringFromRecord(value: unknown, property: string): string | null {
+  if (!isRecord(value) || !(property in value)) return null
+  const propertyValue = value[property]
+  return typeof propertyValue === 'string' && propertyValue.length > 0 ? propertyValue : null
+}
+
+function getRecordProperty(value: unknown, property: string): Record<string, unknown> | null {
+  if (!isRecord(value) || !isRecord(value[property])) return null
+  return value[property]
+}
+
+function getArrayProperty(value: unknown, property: string): unknown[] | null {
+  if (!isRecord(value) || !Array.isArray(value[property])) return null
+  return value[property]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
