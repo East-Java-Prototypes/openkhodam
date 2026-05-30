@@ -6,48 +6,27 @@ import {
   type OpenCodeSidecarStatus,
   type RendererHttpHealthSnapshot
 } from '@openkhodam/ui'
-
-type OpenCodeConnectionResult = {
-  updatedAt: number
-  connection: OpenCodeConnection
-}
+import {
+  getDisplayedOpenCodeConnection,
+  openCodeQueryKey,
+  openCodeStatusQueryKey,
+  useOpenCodeConnection,
+  useOpenCodeStatus
+} from '../hooks/useOpenCodeConnection'
+import { getOpenCodeAuthorizationHeader } from '../lib/opencodeClient'
 
 type RendererHttpHealth = RendererHttpHealthSnapshot & {
   updatedAt: number
 }
 
-const openCodeStatusQueryKey = ['opencode', 'status'] as const
-const openCodeQueryKey = ['opencode'] as const
-
-const initialStatus: OpenCodeSidecarStatus = {
-  state: 'starting',
-  url: null,
-  version: null,
-  pid: null,
-  message: 'Checking OpenCode sidecar...',
-  updatedAt: Date.now()
-}
-
 function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient()
-  const statusQuery = useQuery({
-    queryKey: openCodeStatusQueryKey,
-    queryFn: window.api.getOpenCodeStatus,
-    initialData: initialStatus,
-    refetchInterval: 1000
-  })
+  const statusQuery = useOpenCodeStatus()
   const status = statusQuery.data
 
-  const connectionQuery = useQuery({
-    queryKey: ['opencode', 'connection', status.updatedAt],
-    queryFn: async (): Promise<OpenCodeConnectionResult> => ({
-      updatedAt: status.updatedAt,
-      connection: await window.api.getOpenCodeConnection()
-    }),
-    enabled: status.state === 'connected'
-  })
+  const connectionQuery = useOpenCodeConnection(status)
 
-  const displayedConnection = getDisplayedConnection(status, connectionQuery.data)
+  const displayedConnection = getDisplayedOpenCodeConnection(status, connectionQuery.data)
   const rendererHttpHealthQuery = useQuery({
     queryKey: ['opencode', 'renderer-http-health', status.updatedAt],
     queryFn: async (): Promise<RendererHttpHealth> => ({
@@ -82,15 +61,6 @@ function SettingsPage(): JSX.Element {
       onRestart={() => restartOpenCode.mutateAsync().then(() => undefined)}
     />
   )
-}
-
-function getDisplayedConnection(
-  status: OpenCodeSidecarStatus,
-  connection: OpenCodeConnectionResult | undefined
-): OpenCodeConnection | null {
-  if (status.state !== 'connected') return null
-  if (connection?.updatedAt !== status.updatedAt) return null
-  return connection.connection
 }
 
 function getDisplayedRendererHttpHealth(
@@ -136,7 +106,7 @@ async function checkRendererHttpHealth(
   try {
     const response = await fetch(`${connection.url}/global/health`, {
       headers: {
-        authorization: `Basic ${btoa(`${connection.username}:${connection.password}`)}`
+        authorization: getOpenCodeAuthorizationHeader(connection)
       }
     })
     const body = await readResponseJson(response)
