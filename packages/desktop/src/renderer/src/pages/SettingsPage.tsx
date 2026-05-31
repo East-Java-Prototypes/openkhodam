@@ -12,8 +12,8 @@ import {
   openCodeSidecarState,
   useOpenCodeSidecarConnection,
   useOpenCodeSidecarStatus
-} from '../hooks/useOpenCodeConnection'
-import { getOpenCodeAuthorizationHeader } from '../lib/opencodeClient'
+} from '../hooks/opencode/sidecar'
+import { getOpenCodeAuthorizationHeader } from '../hooks/opencode/client'
 
 type RendererHttpHealth = RendererHttpHealthSnapshot & {
   updatedAt: number
