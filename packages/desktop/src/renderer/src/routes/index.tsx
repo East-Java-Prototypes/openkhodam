@@ -2,7 +2,9 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import type { JSX } from 'react'
 import { useMemo, useState } from 'react'
 
-import { useOpenCodeProjects } from '../hooks/useOpenCodeProjects'
+import { useOpenCodeProjects } from '../hooks/opencode/projects'
+
+export const Route = createFileRoute('/')({ component: IndexRoute })
 
 function IndexRoute(): JSX.Element {
   const { status, connection, connectionQuery, projectsQuery } = useOpenCodeProjects()
