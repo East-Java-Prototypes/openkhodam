@@ -19,20 +19,24 @@ type PagedQueryOptions = {
 const defaultSessionLimit = 50
 const defaultMessageLimit = 50
 
+export function projectSessionsQueryKey(status: { url: string | null; pid: number | null; updatedAt: number }, directory: string | null | undefined, limit = defaultSessionLimit) {
+  return [...openCodeQueryKeys.all, 'sessions', status.url, status.pid, status.updatedAt, directory, limit] as const
+}
+
+export function openCodeSessionQueryKey(status: { url: string | null; pid: number | null; updatedAt: number }, directory: string | null | undefined, sessionID: string | null | undefined) {
+  return [...openCodeQueryKeys.all, 'session', status.url, status.pid, status.updatedAt, directory, sessionID] as const
+}
+
+export function sessionMessagesQueryKey(status: { url: string | null; pid: number | null; updatedAt: number }, directory: string | null | undefined, sessionID: string | null | undefined, limit = defaultMessageLimit) {
+  return [...openCodeQueryKeys.all, 'session-messages', status.url, status.pid, status.updatedAt, directory, sessionID, limit] as const
+}
+
 export function useProjectSessions(directory: string | null | undefined, options: PagedQueryOptions = {}) {
   const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
   const limit = options.limit ?? defaultSessionLimit
 
   const sessionsQuery = useQuery({
-    queryKey: [
-      ...openCodeQueryKeys.all,
-      'sessions',
-      status.url,
-      status.pid,
-      status.updatedAt,
-      directory,
-      limit
-    ],
+    queryKey: projectSessionsQueryKey(status, directory, limit),
     queryFn: async (): Promise<OpenCodeSession[]> => {
       const response = await client!.session.list({
         directory: directory!,
@@ -58,15 +62,7 @@ export function useOpenCodeSession(directory: string | null | undefined, session
   const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
 
   const sessionQuery = useQuery({
-    queryKey: [
-      ...openCodeQueryKeys.all,
-      'session',
-      status.url,
-      status.pid,
-      status.updatedAt,
-      directory,
-      sessionID
-    ],
+    queryKey: openCodeSessionQueryKey(status, directory, sessionID),
     queryFn: async (): Promise<OpenCodeSessionDetails | undefined> => {
       const response = await client!.session.get({
         directory: directory!,
@@ -96,16 +92,7 @@ export function useSessionMessages(
   const limit = options.limit ?? defaultMessageLimit
 
   const messagesQuery = useQuery({
-    queryKey: [
-      ...openCodeQueryKeys.all,
-      'session-messages',
-      status.url,
-      status.pid,
-      status.updatedAt,
-      directory,
-      sessionID,
-      limit
-    ],
+    queryKey: sessionMessagesQueryKey(status, directory, sessionID, limit),
     queryFn: async (): Promise<OpenCodeSessionMessage[]> => {
       const response = await client!.session.messages({
         directory: directory!,
