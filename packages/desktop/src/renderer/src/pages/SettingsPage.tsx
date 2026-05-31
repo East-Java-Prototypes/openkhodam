@@ -8,10 +8,10 @@ import {
 } from '@openkhodam/ui'
 import {
   getDisplayedOpenCodeConnection,
-  openCodeQueryKey,
-  openCodeStatusQueryKey,
-  useOpenCodeConnection,
-  useOpenCodeStatus
+  openCodeQueryKeys,
+  openCodeSidecarState,
+  useOpenCodeSidecarConnection,
+  useOpenCodeSidecarStatus
 } from '../hooks/useOpenCodeConnection'
 import { getOpenCodeAuthorizationHeader } from '../lib/opencodeClient'
 
@@ -21,10 +21,10 @@ type RendererHttpHealth = RendererHttpHealthSnapshot & {
 
 function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient()
-  const statusQuery = useOpenCodeStatus()
+  const statusQuery = useOpenCodeSidecarStatus()
   const status = statusQuery.data
 
-  const connectionQuery = useOpenCodeConnection(status)
+  const connectionQuery = useOpenCodeSidecarConnection(status)
 
   const displayedConnection = getDisplayedOpenCodeConnection(status, connectionQuery.data)
   const rendererHttpHealthQuery = useQuery({
@@ -39,8 +39,8 @@ function SettingsPage(): JSX.Element {
   const restartOpenCode = useMutation({
     mutationFn: window.api.restartOpenCode,
     onSuccess: (nextStatus) => {
-      queryClient.setQueryData(openCodeStatusQueryKey, nextStatus)
-      void queryClient.invalidateQueries({ queryKey: openCodeQueryKey })
+      queryClient.setQueryData(openCodeQueryKeys.sidecarStatus(), nextStatus)
+      void queryClient.invalidateQueries({ queryKey: openCodeQueryKeys.all })
     }
   })
 
@@ -69,7 +69,7 @@ function getDisplayedRendererHttpHealth(
   rendererHttpHealth: RendererHttpHealth | undefined,
   rendererHttpHealthError: Error | null
 ): RendererHttpHealthSnapshot {
-  if (status.state !== 'connected') {
+  if (status.state !== openCodeSidecarState.connected) {
     return { state: 'waiting', statusCode: null, message: 'Waiting for OpenCode.' }
   }
 
