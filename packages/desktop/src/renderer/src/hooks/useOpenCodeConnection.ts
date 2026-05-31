@@ -6,11 +6,22 @@ export type OpenCodeConnectionResult = {
   connection: OpenCodeConnection
 }
 
-export const openCodeStatusQueryKey = ['opencode', 'status'] as const
-export const openCodeQueryKey = ['opencode'] as const
+export const openCodeSidecarState = {
+  stopped: 'stopped',
+  starting: 'starting',
+  connected: 'connected',
+  error: 'error'
+} as const satisfies Record<OpenCodeSidecarStatus['state'], OpenCodeSidecarStatus['state']>
 
-export const initialOpenCodeStatus: OpenCodeSidecarStatus = {
-  state: 'starting',
+export const openCodeQueryKeys = {
+  all: ['opencode'] as const,
+  sidecarStatus: () => [...openCodeQueryKeys.all, 'sidecar-status'] as const,
+  sidecarConnection: (updatedAt: number) =>
+    [...openCodeQueryKeys.all, 'sidecar-connection', updatedAt] as const
+}
+
+export const initialOpenCodeSidecarStatus: OpenCodeSidecarStatus = {
+  state: openCodeSidecarState.starting,
   url: null,
   version: null,
   pid: null,
@@ -18,23 +29,23 @@ export const initialOpenCodeStatus: OpenCodeSidecarStatus = {
   updatedAt: Date.now()
 }
 
-export function useOpenCodeStatus() {
+export function useOpenCodeSidecarStatus() {
   return useQuery({
-    queryKey: openCodeStatusQueryKey,
+    queryKey: openCodeQueryKeys.sidecarStatus(),
     queryFn: window.api.getOpenCodeStatus,
-    initialData: initialOpenCodeStatus,
+    initialData: initialOpenCodeSidecarStatus,
     refetchInterval: 1000
   })
 }
 
-export function useOpenCodeConnection(status: OpenCodeSidecarStatus) {
+export function useOpenCodeSidecarConnection(status: OpenCodeSidecarStatus) {
   return useQuery({
-    queryKey: ['opencode', 'connection', status.updatedAt],
+    queryKey: openCodeQueryKeys.sidecarConnection(status.updatedAt),
     queryFn: async (): Promise<OpenCodeConnectionResult> => ({
       updatedAt: status.updatedAt,
       connection: await window.api.getOpenCodeConnection()
     }),
-    enabled: status.state === 'connected'
+    enabled: status.state === openCodeSidecarState.connected
   })
 }
 
@@ -42,7 +53,7 @@ export function getDisplayedOpenCodeConnection(
   status: OpenCodeSidecarStatus,
   connection: OpenCodeConnectionResult | undefined
 ): OpenCodeConnection | null {
-  if (status.state !== 'connected') return null
+  if (status.state !== openCodeSidecarState.connected) return null
   if (connection?.updatedAt !== status.updatedAt) return null
   return connection.connection
 }
