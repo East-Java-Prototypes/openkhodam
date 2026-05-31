@@ -2,6 +2,11 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import type { JSX } from 'react'
 import { useMemo, useState } from 'react'
 
+import {
+  type OpenCodePromptOptions,
+  useSendOpenCodePrompt,
+  useStartOpenCodeConversation
+} from '../hooks/useOpenCodeChat'
 import { type OpenCodeProject, useOpenCodeProjects } from '../hooks/opencode/projects'
 import {
   type OpenCodeSession,
@@ -18,12 +23,20 @@ function IndexRoute(): JSX.Element {
   const { status, connection, connectionQuery, projectsQuery } = useOpenCodeProjects()
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null)
   const [selectedSessionID, setSelectedSessionID] = useState<string | null>(null)
+  const [promptText, setPromptText] = useState('')
+  const [agent, setAgent] = useState('')
+  const [providerID, setProviderID] = useState('')
+  const [modelID, setModelID] = useState('')
   const { sessionsQuery } = useProjectSessions(selectedDirectory)
   const { sessionQuery } = useOpenCodeSession(selectedDirectory, selectedSessionID)
   const { messagesQuery } = useSessionMessages(selectedDirectory, selectedSessionID)
+  const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(selectedDirectory, selectedSessionID)
+  const { startConversationMutation, connection: startConnection } = useStartOpenCodeConversation(selectedDirectory)
   const projects = projectsQuery.data ?? []
   const sessions = sessionsQuery.data ?? []
   const messages = messagesQuery.data ?? []
+  const isPromptBlank = promptText.trim().length === 0
+  const isChatPending = sendPromptMutation.isPending || startConversationMutation.isPending
   const selectedProject = useMemo(
     () => projects.find((project) => project.worktree === selectedDirectory),
     [projects, selectedDirectory]
@@ -42,6 +55,77 @@ function IndexRoute(): JSX.Element {
         </p>
         {status.state === 'connected' && connection === null ? <p>Loading connection details...</p> : null}
         {connectionQuery.isError ? <p>Connection error: {formatError(connectionQuery.error)}</p> : null}
+      </section>
+
+      <section>
+        <h2>Prompt</h2>
+        {!selectedDirectory ? <p>Select a project before starting or continuing a chat.</p> : null}
+        {selectedDirectory && sendConnection === null && startConnection === null ? (
+          <p>Waiting for an OpenCode sidecar connection before sending prompts.</p>
+        ) : null}
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+          }}
+        >
+          <p>
+            <label>
+              Prompt
+              <br />
+              <textarea value={promptText} onChange={(event) => setPromptText(event.currentTarget.value)} rows={4} cols={80} />
+            </label>
+          </p>
+          <p>
+            <label>
+              Agent (optional)
+              <br />
+              <input value={agent} onChange={(event) => setAgent(event.currentTarget.value)} placeholder="default" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Provider (optional)
+              <br />
+              <input value={providerID} onChange={(event) => setProviderID(event.currentTarget.value)} placeholder="provider ID" />
+            </label>
+          </p>
+          <p>
+            <label>
+              Model (optional)
+              <br />
+              <input value={modelID} onChange={(event) => setModelID(event.currentTarget.value)} placeholder="model ID" />
+            </label>
+          </p>
+          <button
+            type="button"
+            disabled={!selectedDirectory || !selectedSessionID || isPromptBlank || sendConnection === null || isChatPending}
+            onClick={() => {
+              sendPromptMutation.mutate(buildPromptOptions(promptText, agent, providerID, modelID), {
+                onSuccess: () => setPromptText('')
+              })
+            }}
+          >
+            Send to selected session
+          </button>{' '}
+          <button
+            type="button"
+            disabled={!selectedDirectory || isPromptBlank || startConnection === null || isChatPending}
+            onClick={() => {
+              startConversationMutation.mutate(buildPromptOptions(promptText, agent, providerID, modelID), {
+                onSuccess: (session) => {
+                  setSelectedSessionID(getSessionId(session))
+                  setPromptText('')
+                }
+              })
+            }}
+          >
+            Start new session
+          </button>
+        </form>
+        {sendPromptMutation.isError ? <p>Prompt send error: {formatError(sendPromptMutation.error)}</p> : null}
+        {startConversationMutation.isError ? <p>New session prompt error: {formatError(startConversationMutation.error)}</p> : null}
+        {sendPromptMutation.isSuccess ? <p>Prompt sent. Messages will refresh shortly.</p> : null}
+        {startConversationMutation.isSuccess ? <p>Session started and prompt sent. Messages will refresh shortly.</p> : null}
       </section>
 
       <section>
@@ -170,6 +254,20 @@ function MessageSummary({ message }: { message: OpenCodeSessionMessage }): JSX.E
       <p>{getMessageText(message)}</p>
     </article>
   )
+}
+
+function buildPromptOptions(text: string, agent: string, providerID: string, modelID: string): OpenCodePromptOptions {
+  return {
+    text,
+    agent: nonEmptyTrimmed(agent),
+    providerID: nonEmptyTrimmed(providerID),
+    modelID: nonEmptyTrimmed(modelID)
+  }
+}
+
+function nonEmptyTrimmed(value: string): string | undefined {
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
 }
 
 function formatError(error: unknown): string {
