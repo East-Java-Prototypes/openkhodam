@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-import { createOpenCodeClient, useOpenCodeSdk } from './opencode/client'
+import { useOpenCodeSdk, type createOpenCodeClient } from './opencode/client'
 import {
   openCodeSessionQueryKey,
   projectSessionsQueryKey,
@@ -28,14 +28,14 @@ function modelFromOptions(options: OpenCodePromptOptions): PromptAsyncParameters
 
 export function useCreateOpenCodeSession(directory: string | null | undefined) {
   const queryClient = useQueryClient()
-  const { status, statusQuery, connection, connectionQuery } = useOpenCodeSdk()
+  const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
 
   const createSessionMutation = useMutation({
     mutationFn: async (options: OpenCodeCreateSessionOptions = {}): Promise<OpenCodeSession> => {
       if (connection === null) throw new Error('OpenCode sidecar is not connected.')
       if (!directory) throw new Error('Select a project before creating a session.')
 
-      const response = await createOpenCodeClient(connection).session.create({
+      const response = await client!.session.create({
         directory,
         ...options
       })
@@ -53,7 +53,7 @@ export function useCreateOpenCodeSession(directory: string | null | undefined) {
 
 export function useSendOpenCodePrompt(directory: string | null | undefined, sessionID: string | null | undefined) {
   const queryClient = useQueryClient()
-  const { status, statusQuery, connection, connectionQuery } = useOpenCodeSdk()
+  const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
 
   const sendPromptMutation = useMutation({
     mutationFn: async (options: OpenCodePromptOptions) => {
@@ -63,7 +63,7 @@ export function useSendOpenCodePrompt(directory: string | null | undefined, sess
       if (!sessionID) throw new Error('Select a session before sending a prompt.')
       if (!text) throw new Error('Enter a prompt before sending.')
 
-      const response = await createOpenCodeClient(connection).session.promptAsync({
+      const response = await client!.session.promptAsync({
         directory,
         sessionID,
         agent: options.agent || undefined,
@@ -87,7 +87,7 @@ export function useSendOpenCodePrompt(directory: string | null | undefined, sess
 
 export function useStartOpenCodeConversation(directory: string | null | undefined) {
   const queryClient = useQueryClient()
-  const { status, statusQuery, connection, connectionQuery } = useOpenCodeSdk()
+  const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
 
   const startConversationMutation = useMutation({
     mutationFn: async (options: OpenCodePromptOptions): Promise<OpenCodeSession> => {
@@ -96,8 +96,7 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
       if (!directory) throw new Error('Select a project before starting a session.')
       if (!text) throw new Error('Enter a prompt before starting a session.')
 
-      const client = createOpenCodeClient(connection)
-      const createResponse = await client.session.create({
+      const createResponse = await client!.session.create({
         directory,
         agent: options.agent || undefined,
         model: options.providerID && options.modelID ? { providerID: options.providerID, id: options.modelID } : undefined
@@ -108,7 +107,7 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
       const sessionID = getSessionId(createResponse.data)
       if (!sessionID) throw new Error('OpenCode did not return a session ID.')
 
-      const promptResponse = await client.session.promptAsync({
+      const promptResponse = await client!.session.promptAsync({
         directory,
         sessionID,
         agent: options.agent || undefined,

@@ -46,7 +46,7 @@ export function useProjectSessions(directory: string | null | undefined, options
       if (response.error) throw response.error
       return response.data ?? []
     },
-    enabled: connection !== null && Boolean(directory)
+    enabled: client !== null && Boolean(directory)
   })
 
   return {
@@ -71,7 +71,7 @@ export function useOpenCodeSession(directory: string | null | undefined, session
       if (response.error) throw response.error
       return response.data
     },
-    enabled: connection !== null && Boolean(directory) && Boolean(sessionID)
+    enabled: client !== null && Boolean(directory) && Boolean(sessionID)
   })
 
   return {
@@ -102,7 +102,7 @@ export function useSessionMessages(
       if (response.error) throw response.error
       return response.data ?? []
     },
-    enabled: connection !== null && Boolean(directory) && Boolean(sessionID)
+    enabled: client !== null && Boolean(directory) && Boolean(sessionID)
   })
 
   return {
