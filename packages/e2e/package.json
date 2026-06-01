@@ -1,0 +1,14 @@
+{
+  "name": "@openkhodam/e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "pnpm --filter @openkhodam/desktop build && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "electron": "^39.2.6",
+    "typescript": "^5.9.3"
+  }
+}

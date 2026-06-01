@@ -18,7 +18,8 @@
     "build:unpack": "pnpm --filter @openkhodam/desktop build:unpack",
     "build:win": "pnpm --filter @openkhodam/desktop build:win",
     "build:mac": "pnpm --filter @openkhodam/desktop build:mac",
-    "build:linux": "pnpm --filter @openkhodam/desktop build:linux"
+    "build:linux": "pnpm --filter @openkhodam/desktop build:linux",
+    "test:e2e": "pnpm --filter @openkhodam/e2e test"
   },
   "devDependencies": {
     "oxfmt": "^0.51.0",
