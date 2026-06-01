@@ -7,13 +7,10 @@ import {
   type RendererHttpHealthSnapshot
 } from '@openkhodam/ui'
 import {
-  getDisplayedOpenCodeConnection,
   openCodeQueryKeys,
-  openCodeSidecarState,
-  useOpenCodeSidecarConnection,
-  useOpenCodeSidecarStatus
+  openCodeSidecarState
 } from '../hooks/opencode/sidecar'
-import { getOpenCodeAuthorizationHeader } from '../hooks/opencode/client'
+import { getOpenCodeAuthorizationHeader, useOpenCodeSdk } from '../hooks/opencode/client'
 
 type RendererHttpHealth = RendererHttpHealthSnapshot & {
   updatedAt: number
@@ -21,19 +18,14 @@ type RendererHttpHealth = RendererHttpHealthSnapshot & {
 
 function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient()
-  const statusQuery = useOpenCodeSidecarStatus()
-  const status = statusQuery.data
-
-  const connectionQuery = useOpenCodeSidecarConnection(status)
-
-  const displayedConnection = getDisplayedOpenCodeConnection(status, connectionQuery.data)
+  const { status, connectionQuery, connection } = useOpenCodeSdk()
   const rendererHttpHealthQuery = useQuery({
     queryKey: ['opencode', 'renderer-http-health', status.updatedAt],
     queryFn: async (): Promise<RendererHttpHealth> => ({
       updatedAt: status.updatedAt,
-      ...(await checkRendererHttpHealth(displayedConnection!))
+      ...(await checkRendererHttpHealth(connection!))
     }),
-    enabled: Boolean(displayedConnection)
+    enabled: Boolean(connection)
   })
 
   const restartOpenCode = useMutation({
@@ -54,7 +46,7 @@ function SettingsPage(): JSX.Element {
   return (
     <OpenCodeServerView
       status={status}
-      connection={displayedConnection}
+      connection={connection}
       rendererHttpHealth={displayedRendererHttpHealth}
       rendererOrigin={window.location.origin}
       isRestarting={restartOpenCode.isPending}
