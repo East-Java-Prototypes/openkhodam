@@ -27,6 +27,7 @@
               nodejs_24
               pnpm
             ] ++ lib.optionals stdenv.hostPlatform.isLinux [
+              ffmpeg-full
               xvfb-run
             ];
           };
