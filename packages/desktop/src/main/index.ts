@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import { createOpenCodeSidecar } from './opencode-sidecar'
 
 const opencodeSidecar = createOpenCodeSidecar()
+const isE2e = process.env['OPENKHODAM_E2E'] === '1'
 
 function createWindow(): void {
   // Create the browser window.
@@ -62,7 +63,9 @@ app.whenReady().then(() => {
     })
   })
 
-  void opencodeSidecar.start()
+  if (!isE2e) {
+    void opencodeSidecar.start()
+  }
 
   createWindow()
 
