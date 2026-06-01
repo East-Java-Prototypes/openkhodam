@@ -2,7 +2,7 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import type { JSX } from 'react'
 import { useMemo, useState } from 'react'
 
-import { useOpenCodeProjects } from '../hooks/opencode/projects'
+import { type OpenCodeProject, useOpenCodeProjects } from '../hooks/opencode/projects'
 
 export const Route = createFileRoute('/')({ component: IndexRoute })
 
@@ -39,24 +39,22 @@ function IndexRoute(): JSX.Element {
         {projects.length > 0 ? (
           <ul>
             {projects.map((project, index) => {
-              const directory = project.worktree
-              const id = project.id
-              const name = project.name ?? directory ?? id ?? `Project ${index + 1}`
-              const isSelected = directory !== null && directory === selectedDirectory
+              const label = projectLabel(project, index)
+              const isSelected = project.worktree === selectedDirectory
 
               return (
-                <li key={id ?? directory ?? index}>
-                  <button type="button" onClick={() => setSelectedDirectory(directory)} disabled={!directory}>
+                <li key={project.id}>
+                  <button type="button" onClick={() => setSelectedDirectory(project.worktree)}>
                     {isSelected ? 'Selected: ' : 'Select '}
-                    {name}
+                    {label}
                   </button>
                   <dl>
                     <dt>Directory</dt>
-                    <dd>{directory ?? 'Unknown'}</dd>
+                    <dd>{project.worktree}</dd>
                     <dt>Worktree</dt>
-                    <dd>{project.worktree ?? 'Unknown'}</dd>
+                    <dd>{project.worktree}</dd>
                     <dt>ID</dt>
-                    <dd>{id ?? 'Unknown'}</dd>
+                    <dd>{project.id}</dd>
                   </dl>
                 </li>
               )
@@ -79,4 +77,8 @@ function IndexRoute(): JSX.Element {
 function formatError(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
+}
+
+function projectLabel(project: OpenCodeProject, index: number): string {
+  return project.name ?? project.worktree ?? project.id ?? `Project ${index + 1}`
 }
