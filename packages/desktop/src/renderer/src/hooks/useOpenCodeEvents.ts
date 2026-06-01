@@ -43,7 +43,7 @@ export function useOpenCodeEvents(): OpenCodeEventsState {
 
     void (async () => {
       try {
-        const events = await client.global.event({
+        const events = await client!.global.event({
           signal: controller.signal,
           sseMaxRetryAttempts: 3
         })
