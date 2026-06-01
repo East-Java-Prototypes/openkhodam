@@ -7,20 +7,23 @@ export type ChatMessage = {
 
 export type ProjectChat = {
   id: string
+  kind: 'project' | 'session'
   title: string
   summary: string
   updatedAt: string
+  disabled?: boolean
 }
 
 export type ChatProject = {
   id: string
   name: string
+  subtitle?: string
   chats: ProjectChat[]
 }
 
 export type ChatInterfaceData = {
   projects: ChatProject[]
-  activeChat: ProjectChat
+  activeChat: ProjectChat | null
   messages: ChatMessage[]
 }
 
@@ -31,12 +34,14 @@ const projects: ChatProject[] = [
     chats: [
       {
         id: 'chat-shell-design',
+        kind: 'session',
         title: 'Shell design pass',
         summary: 'Map the first pass for the desktop chat experience.',
         updatedAt: '10:42 AM'
       },
       {
         id: 'chat-settings-health',
+        kind: 'session',
         title: 'Settings health view',
         summary: 'Review connection states and renderer health copy.',
         updatedAt: 'Yesterday'
@@ -49,6 +54,7 @@ const projects: ChatProject[] = [
     chats: [
       {
         id: 'chat-agent-flows',
+        kind: 'session',
         title: 'Agent workflow ideas',
         summary: 'Collect rough notes for handoff and review loops.',
         updatedAt: 'Mon'
