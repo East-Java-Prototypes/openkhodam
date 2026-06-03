@@ -6,6 +6,8 @@ import { openCodeQueryKeys } from './sidecar'
 type OpenCodeClient = ReturnType<typeof createOpenCodeClient>
 type OpenCodeProjectListResponse = Awaited<ReturnType<OpenCodeClient['project']['list']>>
 export type OpenCodeProject = NonNullable<OpenCodeProjectListResponse['data']>[number]
+type OpenCodeProjectCurrentResponse = Awaited<ReturnType<OpenCodeClient['project']['current']>>
+export type OpenCodeCurrentProject = NonNullable<OpenCodeProjectCurrentResponse['data']>
 
 export const openCodeProjectQueryKeys = {
   all: () => [...openCodeQueryKeys.all, 'projects'] as const,
@@ -42,9 +44,10 @@ export function useOpenCodeProject(directory: string | null | undefined) {
 
   const projectQuery = useQuery({
     queryKey: openCodeProjectQueryKeys.current(directory, status.url, status.pid, status.updatedAt),
-    queryFn: async () => {
+    queryFn: async (): Promise<OpenCodeCurrentProject> => {
       const response = await client!.project.current({ directory: directory! })
       if (response.error) throw response.error
+      if (!response.data) throw new Error('OpenCode did not return project details.')
       return response.data
     },
     enabled: connection !== null && Boolean(directory)

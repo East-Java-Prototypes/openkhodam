@@ -2,13 +2,21 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import type { JSX } from 'react'
 import { useMemo, useState } from 'react'
 
-import { type OpenCodeProject, useOpenCodeProjects } from '../hooks/opencode/projects'
+import {
+  type OpenCodeCurrentProject,
+  type OpenCodeProject,
+  useOpenCodeProject,
+  useOpenCodeProjects
+} from '../hooks/opencode/projects'
 
 export const Route = createFileRoute('/')({ component: IndexRoute })
 
 function IndexRoute(): JSX.Element {
   const { status, connection, connectionQuery, projectsQuery } = useOpenCodeProjects()
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null)
+  const [projectDirectory, setProjectDirectory] = useState('')
+  const [openedDirectory, setOpenedDirectory] = useState<string | null>(null)
+  const { projectQuery } = useOpenCodeProject(openedDirectory)
   const projects = projectsQuery.data ?? []
   const selectedProject = useMemo(
     () => projects.find((project) => project.worktree === selectedDirectory),
@@ -69,8 +77,54 @@ function IndexRoute(): JSX.Element {
         ) : null}
       </section>
 
+      <section>
+        <h2>Open project by directory</h2>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            const directory = projectDirectory.trim()
+            if (directory) setOpenedDirectory(directory)
+          }}
+        >
+          <label htmlFor="project-directory">Project directory</label>
+          <input
+            id="project-directory"
+            name="project-directory"
+            type="text"
+            value={projectDirectory}
+            onChange={(event) => setProjectDirectory(event.currentTarget.value)}
+            placeholder="/path/to/opencode/project"
+          />
+          <button type="submit" disabled={projectDirectory.trim().length === 0}>
+            Open project
+          </button>
+        </form>
+        {openedDirectory ? <p>Opening directory: {openedDirectory}</p> : null}
+        {projectQuery.isLoading ? <p>Opening project...</p> : null}
+        {projectQuery.isError ? <p>Project open error: {formatError(projectQuery.error)}</p> : null}
+        {projectQuery.isSuccess ? <OpenedProjectDetails project={projectQuery.data} /> : null}
+      </section>
+
       <Link to="/settings">Open settings</Link>
     </main>
+  )
+}
+
+function OpenedProjectDetails({ project }: { project: OpenCodeCurrentProject }): JSX.Element {
+  return (
+    <section aria-labelledby="opened-project-heading">
+      <h3 id="opened-project-heading">Opened project details</h3>
+      <dl>
+        <dt>Name</dt>
+        <dd>{project.name ?? 'Unknown'}</dd>
+        <dt>ID</dt>
+        <dd>{project.id ?? 'Unknown'}</dd>
+        <dt>Worktree</dt>
+        <dd>{project.worktree ?? 'Unknown'}</dd>
+        <dt>Directory</dt>
+        <dd>{project.worktree ?? 'Unknown'}</dd>
+      </dl>
+    </section>
   )
 }
 
