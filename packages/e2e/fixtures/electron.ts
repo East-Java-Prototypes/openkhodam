@@ -14,10 +14,7 @@ export const test = base.extend<Fixtures>({
     void browserName
     const app = await electron.launch({
       args: [join(testDir, '../../desktop/out/main/index.js')],
-      env: {
-        ...process.env,
-        OPENKHODAM_E2E: '1'
-      }
+      env: process.env
     })
 
     await use(app)
