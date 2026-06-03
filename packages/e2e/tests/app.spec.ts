@@ -1,5 +1,8 @@
+import { dirname } from 'node:path'
+
 import { expect, test, type Locator, type Page } from '../fixtures/electron'
 
+const repositoryDirectory = dirname(process.cwd())
 const projectChatButton = (page: Page): Locator => page.getByRole('button', { name: /Open project/ })
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 
@@ -7,6 +10,7 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Project chats' })).toBeVisible()
+  await expect(page.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Project chats' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toBeVisible()
@@ -19,6 +23,27 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   await expect(appWindow.getByText(/^(connected|starting|stopped|error)$/).first()).toBeVisible()
   await expect(eventStatusBadge(appWindow)).toBeVisible()
   await expect(appWindow.getByText('Select a project to view or start a chat.').or(appWindow.getByText('Waiting for the OpenCode sidecar connection.')).or(appWindow.getByText('No OpenCode projects found.')).first()).toBeVisible()
+})
+
+test('opens a project by directory from the final chat shell', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+
+  const directoryInput = appWindow.getByLabel('Project directory')
+  const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
+  const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
+
+  await expect(openButton).toBeDisabled()
+  await expect(appWindow.getByText('connected', { exact: true }).first()).toBeVisible()
+  await directoryInput.fill(repositoryDirectory)
+  await expect(openButton).toBeEnabled()
+
+  await openButton.click()
+  const openedProjectDetails = openProjectForm.getByRole('region', { name: 'Opened project details' })
+  await expect(openedProjectDetails).toBeVisible()
+  await expect(openedProjectDetails.getByText('Name', { exact: true })).toBeVisible()
+  await expect(openedProjectDetails.getByText('Directory', { exact: true })).toBeVisible()
+  await expect(openedProjectDetails.getByText('ID', { exact: true })).toBeVisible()
+  await expect(openedProjectDetails.locator('dd').filter({ hasText: /\S/ })).toHaveCount(3)
 })
 
 test('shows the real OpenCode project chats surface', async ({ appWindow }) => {

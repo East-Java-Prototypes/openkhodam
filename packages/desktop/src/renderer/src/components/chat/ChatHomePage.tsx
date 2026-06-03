@@ -19,22 +19,17 @@ export function ChatHomePage(): JSX.Element {
 
   return (
     <main className="grid min-h-[calc(100vh-3.5rem)] grid-cols-1 bg-background text-foreground md:grid-cols-[20rem_1fr]">
-      <ProjectChatSidebar projects={chat.projects} activeChat={chat.activeChat} onSelectProject={chat.selectProject} onSelectSession={chat.selectSession} statusLabel={chat.statusLabel} eventLabel={chat.eventLabel} />
+      <ProjectChatSidebar chat={chat} />
       <ActiveChatPanel chat={chat} />
     </main>
   )
 }
 
 type ProjectChatSidebarProps = {
-  projects: ChatProject[]
-  activeChat: ProjectChat | null
-  onSelectProject: (directory: string) => void
-  onSelectSession: (sessionID: string | null) => void
-  statusLabel: string
-  eventLabel: string
+  chat: ReturnType<typeof useOpenCodeChatInterface>
 }
 
-function ProjectChatSidebar({ projects, activeChat, onSelectProject, onSelectSession, statusLabel, eventLabel }: ProjectChatSidebarProps): JSX.Element {
+function ProjectChatSidebar({ chat }: ProjectChatSidebarProps): JSX.Element {
   return (
     <aside className="relative bg-sidebar/70 p-4" aria-labelledby="projects-heading">
       <ScrollArea className="h-full pr-2">
@@ -43,17 +38,59 @@ function ProjectChatSidebar({ projects, activeChat, onSelectProject, onSelectSes
           <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
             Project chats
           </h1>
-          <div className="mt-3 flex flex-wrap gap-2"><Badge variant="secondary">{statusLabel}</Badge><Badge variant="outline">{eventLabel}</Badge></div>
+          <div className="mt-3 flex flex-wrap gap-2"><Badge variant="secondary">{chat.statusLabel}</Badge><Badge variant="outline">{chat.eventLabel}</Badge></div>
         </div>
 
+        <OpenProjectByDirectoryForm chat={chat} />
+
         <nav className="flex flex-col gap-6" aria-label="Project chats">
-          {projects.map((project) => (
-            <ProjectChatSection key={project.id} project={project} activeChat={activeChat} onSelectProject={onSelectProject} onSelectSession={onSelectSession} />
+          {chat.projects.map((project) => (
+            <ProjectChatSection key={project.id} project={project} activeChat={chat.activeChat} onSelectProject={chat.selectProject} onSelectSession={chat.selectSession} />
           ))}
         </nav>
       </ScrollArea>
       <Separator orientation="vertical" className="absolute right-0 top-0 hidden h-full md:block" />
     </aside>
+  )
+}
+
+function OpenProjectByDirectoryForm({ chat }: { chat: ReturnType<typeof useOpenCodeChatInterface> }): JSX.Element {
+  return (
+    <form className="mb-6 rounded-none border bg-card p-3" aria-label="Open project by directory" onSubmit={(event) => { event.preventDefault(); if (chat.canOpenProject) chat.openProjectByDirectory() }}>
+      <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" htmlFor="project-directory">
+        Project directory
+      </label>
+      <div className="mt-2 flex gap-2">
+        <input
+          id="project-directory"
+          className="min-w-0 flex-1 rounded-none border bg-background px-2 py-1 text-sm"
+          value={chat.projectDirectoryText}
+          onChange={(event) => chat.setProjectDirectoryText(event.currentTarget.value)}
+          placeholder="/path/to/project"
+        />
+        <Button type="submit" size="sm" disabled={!chat.canOpenProject}>Open</Button>
+      </div>
+      {chat.openProjectStatusMessage ? <p className="mt-2 text-xs text-muted-foreground">{chat.openProjectStatusMessage}</p> : null}
+      {chat.openedProject ? <OpenedProjectDetails project={chat.openedProject} /> : null}
+    </form>
+  )
+}
+
+function OpenedProjectDetails({ project }: { project: ReturnType<typeof useOpenCodeChatInterface>['openedProject'] }): JSX.Element | null {
+  if (!project) return null
+
+  return (
+    <section className="mt-2 text-xs text-muted-foreground" aria-labelledby="opened-project-heading">
+      <h2 id="opened-project-heading" className="font-semibold text-foreground">Opened project details</h2>
+      <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+        <dt>Name</dt>
+        <dd>{project.name}</dd>
+        <dt>Directory</dt>
+        <dd>{project.directory}</dd>
+        <dt>ID</dt>
+        <dd>{project.id}</dd>
+      </dl>
+    </section>
   )
 }
 
