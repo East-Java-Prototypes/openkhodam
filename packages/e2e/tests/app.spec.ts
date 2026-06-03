@@ -3,9 +3,23 @@ import { expect, test } from '../fixtures/electron'
 test('renders the built desktop app shell', async ({ appWindow }) => {
   await expect(appWindow.getByRole('link', { name: 'Home' })).toBeVisible()
   await expect(appWindow.getByRole('link', { name: 'Settings', exact: true })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Project chats' })).toBeVisible()
-  await expect(appWindow.getByText('Active chat')).toBeVisible()
-  await expect(appWindow.getByRole('textbox', { name: 'Message OpenKhodam' })).toBeDisabled()
+  await expect(appWindow.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'OpenCode sidecar' })).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'OpenCode projects' })).toBeVisible()
+})
+
+test('shows the real OpenCode projects surface', async ({ appWindow }) => {
+  await expect(appWindow.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'OpenCode sidecar' })).toBeVisible()
+  await expect(appWindow.getByText(/^Status:\s*connected/)).toBeVisible()
+
+  await expect(appWindow.getByRole('heading', { name: 'OpenCode projects' })).toBeVisible()
+  await expect(
+    appWindow
+      .getByText(/^(Project load error:|No projects found\.)/)
+      .or(appWindow.getByRole('button', { name: /^(Select|Selected:)/ }))
+      .first()
+  ).toBeVisible()
 })
 
 test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) => {
