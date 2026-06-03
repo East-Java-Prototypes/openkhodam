@@ -6,5 +6,3 @@ out/
 .DS_Store
 .eslintcache
 *.log*
-packages/e2e/playwright-report/
-packages/e2e/test-results/
