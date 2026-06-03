@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-import { useOpenCodeProjects, type OpenCodeProject } from './opencode/projects'
+import { useOpenCodeProject, useOpenCodeProjects, type OpenCodeCurrentProject, type OpenCodeProject } from './opencode/projects'
 import { type OpenCodePromptOptions, useSendOpenCodePrompt, useStartOpenCodeConversation } from './useOpenCodeChat'
 import { useOpenCodeEvents } from './useOpenCodeEvents'
 import {
@@ -33,10 +33,22 @@ export type OpenCodeChatInterfaceState = {
   emptyMessage: string | null
   errorMessage: string | null
   successMessage: string | null
+  projectDirectoryText: string
+  openedProject: OpenCodeChatOpenedProject | null
+  openProjectStatusMessage: string | null
+  canOpenProject: boolean
   selectProject: (directory: string) => void
   selectSession: (sessionID: string | null) => void
+  setProjectDirectoryText: (value: string) => void
+  openProjectByDirectory: () => void
   setPromptText: (value: string) => void
   sendPrompt: () => void
+}
+
+export type OpenCodeChatOpenedProject = {
+  name: string
+  directory: string
+  id: string
 }
 
 export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
@@ -45,7 +57,10 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null)
   const [selectedSessionID, setSelectedSessionID] = useState<string | null>(null)
   const [promptText, setPromptText] = useState('')
+  const [projectDirectoryText, setProjectDirectoryText] = useState('')
+  const [openedDirectory, setOpenedDirectory] = useState<string | null>(null)
   const { sessionsQuery } = useProjectSessions(selectedDirectory)
+  const { projectQuery } = useOpenCodeProject(openedDirectory)
   const { sessionQuery } = useOpenCodeSession(selectedDirectory, selectedSessionID)
   const { messagesQuery } = useSessionMessages(selectedDirectory, selectedSessionID)
   const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(selectedDirectory, selectedSessionID)
@@ -76,11 +91,23 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
     emptyMessage: getEmptyMessage(connection, selectedDirectory, selectedSessionID, projectsQuery.isSuccess, projects.length, sessionsQuery.isSuccess, sessions.length, messagesQuery.isSuccess, messages.length),
     errorMessage: firstErrorMessage(connectionQuery.error, projectsQuery.error, sessionsQuery.error, sessionQuery.error, messagesQuery.error, events.error, sendPromptMutation.error, startConversationMutation.error),
     successMessage: sendPromptMutation.isSuccess ? 'Prompt sent. Messages will refresh shortly.' : startConversationMutation.isSuccess ? 'Session started. Messages will refresh shortly.' : null,
+    projectDirectoryText,
+    openedProject: projectQuery.data ? mapOpenedProject(projectQuery.data) : null,
+    openProjectStatusMessage: getOpenProjectStatusMessage(openedDirectory, projectQuery.isLoading, projectQuery.error, projectQuery.data),
+    canOpenProject: projectDirectoryText.trim().length > 0 && connection !== null && !projectQuery.isLoading,
     selectProject: (directory) => {
       setSelectedDirectory(directory)
       setSelectedSessionID(null)
     },
     selectSession: setSelectedSessionID,
+    setProjectDirectoryText,
+    openProjectByDirectory: () => {
+      const directory = projectDirectoryText.trim()
+      if (!directory) return
+      setOpenedDirectory(directory)
+      setSelectedDirectory(directory)
+      setSelectedSessionID(null)
+    },
     setPromptText,
     sendPrompt: () => {
       const options = buildPromptOptions(promptText)
@@ -96,6 +123,22 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
       })
     }
   }
+}
+
+function mapOpenedProject(project: OpenCodeCurrentProject): OpenCodeChatOpenedProject {
+  return {
+    name: project.name ?? 'Unknown project',
+    directory: project.worktree ?? 'Unknown directory',
+    id: project.id ?? 'Unknown ID'
+  }
+}
+
+function getOpenProjectStatusMessage(openedDirectory: string | null, isLoading: boolean, error: unknown, project: OpenCodeCurrentProject | undefined): string | null {
+  if (!openedDirectory) return null
+  if (isLoading) return `Opening directory: ${openedDirectory}`
+  if (error) return `Project open error: ${error instanceof Error ? error.message : String(error)}`
+  if (project) return `Opened project: ${project.worktree ?? openedDirectory}`
+  return null
 }
 
 function mapProjects(projects: OpenCodeProject[], sessions: OpenCodeSession[], selectedDirectory: string | null): ChatProject[] {
