@@ -13,6 +13,10 @@ import {
 } from './useOpenCodeSessions'
 import type { ChatMessage, ChatProject, ProjectChat } from './useChatInterfaceData'
 
+const emptyProjects: OpenCodeProject[] = []
+const emptySessions: OpenCodeSession[] = []
+const emptyMessages: OpenCodeSessionMessage[] = []
+
 export type OpenCodeChatInterfaceState = {
   projects: ChatProject[]
   activeChat: ProjectChat | null
@@ -47,9 +51,9 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
   const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(selectedDirectory, selectedSessionID)
   const { startConversationMutation, connection: startConnection } = useStartOpenCodeConversation(selectedDirectory)
 
-  const projects = projectsQuery.data ?? []
-  const sessions = sessionsQuery.data ?? []
-  const messages = messagesQuery.data ?? []
+  const projects = projectsQuery.data ?? emptyProjects
+  const sessions = sessionsQuery.data ?? emptySessions
+  const messages = messagesQuery.data ?? emptyMessages
   const activeSession = sessionQuery.data ?? sessions.find((session) => getSessionId(session) === selectedSessionID) ?? null
   const isSending = sendPromptMutation.isPending || startConversationMutation.isPending
   const canSendPrompt = Boolean(selectedDirectory) && promptText.trim().length > 0 && (sendConnection !== null || startConnection !== null) && !isSending

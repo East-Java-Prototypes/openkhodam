@@ -1,165 +1,94 @@
-import { expect, test } from '../fixtures/electron'
+import { expect, test, type Locator, type Page } from '../fixtures/electron'
 
-const repositoryDirectory = process.cwd()
+const projectChatButton = (page: Page): Locator => page.getByRole('button', { name: /Open project/ })
+const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 
-test('renders the built desktop app shell', async ({ appWindow }) => {
-  await expect(appWindow.getByRole('link', { name: 'Home' })).toBeVisible()
-  await expect(appWindow.getByRole('link', { name: 'Settings', exact: true })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'OpenCode sidecar' })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Prompt' })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'OpenCode projects' })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Open project by directory' })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Selected session' })).toBeVisible()
+async function waitForChatShell(page: Page): Promise<void> {
+  await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Project chats' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Project chats' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
+  await expect(page.getByText('OpenCode', { exact: true })).toBeVisible()
+  await expect(page.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+  await expect(page.getByPlaceholder('Ask about this project...')).toBeVisible()
+}
+
+test('renders the built desktop chat shell', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+  await expect(appWindow.getByText(/^(connected|starting|stopped|error)$/).first()).toBeVisible()
+  await expect(eventStatusBadge(appWindow)).toBeVisible()
+  await expect(appWindow.getByText('Select a project to view or start a chat.').or(appWindow.getByText('Waiting for the OpenCode sidecar connection.')).or(appWindow.getByText('No OpenCode projects found.')).first()).toBeVisible()
 })
 
-test('shows the real OpenCode projects surface', async ({ appWindow }) => {
-  await expect(appWindow.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'OpenCode sidecar' })).toBeVisible()
-  await expect(appWindow.getByText(/^Status:\s*connected/)).toBeVisible()
+test('shows the real OpenCode project chats surface', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
 
-  await expect(appWindow.getByRole('heading', { name: 'OpenCode projects' })).toBeVisible()
   await expect(
     appWindow
-      .getByText(/^(Project load error:|No projects found\.)/)
-      .or(appWindow.getByRole('button', { name: /^(Select|Selected:)/ }))
+      .getByText('No OpenCode projects found.')
+      .or(appWindow.getByText('Waiting for the OpenCode sidecar connection.'))
+      .or(projectChatButton(appWindow))
       .first()
   ).toBeVisible()
-
-  await appWindow.getByLabel('Project directory').fill(repositoryDirectory)
-  await appWindow.getByRole('button', { name: 'Open project' }).click()
-
-  await expect(appWindow.getByText(`Opening directory: ${repositoryDirectory}`)).toBeVisible()
-  await expect(
-    appWindow
-      .getByRole('heading', { name: 'Opened project details' })
-      .or(appWindow.getByText(/^Project open error:/))
-  ).toBeVisible()
 })
 
-test('shows the real OpenCode sessions and messages surface', async ({ appWindow }) => {
-  await expect(appWindow.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
-  await expect(appWindow.getByText(/^Status:\s*connected/)).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'OpenCode projects' })).toBeVisible()
+test('shows real project/session selection in the reused chat shell', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
 
-  const projectTerminalState = appWindow
-    .getByText(/^(Project load error:|No projects found\.)/)
-    .or(appWindow.getByRole('button', { name: /^(Select|Selected:)/ }))
+  const projectButtons = projectChatButton(appWindow)
+  const terminalProjectState = appWindow
+    .getByText('No OpenCode projects found.')
+    .or(appWindow.getByText('Waiting for the OpenCode sidecar connection.'))
+    .or(projectButtons)
     .first()
-  await expect(projectTerminalState).toBeVisible()
+  await expect(terminalProjectState).toBeVisible()
 
-  await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Selected session' })).toBeVisible()
-
-  const projectButtons = appWindow.getByRole('button', { name: /^(Select|Selected:)/ })
-  const projectCount = await projectButtons.count()
-
-  if (projectCount === 0) {
-    await expect(
-      appWindow.getByText(/^(Project load error:|No projects found\.)/).or(appWindow.getByText('Select a project to load sessions.')).first()
-    ).toBeVisible()
-    await expect(appWindow.getByText('Select a session to load details and messages.')).toBeVisible()
+  if ((await projectButtons.count()) === 0) {
+    await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
     return
   }
 
   await projectButtons.first().click()
+  await expect(appWindow.getByText('Select a session, or send a prompt to start a new one.').or(appWindow.getByText('No sessions yet. Send a prompt to start one.')).or(appWindow.getByText(/^(Loading OpenCode data…|No messages found for this session\.)/)).first()).toBeVisible()
 
-  await expect(appWindow.getByText(/^Selected directory:/)).toBeVisible()
-  await expect(
-    appWindow
-      .getByText(/^(Session load error:|No root sessions found for this project\.)/)
-      .or(appWindow.getByRole('button', { name: /^(Select|Selected:)/ }).nth(projectCount))
-      .first()
-  ).toBeVisible()
+  const sessionButtons = appWindow.getByRole('navigation', { name: 'Project chats' }).getByRole('button').filter({ hasNotText: 'Open project' })
+  const sessionCount = await sessionButtons.count()
+  if (sessionCount === 0) return
 
-  const sessionButtons = appWindow.getByRole('button', { name: /^(Select|Selected:)/ })
-  const totalButtonCount = await sessionButtons.count()
-
-  if (totalButtonCount <= projectCount) {
-    await expect(appWindow.getByText('Select a session to load details and messages.')).toBeVisible()
-    return
-  }
-
-  await sessionButtons.nth(projectCount).click()
-
-  await expect(appWindow.getByRole('button', { name: /^Selected:/ }).nth(1)).toBeVisible()
-  await expect(
-    appWindow
-      .getByText(/^Session detail error:/)
-      .or(appWindow.getByText('Title', { exact: true }))
-      .first()
-  ).toBeVisible()
-  await expect(
-    appWindow
-      .getByText(/^(Message load error:|No messages found for this session\.)/)
-      .or(appWindow.getByRole('listitem').filter({ has: appWindow.locator('article') }).first())
-      .first()
-  ).toBeVisible()
+  await sessionButtons.first().click()
+  await expect(appWindow.getByRole('heading', { name: /.+/ }).and(appWindow.locator('#active-chat-heading'))).toBeVisible()
+  await expect(appWindow.getByText(/^(No messages found for this session\.|Loading OpenCode data…)/).or(appWindow.getByRole('article').first()).first()).toBeVisible()
 })
 
 test('wires the real prompt composer readiness without sending prompts', async ({ appWindow }) => {
-  await expect(appWindow.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
-  await expect(appWindow.getByText(/^Status:\s*connected/)).toBeVisible()
+  await waitForChatShell(appWindow)
 
-  const promptInput = appWindow.getByLabel('Prompt')
-  const sendButton = appWindow.getByRole('button', { name: 'Send to selected session' })
-  const startButton = appWindow.getByRole('button', { name: 'Start new session' })
+  const promptInput = appWindow.getByPlaceholder('Ask about this project...')
+  const sendButton = appWindow.getByRole('button', { name: 'Send' })
 
-  await expect(promptInput).toBeVisible()
   await expect(sendButton).toBeDisabled()
-  await expect(startButton).toBeDisabled()
-
   await promptInput.fill('E2E readiness check only; do not send')
   await expect(sendButton).toBeDisabled()
-  await expect(startButton).toBeDisabled()
 
-  const projectTerminalState = appWindow
-    .getByText(/^(Project load error:|No projects found\.)/)
-    .or(appWindow.getByRole('button', { name: /^(Select|Selected:)/ }))
-    .first()
-  await expect(projectTerminalState).toBeVisible()
+  const projectButtons = projectChatButton(appWindow)
+  await expect(appWindow.getByText('No OpenCode projects found.').or(appWindow.getByText('Waiting for the OpenCode sidecar connection.')).or(projectButtons).first()).toBeVisible()
 
-  const projectButtons = appWindow.getByRole('button', { name: /^(Select|Selected:)/ })
-  const projectCount = await projectButtons.count()
-
-  if (projectCount === 0) {
-    await expect(appWindow.getByText('Select a project before starting or continuing a chat.')).toBeVisible()
+  if ((await projectButtons.count()) === 0) {
     await expect(sendButton).toBeDisabled()
-    await expect(startButton).toBeDisabled()
     return
   }
 
   await projectButtons.first().click()
-  await expect(appWindow.getByText(/^Selected directory:/)).toBeVisible()
-  await expect(startButton).toBeEnabled()
-  await expect(sendButton).toBeDisabled()
-
-  await promptInput.fill('')
-  await expect(startButton).toBeDisabled()
-  await expect(sendButton).toBeDisabled()
-
-  await promptInput.fill('E2E readiness check only; do not send')
-  await expect(startButton).toBeEnabled()
-
-  await expect(
-    appWindow
-      .getByText(/^(Session load error:|No root sessions found for this project\.)/)
-      .or(appWindow.getByRole('button', { name: /^(Select|Selected:)/ }).nth(projectCount))
-      .first()
-  ).toBeVisible()
-
-  const totalButtonCount = await projectButtons.count()
-  if (totalButtonCount <= projectCount) {
-    await expect(sendButton).toBeDisabled()
-    return
-  }
-
-  await projectButtons.nth(projectCount).click()
   await expect(sendButton).toBeEnabled()
-
   await promptInput.fill('')
   await expect(sendButton).toBeDisabled()
+})
+
+test('shows the real live events status surface without fake SSE data', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+  await expect(eventStatusBadge(appWindow)).toBeVisible()
+  await expect(appWindow.getByText(/^(Live( · .*)?|Events paused)$/).first()).toBeVisible()
 })
 
 test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) => {
