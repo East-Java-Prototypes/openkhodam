@@ -59,22 +59,23 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
   const [promptText, setPromptText] = useState('')
   const [projectDirectoryText, setProjectDirectoryText] = useState('')
   const [openedDirectory, setOpenedDirectory] = useState<string | null>(null)
-  const { sessionsQuery } = useProjectSessions(selectedDirectory)
   const { projectQuery } = useOpenCodeProject(openedDirectory)
-  const { sessionQuery } = useOpenCodeSession(selectedDirectory, selectedSessionID)
-  const { messagesQuery } = useSessionMessages(selectedDirectory, selectedSessionID)
-  const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(selectedDirectory, selectedSessionID)
-  const { startConversationMutation, connection: startConnection } = useStartOpenCodeConversation(selectedDirectory)
+  const effectiveSelectedDirectory = getEffectiveSelectedDirectory(selectedDirectory, openedDirectory, projectQuery.data)
+  const { sessionsQuery } = useProjectSessions(effectiveSelectedDirectory)
+  const { sessionQuery } = useOpenCodeSession(effectiveSelectedDirectory, selectedSessionID)
+  const { messagesQuery } = useSessionMessages(effectiveSelectedDirectory, selectedSessionID)
+  const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(effectiveSelectedDirectory, selectedSessionID)
+  const { startConversationMutation, connection: startConnection } = useStartOpenCodeConversation(effectiveSelectedDirectory)
 
   const projects = projectsQuery.data ?? emptyProjects
   const sessions = sessionsQuery.data ?? emptySessions
   const messages = messagesQuery.data ?? emptyMessages
   const activeSession = sessionQuery.data ?? sessions.find((session) => getSessionId(session) === selectedSessionID) ?? null
   const isSending = sendPromptMutation.isPending || startConversationMutation.isPending
-  const canSendPrompt = Boolean(selectedDirectory) && promptText.trim().length > 0 && (sendConnection !== null || startConnection !== null) && !isSending
+  const canSendPrompt = Boolean(effectiveSelectedDirectory) && promptText.trim().length > 0 && (sendConnection !== null || startConnection !== null) && !isSending
 
   return {
-    projects: useMemo(() => mapProjects(projects, sessions, selectedDirectory), [projects, sessions, selectedDirectory]),
+    projects: useMemo(() => mapProjects(projects, sessions, effectiveSelectedDirectory), [projects, sessions, effectiveSelectedDirectory]),
     activeChat: activeSession ? mapSessionToChat(activeSession, sessions.indexOf(activeSession as OpenCodeSession)) : null,
     messages: useMemo(() => messages.map(mapMessage), [messages]),
     selectedDirectory,
@@ -88,7 +89,7 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
     isLoading: projectsQuery.isLoading || sessionsQuery.isLoading || sessionQuery.isLoading || messagesQuery.isLoading,
     isSending,
     canSendPrompt,
-    emptyMessage: getEmptyMessage(connection, selectedDirectory, selectedSessionID, projectsQuery.isSuccess, projects.length, sessionsQuery.isSuccess, sessions.length, messagesQuery.isSuccess, messages.length),
+    emptyMessage: getEmptyMessage(connection, effectiveSelectedDirectory, selectedSessionID, projectsQuery.isSuccess, projects.length, sessionsQuery.isSuccess, sessions.length, messagesQuery.isSuccess, messages.length),
     errorMessage: firstErrorMessage(connectionQuery.error, projectsQuery.error, sessionsQuery.error, sessionQuery.error, messagesQuery.error, events.error, sendPromptMutation.error, startConversationMutation.error),
     successMessage: sendPromptMutation.isSuccess ? 'Prompt sent. Messages will refresh shortly.' : startConversationMutation.isSuccess ? 'Session started. Messages will refresh shortly.' : null,
     projectDirectoryText,
@@ -97,6 +98,7 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
     canOpenProject: projectDirectoryText.trim().length > 0 && connection !== null && !projectQuery.isLoading,
     selectProject: (directory) => {
       setSelectedDirectory(directory)
+      setOpenedDirectory(null)
       setSelectedSessionID(null)
     },
     selectSession: setSelectedSessionID,
@@ -125,6 +127,11 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
   }
 }
 
+function getEffectiveSelectedDirectory(selectedDirectory: string | null, openedDirectory: string | null, project: OpenCodeCurrentProject | undefined): string | null {
+  if (selectedDirectory && openedDirectory && selectedDirectory === openedDirectory) return project?.worktree ?? selectedDirectory
+  return selectedDirectory
+}
+
 function mapOpenedProject(project: OpenCodeCurrentProject): OpenCodeChatOpenedProject {
   return {
     name: project.name ?? 'Unknown project',
@@ -136,7 +143,7 @@ function mapOpenedProject(project: OpenCodeCurrentProject): OpenCodeChatOpenedPr
 function getOpenProjectStatusMessage(openedDirectory: string | null, isLoading: boolean, error: unknown, project: OpenCodeCurrentProject | undefined): string | null {
   if (!openedDirectory) return null
   if (isLoading) return `Opening directory: ${openedDirectory}`
-  if (error) return `Project open error: ${error instanceof Error ? error.message : String(error)}`
+  if (error) return `Project open error: ${formatUnknownError(error)}`
   if (project) return `Opened project: ${project.worktree ?? openedDirectory}`
   return null
 }
@@ -184,7 +191,20 @@ function getEmptyMessage(connection: unknown, selectedDirectory: string | null, 
 function firstErrorMessage(...errors: unknown[]): string | null {
   const error = errors.find(Boolean)
   if (!error) return null
-  return error instanceof Error ? error.message : String(error)
+  return formatUnknownError(error)
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  if (!isRecord(error)) return String(error)
+  const message = getStringFromRecord(error, 'message') ?? getStringFromRecord(error, 'detail') ?? getStringFromRecord(error, '_tag') ?? getStringFromRecord(error, 'name')
+  if (message) return message
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
 }
 
 function projectLabel(project: OpenCodeProject, index: number): string {
@@ -209,12 +229,13 @@ function getMessageId(message: OpenCodeSessionMessage): string | null {
 
 function getMessageRole(message: OpenCodeSessionMessage): string | null {
   const info = getRecordProperty(message, 'info')
-  return getStringFromRecord(info, 'role') ?? getStringFromRecord(message, 'role')
+  return getStringFromRecord(info, 'role') ?? getStringFromRecord(message, 'role') ?? getStringFromRecord(message, 'type')
 }
 
 function getMessageTime(message: OpenCodeSessionMessage): string | null {
   const info = getRecordProperty(message, 'info')
-  return getStringFromRecord(info, 'time') ?? getStringFromRecord(info, 'createdAt') ?? getStringFromRecord(message, 'time')
+  const time = getRecordProperty(message, 'time')
+  return getStringFromRecord(info, 'time') ?? getStringFromRecord(info, 'createdAt') ?? getStringFromRecord(time, 'created') ?? getStringFromRecord(message, 'time')
 }
 
 function getMessageText(message: OpenCodeSessionMessage): string {

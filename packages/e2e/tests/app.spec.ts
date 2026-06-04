@@ -46,6 +46,31 @@ test('opens a project by directory from the final chat shell', async ({ appWindo
   await expect(openedProjectDetails.locator('dd').filter({ hasText: /\S/ })).toHaveCount(3)
 })
 
+test('opens a project by directory and starts a real conversation', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+
+  const directoryInput = appWindow.getByLabel('Project directory')
+  const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
+  const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
+
+  await expect(appWindow.getByText('connected', { exact: true }).first()).toBeVisible()
+  await directoryInput.fill(repositoryDirectory)
+  await openButton.click()
+  await expect(openProjectForm.getByRole('region', { name: 'Opened project details' })).toBeVisible()
+
+  const promptInput = appWindow.getByPlaceholder('Ask about this project...')
+  const sendButton = appWindow.getByRole('button', { name: 'Send' })
+  const prompt = `E2E session creation check ${Date.now()}`
+
+  await promptInput.fill(prompt)
+  await expect(sendButton).toBeEnabled()
+  await sendButton.click()
+
+  await expect(appWindow.getByText('Session started. Messages will refresh shortly.')).toBeVisible()
+  await expect(appWindow.locator('#active-chat-heading')).toBeVisible()
+  await expect(appWindow.getByRole('article').filter({ hasText: prompt }).first()).toBeVisible()
+})
+
 test('shows the real OpenCode project chats surface', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
 
