@@ -68,6 +68,7 @@ export function useSendOpenCodePrompt(directory: string | null | undefined, sess
         sessionID,
         agent: options.agent || undefined,
         model: modelFromOptions(options),
+        noReply: true,
         parts: [{ type: 'text', text }]
       })
       if (response.error) throw response.error
@@ -112,6 +113,7 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
         sessionID,
         agent: options.agent || undefined,
         model: modelFromOptions(options),
+        noReply: true,
         parts: [{ type: 'text', text }]
       })
       if (promptResponse.error) throw promptResponse.error
