@@ -47,22 +47,28 @@ function useOpenCodeSdkValue(options: OpenCodeClientOptions = defaultOpenCodeCli
     [connection, options]
   )
 
-  return useMemo(() => ({
-    statusQuery,
-    status,
-    connectionQuery,
-    connection,
-    client
-  }), [client, connection, connectionQuery, status, statusQuery])
+  return useMemo(
+    () => ({
+      statusQuery,
+      status,
+      connectionQuery,
+      connection,
+      client
+    }),
+    [client, connection, connectionQuery, status, statusQuery]
+  )
 }
 
 export function useOpenCodeRuntime() {
   const sdk = useOpenCodeSdk()
-  return useMemo(() => ({
-    ...sdk,
-    isConnected: sdk.connection !== null,
-    connectionState: sdk.status.state
-  }), [sdk])
+  return useMemo(
+    () => ({
+      ...sdk,
+      isConnected: sdk.connection !== null,
+      connectionState: sdk.status.state
+    }),
+    [sdk]
+  )
 }
 
 export function useOpenCodeSdk() {

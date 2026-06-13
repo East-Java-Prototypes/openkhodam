@@ -1,4 +1,9 @@
-import { _electron as electron, test as base, type ElectronApplication, type Page } from '@playwright/test'
+import {
+  _electron as electron,
+  test as base,
+  type ElectronApplication,
+  type Page
+} from '@playwright/test'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 

@@ -13,8 +13,12 @@ export const openCodeProjectQueryKeys = {
   all: () => [...openCodeQueryKeys.all, 'projects'] as const,
   list: (url: string | null, pid: number | null, updatedAt: number) =>
     [...openCodeQueryKeys.all, 'projects', url, pid, updatedAt] as const,
-  current: (directory: string | null | undefined, url: string | null, pid: number | null, updatedAt: number) =>
-    [...openCodeQueryKeys.all, 'project', directory, url, pid, updatedAt] as const
+  current: (
+    directory: string | null | undefined,
+    url: string | null,
+    pid: number | null,
+    updatedAt: number
+  ) => [...openCodeQueryKeys.all, 'project', directory, url, pid, updatedAt] as const
 }
 
 export function useOpenCodeProjects() {
@@ -41,8 +45,13 @@ export function useOpenCodeProjects() {
       return response.data
     },
     onSuccess: async (project, directory) => {
-      queryClient.setQueryData(openCodeProjectQueryKeys.current(directory, status.url, status.pid, status.updatedAt), project)
-      await queryClient.invalidateQueries({ queryKey: openCodeProjectQueryKeys.list(status.url, status.pid, status.updatedAt) })
+      queryClient.setQueryData(
+        openCodeProjectQueryKeys.current(directory, status.url, status.pid, status.updatedAt),
+        project
+      )
+      await queryClient.invalidateQueries({
+        queryKey: openCodeProjectQueryKeys.list(status.url, status.pid, status.updatedAt)
+      })
     }
   })
 
