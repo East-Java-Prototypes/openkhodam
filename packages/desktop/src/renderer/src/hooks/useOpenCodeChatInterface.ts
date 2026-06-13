@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { useOpenCodeProject, useOpenCodeProjects, type OpenCodeCurrentProject, type OpenCodeProject } from './opencode/projects'
-import { type OpenCodePromptOptions, useSendOpenCodePrompt, useStartOpenCodeConversation } from './useOpenCodeChat'
+import { useOpenCodeProjects, type OpenCodeCurrentProject, type OpenCodeProject } from './opencode/projects'
+import { type OpenCodePromptOptions, useSendOpenCodePrompt } from './useOpenCodeChat'
 import { useOpenCodeEvents } from './useOpenCodeEvents'
 import {
   type OpenCodeSession,
@@ -69,13 +69,12 @@ export type OpenCodeChatOpenedProject = {
 }
 
 export function useOpenCodeChatShell(onOpenedProject?: (project: OpenCodeChatOpenedProject) => void): OpenCodeChatShellState {
-  const { status, connection, connectionQuery, projectsQuery } = useOpenCodeProjects()
+  const { status, connection, connectionQuery, projectsQuery, openProjectMutation } = useOpenCodeProjects()
   const events = useOpenCodeEvents()
   const [projectDirectoryText, setProjectDirectoryText] = useState('')
   const [openedDirectory, setOpenedDirectory] = useState<string | null>(null)
   const lastOpenedProjectId = useRef<string | null>(null)
-  const { projectQuery } = useOpenCodeProject(openedDirectory)
-  const openedProject = projectQuery.data ? mapOpenedProject(projectQuery.data) : null
+  const openedProject = openProjectMutation.data ? mapOpenedProject(openProjectMutation.data) : null
 
   useEffect(() => {
     if (!openedProject || lastOpenedProjectId.current === openedProject.id) return
@@ -93,17 +92,18 @@ export function useOpenCodeChatShell(onOpenedProject?: (project: OpenCodeChatOpe
       ? `Live${events.lastEventType ? ` · ${events.lastEventType}` : ''}${events.lastEventAt ? ` · ${new Date(events.lastEventAt).toLocaleTimeString()}` : ''}`
       : 'Events paused',
     isLoading: projectsQuery.isLoading,
-    errorMessage: firstErrorMessage(connectionQuery.error, projectsQuery.error, projectQuery.error, events.error),
+    errorMessage: firstErrorMessage(connectionQuery.error, projectsQuery.error, openProjectMutation.error, events.error),
     emptyMessage: getShellEmptyMessage(connection, projectsQuery.isSuccess, projects.length),
     projectDirectoryText,
     openedProject,
-    openProjectStatusMessage: getOpenProjectStatusMessage(openedDirectory, projectQuery.isLoading, projectQuery.error, projectQuery.data),
-    canOpenProject: projectDirectoryText.trim().length > 0 && connection !== null && !projectQuery.isLoading,
+    openProjectStatusMessage: getOpenProjectStatusMessage(openedDirectory, openProjectMutation.isPending, openProjectMutation.error, openProjectMutation.data),
+    canOpenProject: projectDirectoryText.trim().length > 0 && connection !== null && !openProjectMutation.isPending,
     setProjectDirectoryText,
     openProjectByDirectory: () => {
       const directory = projectDirectoryText.trim()
       if (!directory) return
       setOpenedDirectory(directory)
+      openProjectMutation.mutate(directory)
     }
   }
 }
@@ -131,11 +131,10 @@ export function useOpenCodeSessionRoute(directory: string | null | undefined, se
   const { sessionQuery } = useOpenCodeSession(directory, sessionID)
   const { messagesQuery } = useSessionMessages(directory, sessionID)
   const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(directory, sessionID)
-  const { startConversationMutation } = useStartOpenCodeConversation(directory)
   const messages = messagesQuery.data ?? emptyMessages
   const activeSessionFromList = sessions.find((session) => session.id === sessionID) ?? null
   const activeSession = sessionQuery.data ? mapSessionToChat(sessionQuery.data) : activeSessionFromList
-  const isSending = sendPromptMutation.isPending || startConversationMutation.isPending
+  const isSending = sendPromptMutation.isPending
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
 
   return {
@@ -146,8 +145,8 @@ export function useOpenCodeSessionRoute(directory: string | null | undefined, se
     isSending,
     canSendPrompt: Boolean(directory) && promptText.trim().length > 0 && canSendToActiveSession && sendConnection !== null && !isSending,
     emptyMessage: getSessionEmptyMessage(sessionID, sessionQuery.isSuccess, activeSession, messagesQuery.isSuccess, messages.length),
-    errorMessage: firstErrorMessage(activeSession ? null : sessionQuery.error, messagesQuery.error, sendPromptMutation.error, startConversationMutation.error),
-    successMessage: sendPromptMutation.isSuccess ? 'Prompt sent. Messages will refresh shortly.' : startConversationMutation.isSuccess ? 'Session started. Messages will refresh shortly.' : null,
+    errorMessage: firstErrorMessage(activeSession ? null : sessionQuery.error, messagesQuery.error, sendPromptMutation.error),
+    successMessage: sendPromptMutation.isSuccess ? 'Prompt sent. Messages will refresh shortly.' : null,
     setPromptText,
     sendPrompt: () => {
       const options = buildPromptOptions(promptText)

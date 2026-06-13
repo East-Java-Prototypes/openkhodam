@@ -56,6 +56,15 @@ function useOpenCodeSdkValue(options: OpenCodeClientOptions = defaultOpenCodeCli
   }), [client, connection, connectionQuery, status, statusQuery])
 }
 
+export function useOpenCodeRuntime() {
+  const sdk = useOpenCodeSdk()
+  return useMemo(() => ({
+    ...sdk,
+    isConnected: sdk.connection !== null,
+    connectionState: sdk.status.state
+  }), [sdk])
+}
+
 export function useOpenCodeSdk() {
   const sdk = useContext(OpenCodeSdkContext)
 
