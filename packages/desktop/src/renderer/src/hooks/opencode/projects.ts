@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { useOpenCodeSdk, type createOpenCodeClient } from './client'
+import { useOpenCodeRuntime, type createOpenCodeClient } from './client'
 import { openCodeQueryKeys } from './sidecar'
 
 type OpenCodeClient = ReturnType<typeof createOpenCodeClient>
@@ -18,7 +18,9 @@ export const openCodeProjectQueryKeys = {
 }
 
 export function useOpenCodeProjects() {
-  const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
+  const runtime = useOpenCodeRuntime()
+  const { status, statusQuery, connection, connectionQuery, client } = runtime
+  const queryClient = useQueryClient()
 
   const projectsQuery = useQuery({
     queryKey: openCodeProjectQueryKeys.list(status.url, status.pid, status.updatedAt),
@@ -30,17 +32,34 @@ export function useOpenCodeProjects() {
     enabled: connection !== null
   })
 
+  const openProjectMutation = useMutation({
+    mutationFn: async (directory: string): Promise<OpenCodeCurrentProject> => {
+      if (connection === null) throw new Error('OpenCode sidecar is not connected.')
+      const response = await client!.project.current({ directory })
+      if (response.error) throw response.error
+      if (!response.data) throw new Error('OpenCode did not return project details.')
+      return response.data
+    },
+    onSuccess: async (project, directory) => {
+      queryClient.setQueryData(openCodeProjectQueryKeys.current(directory, status.url, status.pid, status.updatedAt), project)
+      await queryClient.invalidateQueries({ queryKey: openCodeProjectQueryKeys.list(status.url, status.pid, status.updatedAt) })
+    }
+  })
+
   return {
+    runtime,
     status,
     statusQuery,
     connection,
     connectionQuery,
-    projectsQuery
+    projectsQuery,
+    openProjectMutation,
+    openProjectByDirectory: openProjectMutation.mutate
   }
 }
 
 export function useOpenCodeProject(directory: string | null | undefined) {
-  const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
+  const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeRuntime()
 
   const projectQuery = useQuery({
     queryKey: openCodeProjectQueryKeys.current(directory, status.url, status.pid, status.updatedAt),

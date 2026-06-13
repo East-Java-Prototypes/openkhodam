@@ -6,6 +6,16 @@ const repositoryDirectory = dirname(process.cwd())
 const projectChatLink = (page: Page): Locator => page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
 const sessionChatLink = (page: Page): Locator => page.getByRole('navigation', { name: 'Project sessions' }).getByRole('link')
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
+const terminalProjectRouteState = (page: Page): Locator => page.getByText('No sessions found for this project.').or(sessionChatLink(page))
+
+async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    if (await page.getByText('Project not found.').isVisible()) return 'project-not-found'
+    if (await terminalProjectRouteState(page).first().isVisible()) return 'resolved'
+    return 'pending'
+  }, { message: 'opened project route should resolve without Project not found' }).toBe('resolved')
+  await expect(page.getByText('Project not found.')).toHaveCount(0)
+}
 
 async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
@@ -42,6 +52,7 @@ test('opens a project by directory from the final chat shell', async ({ appWindo
   await openButton.click()
   await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
   await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
+  await expectOpenedProjectRouteResolved(appWindow)
 })
 
 test('opens a project by directory into the project route without composer', async ({ appWindow }) => {
@@ -56,6 +67,7 @@ test('opens a project by directory into the project route without composer', asy
   await openButton.click()
   await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
   await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
+  await expectOpenedProjectRouteResolved(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toHaveCount(0)
 })
