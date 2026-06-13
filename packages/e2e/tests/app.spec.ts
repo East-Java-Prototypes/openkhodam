@@ -5,6 +5,10 @@ import { expect, test, type Locator, type Page } from '../fixtures/electron'
 const repositoryDirectory = dirname(process.cwd())
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
+const projectSettingsLink = (page: Page): Locator =>
+  page
+    .getByRole('complementary', { name: 'Project folders' })
+    .getByRole('link', { name: 'Settings', exact: true })
 const sessionChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' }).getByRole('link')
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
@@ -26,8 +30,13 @@ async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
 }
 
 async function waitForChatShell(page: Page): Promise<void> {
-  await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Home' })).toHaveCount(0)
+  await expect(projectSettingsLink(page)).toBeVisible()
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Project sessions' })
+      .getByRole('link', { name: 'Settings', exact: true })
+  ).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Project folders' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
   await expect(page.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
@@ -197,7 +206,7 @@ test('shows the real live events status surface without fake SSE data', async ({
 })
 
 test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) => {
-  await appWindow.getByRole('link', { name: 'Settings', exact: true }).click()
+  await projectSettingsLink(appWindow).click()
 
   await expect(appWindow.getByRole('heading', { name: 'OpenCode Server' })).toBeVisible()
   await expect(appWindow.getByText(/^Status:/)).toBeVisible()

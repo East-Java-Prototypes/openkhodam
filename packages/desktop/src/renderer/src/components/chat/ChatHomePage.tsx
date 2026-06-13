@@ -33,7 +33,7 @@ export function ChatHomePage({
   activePane
 }: ChatHomePageProps): JSX.Element {
   return (
-    <main className="grid h-[calc(100dvh-3.5rem)] min-h-0 min-w-0 grid-cols-1 overflow-hidden bg-background text-foreground md:grid-cols-[20rem_18rem_minmax(0,1fr)]">
+    <main className="grid h-dvh min-h-0 min-w-0 grid-cols-1 overflow-hidden bg-background text-foreground md:grid-cols-[20rem_18rem_minmax(0,1fr)]">
       <ProjectChatSidebar shell={shell} selectedDirectory={project?.selectedDirectory ?? null} />
       <SessionChatSidebar project={project} session={session} />
       {activePane ?? <ActiveChatPanel project={project} session={session} />}
@@ -62,6 +62,9 @@ function ProjectChatSidebar({
           <div className="mt-3 flex flex-wrap gap-2">
             <Badge variant="secondary">{shell.statusLabel}</Badge>
             <Badge variant="outline">{shell.eventLabel}</Badge>
+            <Button asChild size="xs" variant="outline">
+              <Link to="/settings">Settings</Link>
+            </Button>
           </div>
         </div>
         <OpenProjectByDirectoryForm shell={shell} />
