@@ -6,7 +6,7 @@ export const Route = createRootRoute({ component: RootRoute })
 
 function RootRoute(): JSX.Element {
   return (
-    <div className="min-h-screen">
+    <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
       <AppNavbar />
       <Outlet />
     </div>

@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 
 function AppNavbar(): JSX.Element {
   return (
-    <header className="flex items-center justify-between px-4 py-3">
+    <header className="flex h-14 shrink-0 items-center justify-between px-4 py-3">
       <Link className="rounded px-2 py-1" to="/">
         Home
       </Link>

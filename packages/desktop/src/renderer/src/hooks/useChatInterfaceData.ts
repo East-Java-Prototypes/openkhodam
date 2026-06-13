@@ -7,7 +7,7 @@ export type ChatMessage = {
 
 export type ProjectChat = {
   id: string
-  kind: 'project' | 'session'
+  kind: 'session'
   title: string
   summary: string
   updatedAt: string
@@ -18,11 +18,11 @@ export type ChatProject = {
   id: string
   name: string
   subtitle?: string
-  chats: ProjectChat[]
 }
 
 export type ChatInterfaceData = {
   projects: ChatProject[]
+  sessions: ProjectChat[]
   activeChat: ProjectChat | null
   messages: ChatMessage[]
 }
@@ -31,39 +31,33 @@ const projects: ChatProject[] = [
   {
     id: 'project-desktop',
     name: 'Desktop app',
-    chats: [
-      {
-        id: 'chat-shell-design',
-        kind: 'session',
-        title: 'Shell design pass',
-        summary: 'Map the first pass for the desktop chat experience.',
-        updatedAt: '10:42 AM'
-      },
-      {
-        id: 'chat-settings-health',
-        kind: 'session',
-        title: 'Settings health view',
-        summary: 'Review connection states and renderer health copy.',
-        updatedAt: 'Yesterday'
-      }
-    ]
+    subtitle: '/tmp/desktop-app'
   },
   {
     id: 'project-research',
     name: 'Research notes',
-    chats: [
-      {
-        id: 'chat-agent-flows',
-        kind: 'session',
-        title: 'Agent workflow ideas',
-        summary: 'Collect rough notes for handoff and review loops.',
-        updatedAt: 'Mon'
-      }
-    ]
+    subtitle: '/tmp/research-notes'
   }
 ]
 
-const activeChat = projects[0].chats[0]
+const sessions: ProjectChat[] = [
+  {
+    id: 'chat-shell-design',
+    kind: 'session',
+    title: 'Shell design pass',
+    summary: 'Map the first pass for the desktop chat experience.',
+    updatedAt: '10:42 AM'
+  },
+  {
+    id: 'chat-settings-health',
+    kind: 'session',
+    title: 'Settings health view',
+    summary: 'Review connection states and renderer health copy.',
+    updatedAt: 'Yesterday'
+  }
+]
+
+const activeChat = sessions[0]
 
 const messages: ChatMessage[] = [
   {
@@ -88,5 +82,5 @@ const messages: ChatMessage[] = [
 ]
 
 export function useChatInterfaceData(): ChatInterfaceData {
-  return { projects, activeChat, messages }
+  return { projects, sessions, activeChat, messages }
 }
