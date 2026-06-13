@@ -51,6 +51,7 @@ export function useOpenCodeEvents(): OpenCodeEventsState {
         for await (const event of events.stream) {
           if (cancelled) break
           invalidateForEvent(queryClient, statusSnapshot, event)
+          logEventError(event)
           setState({
             listening: true,
             lastEventType: getEventType(event),
@@ -110,4 +111,38 @@ function getSessionID(payload: OpenCodeEventPayload): string | null {
   if (typeof properties !== 'object' || properties === null) return null
   const sessionID = (properties as Record<string, unknown>).sessionID
   return typeof sessionID === 'string' && sessionID.length > 0 ? sessionID : null
+}
+
+function logEventError(event: GlobalEvent): void {
+  const error = getEventError(event.payload)
+  if (!error) return
+
+  console.warn('[opencode] Event error', {
+    type: getEventType(event),
+    directory: event.directory ?? null,
+    sessionID: getSessionID(event.payload),
+    error: formatEventError(error)
+  })
+}
+
+function getEventError(payload: OpenCodeEventPayload): unknown {
+  const properties = 'properties' in payload ? payload.properties : undefined
+  if (typeof properties !== 'object' || properties === null) return null
+  return (properties as Record<string, unknown>).error ?? null
+}
+
+function formatEventError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  if (typeof error !== 'object' || error === null) return String(error)
+
+  const record = error as Record<string, unknown>
+  const data = typeof record.data === 'object' && record.data !== null ? record.data as Record<string, unknown> : null
+  const message = getString(record, 'message') ?? getString(data, 'message') ?? getString(record, 'name') ?? getString(record, '_tag')
+  return message ?? JSON.stringify(error)
+}
+
+function getString(record: Record<string, unknown> | null, property: string): string | null {
+  const value = record?.[property]
+  return typeof value === 'string' && value.length > 0 ? value : null
 }
