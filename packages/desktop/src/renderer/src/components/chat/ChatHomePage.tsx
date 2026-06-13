@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import type { JSX, ReactNode } from 'react'
+import type { CSSProperties, JSX, ReactNode } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,19 @@ import {
 } from '@/components/ui/input-group'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail
+} from '@/components/ui/sidebar'
 
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
 import type {
@@ -33,11 +46,20 @@ export function ChatHomePage({
   activePane
 }: ChatHomePageProps): JSX.Element {
   return (
-    <main className="grid h-dvh min-h-0 min-w-0 grid-cols-1 overflow-hidden bg-background text-foreground md:grid-cols-[20rem_18rem_minmax(0,1fr)]">
+    <SidebarProvider
+      style={
+        {
+          '--sidebar-width': '20rem'
+        } as CSSProperties
+      }
+      className="h-dvh min-h-0 overflow-hidden"
+    >
       <ProjectChatSidebar shell={shell} selectedDirectory={project?.selectedDirectory ?? null} />
-      <SessionChatSidebar project={project} session={session} />
-      {activePane ?? <ActiveChatPanel project={project} session={session} />}
-    </main>
+      <main className="grid h-dvh min-h-0 min-w-0 flex-1 grid-cols-1 overflow-hidden bg-background text-foreground md:grid-cols-[18rem_minmax(0,1fr)]">
+        <SessionChatSidebar project={project} session={session} />
+        {activePane ?? <ActiveChatPanel project={project} session={session} />}
+      </main>
+    </SidebarProvider>
   )
 }
 
@@ -49,39 +71,78 @@ function ProjectChatSidebar({
   selectedDirectory: string | null
 }): JSX.Element {
   return (
-    <aside
-      className="relative min-h-0 overflow-hidden bg-sidebar/70 p-4"
+    <Sidebar
+      collapsible="none"
+      className="relative min-h-0 border-r bg-sidebar/70"
+      role="complementary"
       aria-labelledby="projects-heading"
     >
-      <ScrollArea className="h-full pr-2">
-        <div className="mb-6">
-          <p className="text-muted-foreground text-sm font-medium">OpenKhodam</p>
-          <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
-            Project folders
-          </h1>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Badge variant="secondary">{shell.statusLabel}</Badge>
-            <Badge variant="outline">{shell.eventLabel}</Badge>
-            <Button asChild size="xs" variant="outline">
-              <Link to="/settings">Settings</Link>
-            </Button>
-          </div>
-        </div>
-        <OpenProjectByDirectoryForm shell={shell} />
-        <nav className="flex flex-col gap-2" aria-label="Project folders">
-          {shell.emptyMessage ? <StatusCard>{shell.emptyMessage}</StatusCard> : null}
-          {shell.errorMessage ? <StatusCard tone="error">{shell.errorMessage}</StatusCard> : null}
-          {shell.projects.map((project) => (
-            <ProjectButton
-              key={project.id}
-              project={project}
-              isActive={project.subtitle === selectedDirectory}
-            />
-          ))}
-        </nav>
-      </ScrollArea>
-      <Separator orientation="vertical" className="absolute right-0 top-0 hidden h-full md:block" />
-    </aside>
+      <SidebarHeader className="p-4 pb-2">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <div className="px-2 py-1">
+              <p className="text-muted-foreground text-sm font-medium">OpenKhodam</p>
+              <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
+                Project folders
+              </h1>
+            </div>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <div className="flex flex-wrap gap-2 px-2 py-1">
+              <Badge variant="secondary">{shell.statusLabel}</Badge>
+              <Badge variant="outline">{shell.eventLabel}</Badge>
+            </div>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+      <SidebarContent className="px-4 pb-4">
+        <SidebarGroup className="p-0">
+          <SidebarGroupContent>
+            <OpenProjectByDirectoryForm shell={shell} />
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup className="p-0">
+          <SidebarGroupContent>
+            <nav aria-label="Project folders">
+              <SidebarMenu className="gap-2">
+                {shell.emptyMessage ? (
+                  <SidebarMenuItem>
+                    <StatusCard>{shell.emptyMessage}</StatusCard>
+                  </SidebarMenuItem>
+                ) : null}
+                {shell.errorMessage ? (
+                  <SidebarMenuItem>
+                    <StatusCard tone="error">{shell.errorMessage}</StatusCard>
+                  </SidebarMenuItem>
+                ) : null}
+                {shell.projects.map((project) => (
+                  <ProjectButton
+                    key={project.id}
+                    project={project}
+                    isActive={project.subtitle === selectedDirectory}
+                  />
+                ))}
+              </SidebarMenu>
+            </nav>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter className="border-t p-4">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <div className="flex flex-wrap gap-2 px-2 py-1">
+              <Button asChild size="xs" variant="outline">
+                <Link to="/">Home</Link>
+              </Button>
+              <Button asChild size="xs" variant="outline">
+                <Link to="/settings">Settings</Link>
+              </Button>
+            </div>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
   )
 }
 
@@ -196,24 +257,27 @@ function ProjectButton({
   isActive: boolean
 }): JSX.Element {
   return (
-    <Button
-      asChild
-      type="button"
-      disabled={!project.id}
-      variant={isActive ? 'outline' : 'ghost'}
-      className="h-auto w-full justify-start px-3 py-2"
-    >
-      <Link to="/projects/$projectId" params={{ projectId: project.id }}>
-        <span className="flex min-w-0 flex-1 flex-col items-stretch gap-1 text-left">
-          <span className="truncate text-sm font-medium">{project.name}</span>
-          {project.subtitle ? (
-            <span className="text-muted-foreground line-clamp-2 text-xs leading-5 whitespace-normal break-words">
-              {project.subtitle}
-            </span>
-          ) : null}
-        </span>
-      </Link>
-    </Button>
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        asChild
+        disabled={!project.id}
+        isActive={isActive}
+        size="lg"
+        variant={isActive ? 'outline' : 'default'}
+        className="h-auto px-3 py-2"
+      >
+        <Link to="/projects/$projectId" params={{ projectId: project.id }}>
+          <span className="flex min-w-0 flex-1 flex-col items-stretch gap-1 text-left">
+            <span className="truncate text-sm font-medium">{project.name}</span>
+            {project.subtitle ? (
+              <span className="text-muted-foreground line-clamp-2 text-xs leading-5 whitespace-normal break-words">
+                {project.subtitle}
+              </span>
+            ) : null}
+          </span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   )
 }
 

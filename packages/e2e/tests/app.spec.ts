@@ -9,6 +9,10 @@ const projectSettingsLink = (page: Page): Locator =>
   page
     .getByRole('complementary', { name: 'Project folders' })
     .getByRole('link', { name: 'Settings', exact: true })
+const projectHomeLink = (page: Page): Locator =>
+  page
+    .getByRole('complementary', { name: 'Project folders' })
+    .getByRole('link', { name: 'Home', exact: true })
 const sessionChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' }).getByRole('link')
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
@@ -30,7 +34,7 @@ async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
 }
 
 async function waitForChatShell(page: Page): Promise<void> {
-  await expect(page.getByRole('link', { name: 'Home' })).toHaveCount(0)
+  await expect(projectHomeLink(page)).toBeVisible()
   await expect(projectSettingsLink(page)).toBeVisible()
   await expect(
     page
@@ -206,8 +210,17 @@ test('shows the real live events status surface without fake SSE data', async ({
 })
 
 test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
   await projectSettingsLink(appWindow).click()
 
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/\/settings$/)
+  await expect(projectHomeLink(appWindow)).toBeVisible()
+  await expect(projectSettingsLink(appWindow)).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'Project folders' })).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
+  await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
+  await expect(appWindow.getByRole('navigation', { name: 'Project folders' })).toBeVisible()
+  await expect(appWindow.getByRole('navigation', { name: 'Project sessions' })).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'OpenCode Server' })).toBeVisible()
   await expect(appWindow.getByText(/^Status:/)).toBeVisible()
   await expect(appWindow.getByText(/^Message:/)).toBeVisible()
@@ -215,4 +228,9 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) =
   await expect(appWindow.getByText('Renderer Origin', { exact: true })).toBeVisible()
   await expect(appWindow.getByText('Renderer HTTP', { exact: true })).toBeVisible()
   await expect(appWindow.getByRole('button', { name: /^(Restart|Restarting)$/ })).toBeVisible()
+
+  await projectHomeLink(appWindow).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/#\/$/)
+  await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
+  await expect(appWindow.getByText('OpenCode', { exact: true })).toBeVisible()
 })
