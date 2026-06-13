@@ -17,12 +17,17 @@ export type OpenCodePromptOptions = {
   modelID?: string
 }
 
-function modelFromOptions(options: OpenCodePromptOptions): PromptAsyncParameters['model'] | undefined {
+function modelFromOptions(
+  options: OpenCodePromptOptions
+): PromptAsyncParameters['model'] | undefined {
   if (!options.providerID || !options.modelID) return undefined
   return { providerID: options.providerID, modelID: options.modelID }
 }
 
-export function useSendOpenCodePrompt(directory: string | null | undefined, sessionID: string | null | undefined) {
+export function useSendOpenCodePrompt(
+  directory: string | null | undefined,
+  sessionID: string | null | undefined
+) {
   const queryClient = useQueryClient()
   const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
 
@@ -48,8 +53,12 @@ export function useSendOpenCodePrompt(directory: string | null | undefined, sess
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) }),
-        queryClient.invalidateQueries({ queryKey: openCodeSessionQueryKey(status, directory, sessionID) }),
-        queryClient.invalidateQueries({ queryKey: sessionMessagesQueryKey(status, directory, sessionID) })
+        queryClient.invalidateQueries({
+          queryKey: openCodeSessionQueryKey(status, directory, sessionID)
+        }),
+        queryClient.invalidateQueries({
+          queryKey: sessionMessagesQueryKey(status, directory, sessionID)
+        })
       ])
     }
   })

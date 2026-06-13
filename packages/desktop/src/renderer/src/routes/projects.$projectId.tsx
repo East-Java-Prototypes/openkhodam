@@ -13,8 +13,17 @@ export type ProjectRouteContext = ReturnType<typeof useOpenCodeProjectRoute>
 function ProjectRoute(): JSX.Element {
   const { projectId } = Route.useParams()
   const navigate = useNavigate()
-  const navigateToOpenedProject = useCallback((project: { id: string }) => { void navigate({ to: '/projects/$projectId', params: { projectId: project.id } }) }, [navigate])
+  const navigateToOpenedProject = useCallback(
+    (project: { id: string }) => {
+      void navigate({ to: '/projects/$projectId', params: { projectId: project.id } })
+    },
+    [navigate]
+  )
   const shell = useOpenCodeChatShell(navigateToOpenedProject)
   const project = useOpenCodeProjectRoute(projectId)
-  return <OpenCodeProjectRouteProvider project={project}><ChatHomePage shell={shell} project={project} activePane={<Outlet />} /></OpenCodeProjectRouteProvider>
+  return (
+    <OpenCodeProjectRouteProvider project={project}>
+      <ChatHomePage shell={shell} project={project} activePane={<Outlet />} />
+    </OpenCodeProjectRouteProvider>
+  )
 }

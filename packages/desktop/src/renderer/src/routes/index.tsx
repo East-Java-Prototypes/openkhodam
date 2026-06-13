@@ -9,7 +9,12 @@ export const Route = createFileRoute('/')({ component: IndexRoute })
 
 function IndexRoute(): JSX.Element {
   const navigate = useNavigate()
-  const navigateToOpenedProject = useCallback((project: { id: string }) => { void navigate({ to: '/projects/$projectId', params: { projectId: project.id } }) }, [navigate])
+  const navigateToOpenedProject = useCallback(
+    (project: { id: string }) => {
+      void navigate({ to: '/projects/$projectId', params: { projectId: project.id } })
+    },
+    [navigate]
+  )
   const shell = useOpenCodeChatShell(navigateToOpenedProject)
   return <ChatHomePage shell={shell} />
 }

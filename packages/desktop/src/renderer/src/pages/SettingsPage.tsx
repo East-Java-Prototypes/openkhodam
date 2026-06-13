@@ -6,10 +6,7 @@ import {
   type OpenCodeSidecarStatus,
   type RendererHttpHealthSnapshot
 } from '@openkhodam/ui'
-import {
-  openCodeQueryKeys,
-  openCodeSidecarState
-} from '../hooks/opencode/sidecar'
+import { openCodeQueryKeys, openCodeSidecarState } from '../hooks/opencode/sidecar'
 import { getOpenCodeAuthorizationHeader, useOpenCodeSdk } from '../hooks/opencode/client'
 
 type RendererHttpHealth = RendererHttpHealthSnapshot & {

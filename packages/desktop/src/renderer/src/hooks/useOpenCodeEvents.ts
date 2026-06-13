@@ -5,7 +5,11 @@ import type { GlobalEvent } from '@opencode-ai/sdk/v2'
 import { useOpenCodeSdk } from './opencode/client'
 import { openCodeProjectQueryKeys } from './opencode/projects'
 import { openCodeQueryKeys } from './opencode/sidecar'
-import { openCodeSessionQueryKey, projectSessionsQueryKey, sessionMessagesQueryKey } from './useOpenCodeSessions'
+import {
+  openCodeSessionQueryKey,
+  projectSessionsQueryKey,
+  sessionMessagesQueryKey
+} from './useOpenCodeSessions'
 
 export type OpenCodeEventsState = {
   listening: boolean
@@ -84,8 +88,14 @@ function invalidateForEvent(
   const directory = event.directory || null
   const sessionID = getSessionID(event.payload)
 
-  if (type.startsWith('project.') || type.startsWith('workspace.') || type.startsWith('worktree.')) {
-    void queryClient.invalidateQueries({ queryKey: openCodeProjectQueryKeys.list(status.url, status.pid, status.updatedAt) })
+  if (
+    type.startsWith('project.') ||
+    type.startsWith('workspace.') ||
+    type.startsWith('worktree.')
+  ) {
+    void queryClient.invalidateQueries({
+      queryKey: openCodeProjectQueryKeys.list(status.url, status.pid, status.updatedAt)
+    })
   }
 
   if (type.startsWith('session.') || type.startsWith('message.')) {
@@ -96,8 +106,12 @@ function invalidateForEvent(
 
     void queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) })
     if (sessionID) {
-      void queryClient.invalidateQueries({ queryKey: openCodeSessionQueryKey(status, directory, sessionID) })
-      void queryClient.invalidateQueries({ queryKey: sessionMessagesQueryKey(status, directory, sessionID) })
+      void queryClient.invalidateQueries({
+        queryKey: openCodeSessionQueryKey(status, directory, sessionID)
+      })
+      void queryClient.invalidateQueries({
+        queryKey: sessionMessagesQueryKey(status, directory, sessionID)
+      })
     }
   }
 }
@@ -137,8 +151,15 @@ function formatEventError(error: unknown): string {
   if (typeof error !== 'object' || error === null) return String(error)
 
   const record = error as Record<string, unknown>
-  const data = typeof record.data === 'object' && record.data !== null ? record.data as Record<string, unknown> : null
-  const message = getString(record, 'message') ?? getString(data, 'message') ?? getString(record, 'name') ?? getString(record, '_tag')
+  const data =
+    typeof record.data === 'object' && record.data !== null
+      ? (record.data as Record<string, unknown>)
+      : null
+  const message =
+    getString(record, 'message') ??
+    getString(data, 'message') ??
+    getString(record, 'name') ??
+    getString(record, '_tag')
   return message ?? JSON.stringify(error)
 }
 
