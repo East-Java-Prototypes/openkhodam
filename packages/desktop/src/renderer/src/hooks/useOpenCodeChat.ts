@@ -6,9 +6,11 @@ import {
   projectSessionsQueryKey,
   sessionMessagesQueryKey
 } from './useOpenCodeSessions'
+import type { OpenCodeModelSelection } from './useOpenCodeModels'
 
 export type OpenCodePromptOptions = {
   text: string
+  model: OpenCodeModelSelection | null
 }
 
 export type OpenCodeAdmittedPrompt = {
@@ -31,11 +33,13 @@ export function useSendOpenCodePrompt(
       if (!directory) throw new Error('Select a project before sending a prompt.')
       if (!sessionID) throw new Error('Select a session before sending a prompt.')
       if (!text) throw new Error('Enter a prompt before sending.')
+      if (!options.model) throw new Error('Select a connected OpenCode model before sending.')
 
       const messageID = createOptimisticMessageID()
       const response = await client!.session.promptAsync({
         sessionID,
         messageID,
+        model: options.model,
         parts: [createTextPart(text)]
       })
       if (response.error) throw response.error
@@ -71,6 +75,7 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
       if (connection === null) throw new Error('OpenCode sidecar is not connected.')
       if (!directory) throw new Error('Select a project before starting a conversation.')
       if (!text) throw new Error('Enter a prompt before sending.')
+      if (!options.model) throw new Error('Select a connected OpenCode model before sending.')
 
       const createResponse = await client!.session.create({
         directory
@@ -83,6 +88,7 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
       const promptResponse = await client!.session.promptAsync({
         sessionID,
         messageID,
+        model: options.model,
         parts: [createTextPart(text)]
       })
       if (promptResponse.error) throw promptResponse.error

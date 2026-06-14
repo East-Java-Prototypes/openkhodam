@@ -19,6 +19,33 @@ const project = {
   time: { created: now, updated: now },
   sandboxes: []
 }
+const connectedProviderID = 'fake-provider'
+const connectedModelID = 'fake-connected-model'
+const disconnectedProviderID = 'offline-provider'
+const disconnectedModelID = 'offline-model'
+const providers = {
+  all: [
+    {
+      id: connectedProviderID,
+      name: 'Connected Fake Provider',
+      env: [],
+      models: {
+        [connectedModelID]: createProviderModel(connectedModelID, 'Connected Fake Model'),
+        'fake-alt-model': createProviderModel('fake-alt-model', 'Connected Alternate Model')
+      }
+    },
+    {
+      id: disconnectedProviderID,
+      name: 'Disconnected Provider',
+      env: [],
+      models: {
+        [disconnectedModelID]: createProviderModel(disconnectedModelID, 'Disconnected Hidden Model')
+      }
+    }
+  ],
+  connected: [connectedProviderID],
+  default: { [connectedProviderID]: connectedModelID }
+}
 
 type FakeSession = {
   id: string
@@ -43,6 +70,9 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     }
     if (request.method === 'GET' && url.pathname === '/project/current') {
       return json(response, project)
+    }
+    if (request.method === 'GET' && url.pathname === '/provider') {
+      return json(response, providers)
     }
     if (request.method === 'GET' && url.pathname === '/session') {
       return json(response, [...sessions.values()])
@@ -75,6 +105,9 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       }
       if (!hasValidPartIDs(body)) {
         return json(response, { message: 'part ids must start with prt' }, 400)
+      }
+      if (!isConnectedModel(body?.model)) {
+        return json(response, { message: 'prompt model must be connected' }, 400)
       }
       pendingPrompts.set(sessionID, [
         ...(pendingPrompts.get(sessionID) ?? []),
@@ -153,6 +186,20 @@ function createSession(id: string, title: string, sessionDirectory: string): Fak
   } as FakeSession
 }
 
+function createProviderModel(id: string, name: string) {
+  return {
+    id,
+    name,
+    release_date: '2026-01-01',
+    attachment: false,
+    reasoning: false,
+    temperature: true,
+    tool_call: true,
+    limit: { context: 1000, output: 1000 },
+    options: {}
+  }
+}
+
 function userMessage(id: string, text: string): unknown {
   return {
     info: { id, role: 'user', time: { created: Date.now() } },
@@ -186,6 +233,13 @@ function hasValidPartIDs(body: any): boolean {
     body.parts.length > 0 &&
     body.parts.every((part: any) => typeof part?.id === 'string' && part.id.startsWith('prt'))
   )
+}
+
+function isConnectedModel(model: any): boolean {
+  if (!model || typeof model !== 'object' || Array.isArray(model)) return false
+  const keys = Object.keys(model)
+  if (keys.length !== 2 || !keys.includes('providerID') || !keys.includes('modelID')) return false
+  return model.providerID === connectedProviderID && model.modelID in providers.all[0].models
 }
 
 async function readJson(request: IncomingMessage): Promise<any> {

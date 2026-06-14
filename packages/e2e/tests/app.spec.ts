@@ -195,6 +195,18 @@ test('renders seeded stable chat messages', async ({ appWindow }) => {
   await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
 })
 
+test('shows only connected OpenCode models in the composer picker', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+
+  const modelPicker = appWindow.getByLabel('OpenCode model')
+  await expect(modelPicker).toBeVisible()
+  await expect(modelPicker).toHaveValue('Connected Fake Provider · Connected Fake Model')
+  await modelPicker.click()
+  await expect(appWindow.getByText('Connected Alternate Model')).toBeVisible()
+  await expect(appWindow.getByText('Disconnected Hidden Model')).toHaveCount(0)
+})
+
 test('starts a new stable chat from the project route', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
 
