@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
-import type { CSSProperties, JSX, ReactNode } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { useEffect, useMemo, useRef, type CSSProperties, type JSX, type ReactNode } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -451,16 +452,64 @@ function ChatMessageList({
   errorMessage: string | null
   successMessage: string | null
 }): JSX.Element {
+  const viewportRef = useRef<HTMLDivElement | null>(null)
+  const lastInitialScrollKeyRef = useRef<string | null>(null)
+  const statusCards = useMemo(
+    () => [
+      isLoading ? { key: 'loading', content: 'Loading OpenCode data…' } : null,
+      errorMessage ? { key: 'error', content: errorMessage, tone: 'error' as const } : null,
+      successMessage ? { key: 'success', content: successMessage } : null,
+      emptyMessage ? { key: 'empty', content: emptyMessage } : null
+    ],
+    [emptyMessage, errorMessage, isLoading, successMessage]
+  )
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => viewportRef.current,
+    estimateSize: () => 132,
+    getItemKey: (index) => messages[index]?.id ?? index,
+    anchorTo: 'end',
+    followOnAppend: true,
+    scrollEndThreshold: 120,
+    overscan: 6,
+    measureElement: (element) => element.getBoundingClientRect().height
+  })
+
+  const initialScrollKey = messages.length > 0 ? messages[0]!.id : 'empty'
+
+  useEffect(() => {
+    if (lastInitialScrollKeyRef.current === initialScrollKey) return
+    lastInitialScrollKeyRef.current = initialScrollKey
+    if (messages.length > 0) virtualizer.scrollToEnd({ behavior: 'auto' })
+  }, [initialScrollKey, messages.length, virtualizer])
+
   return (
-    <ScrollArea className="min-h-0 flex-1">
+    <ScrollArea className="min-h-0 flex-1" viewportRef={viewportRef}>
       <div className="flex min-w-0 flex-col gap-4 p-6">
-        {isLoading ? <StatusCard>Loading OpenCode data…</StatusCard> : null}
-        {errorMessage ? <StatusCard tone="error">{errorMessage}</StatusCard> : null}
-        {successMessage ? <StatusCard>{successMessage}</StatusCard> : null}
-        {emptyMessage ? <StatusCard>{emptyMessage}</StatusCard> : null}
-        {messages.map((message) => (
-          <ChatMessageBubble key={message.id} message={message} />
-        ))}
+        {statusCards.map((status) =>
+          status ? (
+            <StatusCard key={status.key} tone={status.tone}>
+              {status.content}
+            </StatusCard>
+          ) : null
+        )}
+        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const message = messages[virtualRow.index]
+            if (!message) return null
+            return (
+              <div
+                key={virtualRow.key}
+                data-index={virtualRow.index}
+                ref={virtualizer.measureElement}
+                className="absolute left-0 top-0 w-full pb-4"
+                style={{ transform: `translateY(${virtualRow.start}px)` }}
+              >
+                <ChatMessageBubble message={message} />
+              </div>
+            )
+          })}
+        </div>
       </div>
     </ScrollArea>
   )
