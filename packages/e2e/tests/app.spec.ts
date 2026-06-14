@@ -51,6 +51,30 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByText('OpenCode', { exact: true })).toBeVisible()
 }
 
+async function openSeededDeterministicChat(page: Page): Promise<void> {
+  await waitForChatShell(page)
+  await expect(projectChatLink(page).filter({ hasText: 'Fake Project' })).toBeVisible()
+  await projectChatLink(page).filter({ hasText: 'Fake Project' }).click()
+  await expect(page.evaluate(() => window.location.hash)).resolves.toMatch(/\/projects\/[^/]+$/)
+  await expectOpenedProjectRouteResolved(page)
+
+  await sessionChatLink(page).filter({ hasText: 'Seeded deterministic chat' }).click()
+  await expect(page.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/[^/]+\/sessions\/[^/]+$/
+  )
+  await expect(page.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+  await expect(page.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+  await expect(page.getByLabel('OpenCode model')).toHaveValue(
+    'Connected Fake Provider · Connected Fake Model'
+  )
+}
+
+async function sendPrompt(page: Page, prompt: string): Promise<void> {
+  await page.getByLabel('Message OpenKhodam').fill(prompt)
+  await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+  await page.getByRole('button', { name: 'Send' }).click()
+}
+
 test('renders the built desktop chat shell', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
   await expect(appWindow.getByText(/^(connected|starting|stopped|error)$/).first()).toBeVisible()
@@ -182,15 +206,7 @@ test('shows real project/session selection in the reused chat shell', async ({ a
 })
 
 test('renders seeded stable chat messages', async ({ appWindow }) => {
-  await waitForChatShell(appWindow)
-
-  await expect(projectChatLink(appWindow).filter({ hasText: 'Fake Project' })).toBeVisible()
-  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
-  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/[^/]+$/
-  )
-  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
-  await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+  await openSeededDeterministicChat(appWindow)
   await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
   await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
 })
@@ -246,12 +262,9 @@ test('starts a new stable chat from the project route', async ({ appWindow }) =>
 })
 
 test('shows optimistic prompt before delayed stable message projection', async ({ appWindow }) => {
-  await waitForChatShell(appWindow)
-  await projectChatLink(appWindow).first().click()
-  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+  await openSeededDeterministicChat(appWindow)
 
-  await appWindow.getByLabel('Message OpenKhodam').fill('Delayed lifecycle prompt')
-  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await sendPrompt(appWindow, 'Delayed lifecycle prompt')
   await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toBeVisible()
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
@@ -266,13 +279,10 @@ test('shows optimistic prompt before delayed stable message projection', async (
 test('keeps repeated identical prompts visible until each projection arrives', async ({
   appWindow
 }) => {
-  await waitForChatShell(appWindow)
-  await projectChatLink(appWindow).first().click()
-  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+  await openSeededDeterministicChat(appWindow)
 
   const repeatedPrompt = 'Repeat me exactly'
-  await appWindow.getByLabel('Message OpenKhodam').fill(repeatedPrompt)
-  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await sendPrompt(appWindow, repeatedPrompt)
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: repeatedPrompt })
   ).toBeVisible()
@@ -281,8 +291,7 @@ test('keeps repeated identical prompts visible until each projection arrives', a
     appWindow.locator('[data-pending="true"]').filter({ hasText: repeatedPrompt })
   ).toHaveCount(0)
 
-  await appWindow.getByLabel('Message OpenKhodam').fill(repeatedPrompt)
-  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await sendPrompt(appWindow, repeatedPrompt)
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: repeatedPrompt })
   ).toBeVisible()
@@ -296,20 +305,16 @@ test('keeps repeated identical prompts visible until each projection arrives', a
 test('keeps two prompts pending before the first stable projection arrives', async ({
   appWindow
 }) => {
-  await waitForChatShell(appWindow)
-  await projectChatLink(appWindow).first().click()
-  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+  await openSeededDeterministicChat(appWindow)
 
   const firstPrompt = 'First concurrent prompt'
   const secondPrompt = 'Second concurrent prompt'
-  await appWindow.getByLabel('Message OpenKhodam').fill(firstPrompt)
-  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await sendPrompt(appWindow, firstPrompt)
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: firstPrompt })
   ).toBeVisible()
 
-  await appWindow.getByLabel('Message OpenKhodam').fill(secondPrompt)
-  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await sendPrompt(appWindow, secondPrompt)
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: firstPrompt })
   ).toBeVisible()
