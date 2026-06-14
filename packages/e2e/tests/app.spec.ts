@@ -23,14 +23,15 @@ async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
   await expect
     .poll(
       async () => {
-        if (await page.getByText('Project not found.').isVisible()) return 'project-not-found'
+        if (await page.getByText('Project not found.').first().isVisible())
+          return 'project-not-found'
         if (await terminalProjectRouteState(page).first().isVisible()) return 'resolved'
         return 'pending'
       },
       { message: 'opened project route should resolve without Project not found' }
     )
     .toBe('resolved')
-  await expect(page.getByText('Project not found.')).toHaveCount(0)
+  await expect(page.getByText('Project not found.').first()).toHaveCount(0)
 }
 
 async function waitForChatShell(page: Page): Promise<void> {
@@ -82,7 +83,7 @@ test('opens a project by directory from the final chat shell', async ({ appWindo
   await expectOpenedProjectRouteResolved(appWindow)
 })
 
-test('opens a project by directory into the project route without composer', async ({
+test('opens a project by directory into the project route with start composer', async ({
   appWindow
 }) => {
   await waitForChatShell(appWindow)
@@ -98,7 +99,8 @@ test('opens a project by directory into the project route without composer', asy
   await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
   await expectOpenedProjectRouteResolved(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toHaveCount(0)
+  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+  await expect(appWindow.getByText('Start a new conversation in this project.')).toBeVisible()
 })
 
 test('shows the real OpenCode project chats surface', async ({ appWindow }) => {
@@ -135,7 +137,7 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   )
   await expect(
     appWindow
-      .getByText('Select a session to view messages.')
+      .getByText('Start a new conversation in this project.')
       .or(appWindow.getByText('No sessions found for this project.'))
       .or(appWindow.getByText(/^(Loading OpenCode data…|No messages found for this session\.)/))
       .first()
@@ -149,7 +151,7 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   const sessionCount = await sessionLinks.count()
   if (sessionCount === 0) {
     await expect(appWindow.getByText('No sessions found for this project.')).toBeVisible()
-    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toHaveCount(0)
+    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
     return
   }
 
@@ -170,7 +172,7 @@ test('shows real project/session selection in the reused chat shell', async ({ a
     /\/projects\/[^/]+$/
   )
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toHaveCount(0)
+  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
   await appWindow.goForward()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+\/sessions\/[^/]+$/
@@ -179,28 +181,138 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 })
 
-test('does not mount the prompt composer on project-only routes', async ({ appWindow }) => {
+test('renders seeded stable chat messages', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+
+  await expect(projectChatLink(appWindow).filter({ hasText: 'Fake Project' })).toBeVisible()
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/[^/]+$/
+  )
+  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+  await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+  await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
+  await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
+})
+
+test('starts a new stable chat from the project route', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
 
   const projectLinks = projectChatLink(appWindow)
-  await expect(
-    appWindow
-      .getByText('No OpenCode projects found.')
-      .or(appWindow.getByText('Waiting for the OpenCode sidecar connection.'))
-      .or(projectLinks)
-      .first()
-  ).toBeVisible()
-
-  if ((await projectLinks.count()) === 0) {
-    await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
-    return
-  }
-
+  await expect(projectLinks.first()).toBeVisible()
   await projectLinks.first().click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+$/
   )
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toHaveCount(0)
+
+  await appWindow.getByLabel('Message OpenKhodam').fill('Create a deterministic test chat')
+  await expect(appWindow.getByRole('button', { name: 'Send' })).toBeEnabled()
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect
+    .poll(() => appWindow.evaluate(() => window.location.hash))
+    .toMatch(/\/projects\/[^/]+\/sessions\/new-session-2$/)
+  await expect(
+    sessionChatLink(appWindow).filter({ hasText: 'New deterministic chat' })
+  ).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'New deterministic chat' })).toBeVisible()
+  await expect(
+    appWindow.getByText('Create a deterministic test chat', { exact: true })
+  ).toBeVisible()
+  await expect(
+    appWindow
+      .locator('[data-pending="true"]')
+      .filter({ hasText: 'Create a deterministic test chat' })
+  ).toBeVisible()
+  await expect(
+    appWindow.getByText('Fake response for: Create a deterministic test chat')
+  ).toBeVisible()
+  await expect(
+    appWindow
+      .locator('[data-pending="true"]')
+      .filter({ hasText: 'Create a deterministic test chat' })
+  ).toHaveCount(0)
+})
+
+test('shows optimistic prompt before delayed stable message projection', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+  await projectChatLink(appWindow).first().click()
+  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+
+  await appWindow.getByLabel('Message OpenKhodam').fill('Delayed lifecycle prompt')
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toBeVisible()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
+  ).toBeVisible()
+  await expect(appWindow.getByText('Fake response for: Delayed lifecycle prompt')).toBeVisible()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
+  ).toHaveCount(0)
+  await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toHaveCount(1)
+})
+
+test('keeps repeated identical prompts visible until each projection arrives', async ({
+  appWindow
+}) => {
+  await waitForChatShell(appWindow)
+  await projectChatLink(appWindow).first().click()
+  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+
+  const repeatedPrompt = 'Repeat me exactly'
+  await appWindow.getByLabel('Message OpenKhodam').fill(repeatedPrompt)
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: repeatedPrompt })
+  ).toBeVisible()
+  await expect(appWindow.getByText(`Fake response for: ${repeatedPrompt}`)).toBeVisible()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: repeatedPrompt })
+  ).toHaveCount(0)
+
+  await appWindow.getByLabel('Message OpenKhodam').fill(repeatedPrompt)
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: repeatedPrompt })
+  ).toBeVisible()
+  await expect(appWindow.getByText(repeatedPrompt, { exact: true })).toHaveCount(2)
+  await expect(appWindow.getByText(`Fake response for: ${repeatedPrompt}`)).toHaveCount(2)
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: repeatedPrompt })
+  ).toHaveCount(0)
+})
+
+test('keeps two prompts pending before the first stable projection arrives', async ({
+  appWindow
+}) => {
+  await waitForChatShell(appWindow)
+  await projectChatLink(appWindow).first().click()
+  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+
+  const firstPrompt = 'First concurrent prompt'
+  const secondPrompt = 'Second concurrent prompt'
+  await appWindow.getByLabel('Message OpenKhodam').fill(firstPrompt)
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: firstPrompt })
+  ).toBeVisible()
+
+  await appWindow.getByLabel('Message OpenKhodam').fill(secondPrompt)
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: firstPrompt })
+  ).toBeVisible()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: secondPrompt })
+  ).toBeVisible()
+
+  await expect(appWindow.getByText(`Fake response for: ${firstPrompt}`)).toBeVisible()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: firstPrompt })
+  ).toHaveCount(0)
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: secondPrompt })
+  ).toHaveCount(0)
+  await expect(appWindow.getByText(`Fake response for: ${secondPrompt}`)).toBeVisible()
 })
 
 test('shows the real live events status surface without fake SSE data', async ({ appWindow }) => {

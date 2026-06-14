@@ -5,16 +5,10 @@ import { openCodeQueryKeys } from './opencode/sidecar'
 
 type OpenCodeClient = ReturnType<typeof createOpenCodeClient>
 type OpenCodeSessionListResponse = Awaited<ReturnType<OpenCodeClient['session']['list']>>
-type OpenCodeV2SessionListResponse = Awaited<ReturnType<OpenCodeClient['v2']['session']['list']>>
 type OpenCodeSessionGetResponse = Awaited<ReturnType<OpenCodeClient['session']['get']>>
 type OpenCodeSessionMessagesResponse = Awaited<ReturnType<OpenCodeClient['session']['messages']>>
 
-type OpenCodeLegacySession = NonNullable<OpenCodeSessionListResponse['data']>[number]
-type OpenCodeV2Session = NonNullable<
-  NonNullable<OpenCodeV2SessionListResponse['data']>['items']
->[number]
-
-export type OpenCodeSession = OpenCodeLegacySession | OpenCodeV2Session
+export type OpenCodeSession = NonNullable<OpenCodeSessionListResponse['data']>[number]
 export type OpenCodeSessionDetails = NonNullable<OpenCodeSessionGetResponse['data']>
 export type OpenCodeSessionMessage = NonNullable<OpenCodeSessionMessagesResponse['data']>[number]
 
@@ -23,7 +17,7 @@ type PagedQueryOptions = {
 }
 
 const defaultSessionLimit = 50
-const defaultMessageLimit = 50
+const defaultMessageLimit = 80
 
 export function projectSessionsQueryKey(
   status: { url: string | null; pid: number | null; updatedAt: number },
@@ -85,25 +79,17 @@ export function useProjectSessions(
   const sessionsQuery = useQuery({
     queryKey: projectSessionsQueryKey(status, directory, limit),
     queryFn: async (): Promise<OpenCodeSession[]> => {
-      const legacyResponse = await client!.session.list({
+      const response = await client!.session.list({
         directory: directory!,
-        roots: true,
         limit
       })
-      const v2Response = await client!.v2.session.list({
-        directory: directory!,
-        roots: true,
-        limit,
-        order: 'desc'
-      })
 
-      if (legacyResponse.error)
-        logOpenCodeError('Legacy session list failed', legacyResponse.error, { directory, limit })
-      if (v2Response.error)
-        logOpenCodeError('V2 session list failed', v2Response.error, { directory, limit })
-      if (legacyResponse.error && v2Response.error) throw legacyResponse.error
+      if (response.error) {
+        logOpenCodeError('Session list failed', response.error, { directory, limit })
+        throw response.error
+      }
 
-      return mergeSessions(legacyResponse.data ?? [], v2Response.data?.items ?? [])
+      return response.data ?? []
     },
     enabled: client !== null && Boolean(directory)
   })
@@ -127,7 +113,6 @@ export function useOpenCodeSession(
     queryKey: openCodeSessionQueryKey(status, directory, sessionID),
     queryFn: async (): Promise<OpenCodeSessionDetails | undefined> => {
       const response = await client!.session.get({
-        directory: directory!,
         sessionID: sessionID!
       })
       if (response.error) {
@@ -180,79 +165,25 @@ async function fetchSessionMessages(
   limit: number
 ): Promise<OpenCodeSessionMessage[]> {
   const response = await client.session.messages({ directory, sessionID, limit })
-  if (!response.error) return response.data ?? []
-
-  logOpenCodeError('Session messages failed; retrying smaller pages', response.error, {
-    directory,
-    sessionID,
-    limit
-  })
-
-  const fallback = await findLargestReadableMessagePage(client, directory, sessionID, limit - 1)
-  if (fallback !== null) {
-    console.warn(
-      '[opencode] Session messages loaded with a smaller page after an OpenCode read error.',
-      {
-        directory,
-        sessionID,
-        requestedLimit: limit,
-        loadedCount: fallback.length
-      }
-    )
-    return fallback
+  if (response.error) {
+    logOpenCodeError('Session messages failed', response.error, { directory, sessionID, limit })
+    throw response.error
   }
 
-  throw response.error
-}
-
-async function findLargestReadableMessagePage(
-  client: OpenCodeClient,
-  directory: string,
-  sessionID: string,
-  maxLimit: number
-): Promise<OpenCodeSessionMessage[] | null> {
-  let low = 1
-  let high = Math.max(0, maxLimit)
-  let best: OpenCodeSessionMessage[] | null = null
-
-  while (low <= high) {
-    const limit = Math.ceil((low + high) / 2)
-    const response = await client.session.messages({ directory, sessionID, limit })
-
-    if (response.error) {
-      high = limit - 1
-      continue
-    }
-
-    best = response.data ?? []
-    low = limit + 1
+  const cursor = response.response.headers.get('x-next-cursor') ?? undefined
+  if (cursor) {
+    console.debug('[opencode] Session messages next cursor', { directory, sessionID, cursor })
   }
 
-  return best
+  return (response.data ?? [])
+    .filter(hasMessageInfoID)
+    .sort((a, b) => a.info.id.localeCompare(b.info.id))
 }
 
-function mergeSessions(
-  legacySessions: OpenCodeLegacySession[],
-  v2Sessions: OpenCodeV2Session[]
-): OpenCodeSession[] {
-  const sessions: OpenCodeSession[] = []
-  const seen = new Set<string>()
-
-  for (const session of [...legacySessions, ...v2Sessions]) {
-    const id = getSessionId(session)
-    if (!id || seen.has(id)) continue
-    seen.add(id)
-    sessions.push(session)
-  }
-
-  return sessions
-}
-
-function getSessionId(session: OpenCodeSession): string | null {
-  if (typeof session !== 'object' || session === null) return null
-  const value =
-    (session as Record<string, unknown>).id ?? (session as Record<string, unknown>).sessionID
-  return typeof value === 'string' && value.length > 0 ? value : null
+function hasMessageInfoID(message: OpenCodeSessionMessage): message is OpenCodeSessionMessage & {
+  info: { id: string }
+} {
+  return isRecord(message.info) && typeof message.info.id === 'string' && message.info.id.length > 0
 }
 
 function logOpenCodeError(message: string, error: unknown, context: Record<string, unknown>): void {

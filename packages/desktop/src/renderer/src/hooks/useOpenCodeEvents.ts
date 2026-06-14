@@ -18,6 +18,19 @@ export type OpenCodeEventsState = {
   error: unknown
 }
 
+export type OpenCodeSessionEventError = {
+  directory: string | null
+  sessionID: string | null
+  message: string
+  type: string
+  at: number
+}
+
+export const openCodeSessionEventErrorsQueryKey = [
+  ...openCodeQueryKeys.all,
+  'session-event-errors'
+] as const
+
 type OpenCodeEventPayload = GlobalEvent['payload']
 
 export function useOpenCodeEvents(): OpenCodeEventsState {
@@ -55,7 +68,7 @@ export function useOpenCodeEvents(): OpenCodeEventsState {
         for await (const event of events.stream) {
           if (cancelled) break
           invalidateForEvent(queryClient, statusSnapshot, event)
-          logEventError(event)
+          captureEventError(queryClient, event)
           setState({
             listening: true,
             lastEventType: getEventType(event),
@@ -127,16 +140,30 @@ function getSessionID(payload: OpenCodeEventPayload): string | null {
   return typeof sessionID === 'string' && sessionID.length > 0 ? sessionID : null
 }
 
-function logEventError(event: GlobalEvent): void {
+function captureEventError(
+  queryClient: ReturnType<typeof useQueryClient>,
+  event: GlobalEvent
+): void {
   const error = getEventError(event.payload)
   if (!error) return
-
-  console.warn('[opencode] Event error', {
+  const captured: OpenCodeSessionEventError = {
     type: getEventType(event),
     directory: event.directory ?? null,
     sessionID: getSessionID(event.payload),
-    error: formatEventError(error)
+    message: formatEventError(error),
+    at: Date.now()
+  }
+
+  console.warn('[opencode] Event error', {
+    type: captured.type,
+    directory: captured.directory,
+    sessionID: captured.sessionID,
+    error: captured.message
   })
+  queryClient.setQueryData<OpenCodeSessionEventError[]>(
+    openCodeSessionEventErrorsQueryKey,
+    (current = []) => [captured, ...current].slice(0, 20)
+  )
 }
 
 function getEventError(payload: OpenCodeEventPayload): unknown {
