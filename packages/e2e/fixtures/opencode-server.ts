@@ -11,7 +11,7 @@ const sessions = new Map<string, FakeSession>()
 const messages = new Map<string, unknown[]>()
 const pendingPrompts = new Map<string, { id: string; text: string; fetches: number }[]>()
 let promptIdSequence = 0
-let assistantIdSequence = 0
+let stableMessageSequence = 0
 const project = {
   id: 'fake-project',
   name: 'Fake Project',
@@ -140,12 +140,12 @@ function resetState(): void {
   messages.clear()
   pendingPrompts.clear()
   promptIdSequence = 0
-  assistantIdSequence = 0
+  stableMessageSequence = 0
   const seeded = createSession('seeded-session', 'Seeded deterministic chat', directory)
   sessions.set(seeded.id, seeded)
   messages.set(seeded.id, [
-    userMessage('seeded-user-message', 'Seeded user prompt'),
-    assistantMessage('seeded-assistant-message', 'Seeded assistant response')
+    userMessage(stableMessageID(), 'Seeded user prompt'),
+    assistantMessage(stableMessageID(), 'Seeded assistant response')
   ])
 }
 
@@ -161,7 +161,7 @@ function projectPendingMessages(sessionID: string): void {
     existing.push(
       userMessage(prompt.id, prompt.text),
       assistantMessage(
-        `new-assistant-message-${sessionID}-${++assistantIdSequence}`,
+        assistantMessageIDAfterPrompt(prompt.id),
         `Fake response for: ${prompt.text}`
       )
     )
@@ -171,6 +171,16 @@ function projectPendingMessages(sessionID: string): void {
   const remaining = pending.filter((prompt) => !readyIds.has(prompt.id))
   if (remaining.length) pendingPrompts.set(sessionID, remaining)
   else pendingPrompts.delete(sessionID)
+}
+
+function stableMessageID(): string {
+  stableMessageSequence += 1
+  return `msg_00000000000${stableMessageSequence.toString(16)}${stableMessageSequence.toString().padStart(14, '0')}`
+}
+
+function assistantMessageIDAfterPrompt(promptID: string): string {
+  stableMessageSequence += 1
+  return `${promptID}z${stableMessageSequence.toString().padStart(4, '0')}`
 }
 
 function createSession(id: string, title: string, sessionDirectory: string): FakeSession {
