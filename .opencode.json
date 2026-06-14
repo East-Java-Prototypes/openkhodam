@@ -1,0 +1,8 @@
+{
+  "references": {
+    "opencode": {
+      "repository": "anomalyco/opencode",
+      "branch": "main"
+    }
+  }
+}
