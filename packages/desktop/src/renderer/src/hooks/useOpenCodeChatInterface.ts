@@ -25,6 +25,11 @@ import {
   useProjectSessions,
   useSessionMessages
 } from './useOpenCodeSessions'
+import {
+  useOpenCodeModels,
+  type OpenCodeModelOption,
+  type OpenCodeModelSelection
+} from './useOpenCodeModels'
 import type { ChatMessage, ChatProject, ProjectChat } from './useChatInterfaceData'
 
 const emptyProjects: OpenCodeProject[] = []
@@ -64,6 +69,13 @@ export type OpenCodeStartConversationState = {
   canSendPrompt: boolean
   errorMessage: string | null
   admittedPrompt: OpenCodeAdmittedPrompt | null
+  modelOptions: OpenCodeModelOption[]
+  selectedModel: OpenCodeModelOption | null
+  selectedModelID: string | null
+  setSelectedModelID: (value: string | null) => void
+  modelHelperText: string
+  modelErrorMessage: string | null
+  isLoadingModels: boolean
   setPromptText: (value: string) => void
   startConversation: (
     onSuccess?: (sessionID: string, admittedPrompt: OpenCodeAdmittedPrompt) => void
@@ -80,6 +92,13 @@ export type OpenCodeSessionRouteState = {
   emptyMessage: string | null
   errorMessage: string | null
   successMessage: string | null
+  modelOptions: OpenCodeModelOption[]
+  selectedModel: OpenCodeModelOption | null
+  selectedModelID: string | null
+  setSelectedModelID: (value: string | null) => void
+  modelHelperText: string
+  modelErrorMessage: string | null
+  isLoadingModels: boolean
   setPromptText: (value: string) => void
   sendPrompt: () => void
 }
@@ -96,7 +115,7 @@ export type OpenCodeChatOpenedProject = {
   id: string
 }
 
-export type { OpenCodeAdmittedPrompt }
+export type { OpenCodeAdmittedPrompt, OpenCodeModelOption }
 
 export function useOpenCodeChatShell(
   onOpenedProject?: (project: OpenCodeChatOpenedProject) => void
@@ -198,6 +217,7 @@ export function useOpenCodeSessionRoute(
   const queryClient = useQueryClient()
   const { sessionQuery } = useOpenCodeSession(directory, sessionID)
   const { messagesQuery } = useSessionMessages(directory, sessionID)
+  const models = useOpenCodeModels(directory)
   const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(
     directory,
     sessionID
@@ -287,6 +307,7 @@ export function useOpenCodeSessionRoute(
     canSendPrompt:
       Boolean(directory) &&
       promptText.trim().length > 0 &&
+      models.selectedModel !== null &&
       canSendToActiveSession &&
       sendConnection !== null &&
       !isSending,
@@ -306,9 +327,16 @@ export function useOpenCodeSessionRoute(
     successMessage: sendPromptMutation.isSuccess
       ? 'Prompt sent. Messages will refresh shortly.'
       : null,
+    modelOptions: models.options,
+    selectedModel: models.selectedModel,
+    selectedModelID: models.selectedModelID,
+    setSelectedModelID: models.setSelectedModelID,
+    modelHelperText: models.helperText,
+    modelErrorMessage: models.errorMessage,
+    isLoadingModels: models.isLoading,
     setPromptText,
     sendPrompt: () => {
-      const options = buildPromptOptions(promptText)
+      const options = buildPromptOptions(promptText, models.selectedModel)
       if (sessionID && activeSession) {
         sendPromptMutation.mutate(options, {
           onSuccess: (admittedPrompt) => {
@@ -362,18 +390,30 @@ export function useOpenCodeStartConversation(
   const [promptText, setPromptText] = useState('')
   const [admittedPrompt, setAdmittedPrompt] = useState<OpenCodeAdmittedPrompt | null>(null)
   const { startConversationMutation, connection } = useStartOpenCodeConversation(directory)
+  const models = useOpenCodeModels(directory)
   const isSending = startConversationMutation.isPending
 
   return {
     promptText,
     isSending,
     canSendPrompt:
-      Boolean(directory) && promptText.trim().length > 0 && connection !== null && !isSending,
-    errorMessage: firstErrorMessage(startConversationMutation.error),
+      Boolean(directory) &&
+      promptText.trim().length > 0 &&
+      models.selectedModel !== null &&
+      connection !== null &&
+      !isSending,
+    errorMessage: firstErrorMessage(startConversationMutation.error, models.errorMessage),
     admittedPrompt,
+    modelOptions: models.options,
+    selectedModel: models.selectedModel,
+    selectedModelID: models.selectedModelID,
+    setSelectedModelID: models.setSelectedModelID,
+    modelHelperText: models.helperText,
+    modelErrorMessage: models.errorMessage,
+    isLoadingModels: models.isLoading,
     setPromptText,
     startConversation: (onSuccess) => {
-      const options = buildPromptOptions(promptText)
+      const options = buildPromptOptions(promptText, models.selectedModel)
       startConversationMutation.mutate(options, {
         onSuccess: (admittedPrompt) => {
           setAdmittedPrompt(admittedPrompt)
@@ -464,8 +504,14 @@ function mapMessage(message: OpenCodeSessionMessage, index: number): ChatMessage
   }
 }
 
-function buildPromptOptions(text: string): OpenCodePromptOptions {
-  return { text }
+function buildPromptOptions(
+  text: string,
+  model: OpenCodeModelSelection | null
+): OpenCodePromptOptions {
+  return {
+    text,
+    model: model ? { providerID: model.providerID, modelID: model.modelID } : null
+  }
 }
 
 function getShellEmptyMessage(

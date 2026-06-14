@@ -4,6 +4,14 @@ import type { JSX, ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList
+} from '@/components/ui/combobox'
+import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
@@ -15,6 +23,7 @@ import { Separator } from '@/components/ui/separator'
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
 import type {
   OpenCodeChatShellState,
+  OpenCodeModelOption,
   OpenCodeProjectRouteState,
   OpenCodeSessionRouteState,
   OpenCodeStartConversationState
@@ -312,6 +321,10 @@ export function ActiveChatPanel({
             sendPrompt={session.sendPrompt}
             canSendPrompt={session.canSendPrompt}
             isSending={session.isSending}
+            modelOptions={session.modelOptions}
+            selectedModelID={session.selectedModelID}
+            setSelectedModelID={session.setSelectedModelID}
+            isLoadingModels={session.isLoadingModels}
           />
         ) : null)}
     </section>
@@ -337,7 +350,12 @@ export function ProjectRouteActivePane({
             sendPrompt={() => startConversation.startConversation()}
             canSendPrompt={startConversation.canSendPrompt}
             isSending={startConversation.isSending}
+            modelOptions={startConversation.modelOptions}
+            selectedModelID={startConversation.selectedModelID}
+            setSelectedModelID={startConversation.setSelectedModelID}
+            isLoadingModels={startConversation.isLoadingModels}
             helperText="Start a new conversation in this project."
+            modelHelperText={startConversation.modelHelperText}
           />
         ) : null
       }
@@ -427,15 +445,26 @@ function ChatPromptComposer({
   sendPrompt,
   canSendPrompt,
   isSending,
-  helperText = 'Send to the selected session.'
+  modelOptions,
+  selectedModelID,
+  setSelectedModelID,
+  isLoadingModels,
+  helperText = 'Send to the selected session.',
+  modelHelperText
 }: {
   promptText: string
   setPromptText: (value: string) => void
   sendPrompt: () => void
   canSendPrompt: boolean
   isSending: boolean
+  modelOptions: OpenCodeModelOption[]
+  selectedModelID: string | null
+  setSelectedModelID: (value: string | null) => void
+  isLoadingModels: boolean
   helperText?: string
+  modelHelperText?: string
 }): JSX.Element {
+  const modelText = modelHelperText ?? 'Select a connected OpenCode model before sending.'
   return (
     <form
       className="shrink-0 bg-background p-4"
@@ -449,22 +478,80 @@ function ChatPromptComposer({
       <label className="sr-only" htmlFor="chat-prompt">
         Message OpenKhodam
       </label>
-      <InputGroup className="h-auto bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100">
-        <InputGroupTextarea
-          id="chat-prompt"
-          className="min-h-11 text-sm"
-          placeholder="Ask about this project..."
-          value={promptText}
-          onChange={(event) => setPromptText(event.currentTarget.value)}
-          disabled={isSending}
+      <div className="flex flex-col gap-2 md:flex-row md:items-start">
+        <ModelPickerCombobox
+          options={modelOptions}
+          selectedModelID={selectedModelID}
+          setSelectedModelID={setSelectedModelID}
+          disabled={isSending || isLoadingModels || modelOptions.length === 0}
         />
-        <InputGroupAddon align="inline-end">
-          <InputGroupButton type="submit" disabled={!canSendPrompt}>
-            {isSending ? 'Sending…' : 'Send'}
-          </InputGroupButton>
-        </InputGroupAddon>
-      </InputGroup>
-      <p className="text-muted-foreground mt-2 text-xs">{helperText}</p>
+        <InputGroup className="h-auto min-w-0 flex-1 bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100">
+          <InputGroupTextarea
+            id="chat-prompt"
+            className="min-h-11 text-sm"
+            placeholder="Ask about this project..."
+            value={promptText}
+            onChange={(event) => setPromptText(event.currentTarget.value)}
+            disabled={isSending}
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton type="submit" disabled={!canSendPrompt}>
+              {isSending ? 'Sending…' : 'Send'}
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
+      </div>
+      <p className="text-muted-foreground mt-2 text-xs">
+        {helperText} {modelText}
+      </p>
     </form>
+  )
+}
+
+function ModelPickerCombobox({
+  options,
+  selectedModelID,
+  setSelectedModelID,
+  disabled
+}: {
+  options: OpenCodeModelOption[]
+  selectedModelID: string | null
+  setSelectedModelID: (value: string | null) => void
+  disabled: boolean
+}): JSX.Element {
+  const selected = options.find((option) => option.id === selectedModelID) ?? null
+  return (
+    <div className="min-w-0 md:w-64">
+      <label className="sr-only" htmlFor="opencode-model-picker">
+        OpenCode model
+      </label>
+      <Combobox
+        items={options}
+        value={selected}
+        onValueChange={(option) => setSelectedModelID(option?.id ?? null)}
+        itemToStringValue={(option) => option?.label ?? ''}
+      >
+        <ComboboxInput
+          id="opencode-model-picker"
+          className="w-full bg-card"
+          placeholder="Select model"
+          disabled={disabled}
+          aria-label="OpenCode model"
+        />
+        <ComboboxContent className="w-72">
+          <ComboboxEmpty>No connected models found.</ComboboxEmpty>
+          <ComboboxList>
+            {(option) => (
+              <ComboboxItem key={option.id} value={option}>
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="truncate font-medium">{option.modelName}</span>
+                  <span className="truncate text-muted-foreground">{option.providerName}</span>
+                </span>
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    </div>
   )
 }
