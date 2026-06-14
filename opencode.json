@@ -1,0 +1,8 @@
+{
+  "references": {
+    "opencode": {
+      "repository": "anomalyco/opencode",
+      "description": "Use for OpenCode app, desktop, SDK, and implementation reference behavior."
+    }
+  }
+}
