@@ -1,12 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   useOpenCodeProjects,
   type OpenCodeCurrentProject,
   type OpenCodeProject
 } from './opencode/projects'
-import { type OpenCodePromptOptions, useSendOpenCodePrompt } from './useOpenCodeChat'
-import { useOpenCodeEvents } from './useOpenCodeEvents'
+import {
+  type OpenCodePromptOptions,
+  type OpenCodeAdmittedPrompt,
+  useSendOpenCodePrompt,
+  useStartOpenCodeConversation
+} from './useOpenCodeChat'
+import {
+  openCodeSessionEventErrorsQueryKey,
+  useOpenCodeEvents,
+  type OpenCodeSessionEventError
+} from './useOpenCodeEvents'
 import {
   type OpenCodeSession,
   type OpenCodeSessionDetails,
@@ -48,6 +58,18 @@ export type OpenCodeProjectRouteState = {
   emptyMessage: string | null
 }
 
+export type OpenCodeStartConversationState = {
+  promptText: string
+  isSending: boolean
+  canSendPrompt: boolean
+  errorMessage: string | null
+  admittedPrompt: OpenCodeAdmittedPrompt | null
+  setPromptText: (value: string) => void
+  startConversation: (
+    onSuccess?: (sessionID: string, admittedPrompt: OpenCodeAdmittedPrompt) => void
+  ) => void
+}
+
 export type OpenCodeSessionRouteState = {
   activeChat: ProjectChat | null
   messages: ChatMessage[]
@@ -73,6 +95,8 @@ export type OpenCodeChatOpenedProject = {
   directory: string
   id: string
 }
+
+export type { OpenCodeAdmittedPrompt }
 
 export function useOpenCodeChatShell(
   onOpenedProject?: (project: OpenCodeChatOpenedProject) => void
@@ -166,9 +190,12 @@ export function useOpenCodeProjectRoute(
 export function useOpenCodeSessionRoute(
   directory: string | null | undefined,
   sessionID: string | null | undefined,
-  sessions: ProjectChat[]
+  sessions: ProjectChat[],
+  admittedPrompt?: OpenCodeAdmittedPrompt | null
 ): OpenCodeSessionRouteState {
   const [promptText, setPromptText] = useState('')
+  const [optimisticPrompts, setOptimisticPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
+  const queryClient = useQueryClient()
   const { sessionQuery } = useOpenCodeSession(directory, sessionID)
   const { messagesQuery } = useSessionMessages(directory, sessionID)
   const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(
@@ -176,6 +203,19 @@ export function useOpenCodeSessionRoute(
     sessionID
   )
   const messages = messagesQuery.data ?? emptyMessages
+  const sessionEventErrorsQuery = useQuery({
+    queryKey: openCodeSessionEventErrorsQueryKey,
+    queryFn: async () =>
+      queryClient.getQueryData<OpenCodeSessionEventError[]>(openCodeSessionEventErrorsQueryKey) ??
+      [],
+    initialData: () =>
+      queryClient.getQueryData<OpenCodeSessionEventError[]>(openCodeSessionEventErrorsQueryKey) ??
+      []
+  })
+  const sessionEventErrors = sessionEventErrorsQuery.data
+  const sessionEventError = sessionEventErrors.find(
+    (error) => error.sessionID === sessionID || (!error.sessionID && error.directory === directory)
+  )
   const activeSessionFromList = sessions.find((session) => session.id === sessionID) ?? null
   const activeSession = sessionQuery.data
     ? mapSessionToChat(sessionQuery.data)
@@ -183,9 +223,63 @@ export function useOpenCodeSessionRoute(
   const isSending = sendPromptMutation.isPending
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
 
+  const mappedMessages = useMemo(() => messages.map(mapMessage), [messages])
+  const refetchMessages = messagesQuery.refetch
+  const visibleMessages = useMemo(
+    () => appendOptimisticPrompts(mappedMessages, optimisticPrompts, sessionID),
+    [mappedMessages, optimisticPrompts, sessionID]
+  )
+
+  useEffect(() => {
+    if (!admittedPrompt || admittedPrompt.sessionID !== sessionID) return
+    setOptimisticPrompts((current) => {
+      if (current.some((prompt) => promptKey(prompt) === promptKey(admittedPrompt))) return current
+      return [...current, admittedPrompt]
+    })
+  }, [admittedPrompt, sessionID])
+
+  useEffect(() => {
+    setOptimisticPrompts((current) =>
+      current.filter(
+        (prompt) =>
+          prompt.sessionID !== sessionID ||
+          !mappedMessages.some(
+            (message) => message.author === 'user' && isProjectedPromptMessage(message, prompt)
+          )
+      )
+    )
+  }, [mappedMessages, sessionID])
+
+  useEffect(() => {
+    const pendingPrompts = optimisticPrompts.filter(
+      (prompt) =>
+        prompt.sessionID === sessionID &&
+        !mappedMessages.some(
+          (message) => message.author === 'user' && isProjectedPromptMessage(message, prompt)
+        )
+    )
+    if (pendingPrompts.length === 0) return
+    let cancelled = false
+    let attempts = 0
+    const refetch = () => {
+      if (cancelled || attempts >= 12) return
+      attempts += 1
+      void refetchMessages().finally(() => {
+        if (cancelled) return
+        window.setTimeout(refetch, 350)
+      })
+    }
+    void refetchMessages()
+    const timeout = window.setTimeout(refetch, 150)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeout)
+    }
+  }, [mappedMessages, optimisticPrompts, refetchMessages, sessionID])
+
   return {
     activeChat: activeSession,
-    messages: useMemo(() => messages.map(mapMessage), [messages]),
+    messages: visibleMessages,
     promptText,
     isLoading:
       (sessionQuery.isLoading && activeSessionFromList === null) || messagesQuery.isLoading,
@@ -206,7 +300,8 @@ export function useOpenCodeSessionRoute(
     errorMessage: firstErrorMessage(
       activeSession ? null : sessionQuery.error,
       messagesQuery.error,
-      sendPromptMutation.error
+      sendPromptMutation.error,
+      sessionEventError?.message
     ),
     successMessage: sendPromptMutation.isSuccess
       ? 'Prompt sent. Messages will refresh shortly.'
@@ -215,8 +310,77 @@ export function useOpenCodeSessionRoute(
     sendPrompt: () => {
       const options = buildPromptOptions(promptText)
       if (sessionID && activeSession) {
-        sendPromptMutation.mutate(options, { onSuccess: () => setPromptText('') })
+        sendPromptMutation.mutate(options, {
+          onSuccess: (admittedPrompt) => {
+            setOptimisticPrompts((current) => [...current, admittedPrompt])
+            setPromptText('')
+          }
+        })
       }
+    }
+  }
+}
+
+function appendOptimisticPrompts(
+  messages: ChatMessage[],
+  optimisticPrompts: OpenCodeAdmittedPrompt[],
+  sessionID: string | null | undefined
+): ChatMessage[] {
+  const pending = optimisticPrompts.filter(
+    (prompt) =>
+      prompt.sessionID === sessionID &&
+      !messages.some(
+        (message) => message.author === 'user' && isProjectedPromptMessage(message, prompt)
+      )
+  )
+  if (pending.length === 0) return messages
+  return [
+    ...messages,
+    ...pending.map((prompt) => ({
+      id: `optimistic-${prompt.sessionID}-${prompt.id}`,
+      author: 'user' as const,
+      content: prompt.text,
+      createdAt: 'Pending'
+    }))
+  ]
+}
+
+function promptKey(prompt: OpenCodeAdmittedPrompt): string {
+  return `${prompt.sessionID}:${prompt.id}`
+}
+
+function isProjectedPromptMessage(
+  message: ChatMessage,
+  admittedPrompt: OpenCodeAdmittedPrompt
+): boolean {
+  return message.id === admittedPrompt.id
+}
+
+export function useOpenCodeStartConversation(
+  directory: string | null | undefined
+): OpenCodeStartConversationState {
+  const [promptText, setPromptText] = useState('')
+  const [admittedPrompt, setAdmittedPrompt] = useState<OpenCodeAdmittedPrompt | null>(null)
+  const { startConversationMutation, connection } = useStartOpenCodeConversation(directory)
+  const isSending = startConversationMutation.isPending
+
+  return {
+    promptText,
+    isSending,
+    canSendPrompt:
+      Boolean(directory) && promptText.trim().length > 0 && connection !== null && !isSending,
+    errorMessage: firstErrorMessage(startConversationMutation.error),
+    admittedPrompt,
+    setPromptText,
+    startConversation: (onSuccess) => {
+      const options = buildPromptOptions(promptText)
+      startConversationMutation.mutate(options, {
+        onSuccess: (admittedPrompt) => {
+          setAdmittedPrompt(admittedPrompt)
+          setPromptText('')
+          onSuccess?.(admittedPrompt.sessionID, admittedPrompt)
+        }
+      })
     }
   }
 }
@@ -231,7 +395,7 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
 export function getProjectRouteId(project: OpenCodeProject | ChatProject, index = 0): string {
   return (
     getStringFromRecord(project, 'id') ??
-    getStringFromRecord(project, 'worktree') ??
+    getStringFromRecord(project, 'worktree')?.replaceAll('/', '-') ??
     `project-${index}`
   )
 }
@@ -412,6 +576,8 @@ function getMessageTime(message: OpenCodeSessionMessage): TimeValue {
   )
 }
 function getMessageText(message: OpenCodeSessionMessage): string {
+  const v2Text = formatV2MessageText(message)
+  if (v2Text) return v2Text
   const direct = getStringFromRecord(message, 'text') ?? getStringFromRecord(message, 'content')
   if (direct) return direct
   const parts =
@@ -422,6 +588,63 @@ function getMessageText(message: OpenCodeSessionMessage): string {
     parts.map(formatMessagePart).filter(Boolean).join('\n') ||
     `${parts.length} non-text message part${parts.length === 1 ? '' : 's'}.`
   )
+}
+
+function formatV2MessageText(message: OpenCodeSessionMessage): string | null {
+  const type = getStringFromRecord(message, 'type')
+  if (type === 'user' || type === 'synthetic' || type === 'system') {
+    return getStringFromRecord(message, 'text')
+  }
+  if (type === 'assistant') {
+    const content = getArrayProperty(message, 'content') ?? []
+    return content.map(formatV2AssistantContent).filter(Boolean).join('\n') || null
+  }
+  if (type === 'shell') {
+    const command = getStringFromRecord(message, 'command') ?? 'shell command'
+    const output = getStringFromRecord(message, 'output')
+    return output ? `Ran ${command}\n${output}` : `Ran ${command}`
+  }
+  if (type === 'compaction') {
+    return getStringFromRecord(message, 'summary') ?? 'Session compacted.'
+  }
+  if (type === 'agent-switched') {
+    const agent = getStringFromRecord(message, 'agent') ?? 'unknown agent'
+    return `Switched agent to ${agent}.`
+  }
+  if (type === 'model-switched') {
+    const model = getRecordProperty(message, 'model')
+    const modelID = getStringFromRecord(model, 'id') ?? 'unknown model'
+    const providerID = getStringFromRecord(model, 'providerID')
+    return `Switched model to ${providerID ? `${providerID}/` : ''}${modelID}.`
+  }
+  return null
+}
+
+function formatV2AssistantContent(content: unknown): string {
+  if (!isRecord(content)) return ''
+  const type = getStringFromRecord(content, 'type')
+  if (type === 'text') return getStringFromRecord(content, 'text') ?? ''
+  if (type === 'reasoning') {
+    const text = getStringFromRecord(content, 'text')
+    return text ? `Reasoning: ${text}` : 'Reasoning updated.'
+  }
+  if (type === 'tool') return formatV2ToolContent(content)
+  return ''
+}
+
+function formatV2ToolContent(content: Record<string, unknown>): string {
+  const name = getStringFromRecord(content, 'name') ?? 'tool'
+  const state = getRecordProperty(content, 'state')
+  const status = getStringFromRecord(state, 'status') ?? 'updated'
+  const toolContent = getArrayProperty(state, 'content') ?? []
+  const text = toolContent.map(formatToolContentItem).filter(Boolean).join('\n')
+  return text ? `[${name} ${status}]\n${text}` : `[${name} ${status}]`
+}
+
+function formatToolContentItem(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!isRecord(content)) return ''
+  return getStringFromRecord(content, 'text') ?? getStringFromRecord(content, 'url') ?? ''
 }
 function formatMessagePart(part: unknown): string {
   if (typeof part === 'string') return part

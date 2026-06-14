@@ -16,7 +16,8 @@ import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatI
 import type {
   OpenCodeChatShellState,
   OpenCodeProjectRouteState,
-  OpenCodeSessionRouteState
+  OpenCodeSessionRouteState,
+  OpenCodeStartConversationState
 } from '../../hooks/useOpenCodeChatInterface'
 
 type ChatHomePageProps = {
@@ -263,10 +264,16 @@ function ProjectChatListItem({
 
 export function ActiveChatPanel({
   project,
-  session
+  session,
+  emptyMessage,
+  composer,
+  composerErrorMessage
 }: {
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  emptyMessage?: string
+  composer?: ReactNode
+  composerErrorMessage?: string | null
 }): JSX.Element {
   return (
     <section
@@ -290,31 +297,53 @@ export function ActiveChatPanel({
         messages={session?.messages ?? []}
         emptyMessage={
           session?.emptyMessage ??
+          emptyMessage ??
           (!project ? 'Select a project to view sessions.' : 'Select a session to view messages.')
         }
         isLoading={session?.isLoading ?? false}
-        errorMessage={session?.errorMessage ?? null}
+        errorMessage={session?.errorMessage ?? composerErrorMessage ?? null}
         successMessage={session?.successMessage ?? null}
       />
-      {session ? (
-        <ChatPromptComposer
-          promptText={session.promptText}
-          setPromptText={session.setPromptText}
-          sendPrompt={session.sendPrompt}
-          canSendPrompt={session.canSendPrompt}
-          isSending={session.isSending}
-        />
-      ) : null}
+      {composer ??
+        (session ? (
+          <ChatPromptComposer
+            promptText={session.promptText}
+            setPromptText={session.setPromptText}
+            sendPrompt={session.sendPrompt}
+            canSendPrompt={session.canSendPrompt}
+            isSending={session.isSending}
+          />
+        ) : null)}
     </section>
   )
 }
 
 export function ProjectRouteActivePane({
-  project
+  project,
+  startConversation
 }: {
   project?: OpenCodeProjectRouteState
+  startConversation?: OpenCodeStartConversationState
 }): JSX.Element {
-  return <ActiveChatPanel project={project} />
+  return (
+    <ActiveChatPanel
+      project={project}
+      emptyMessage={project?.emptyMessage ?? 'Start a new conversation for this project.'}
+      composer={
+        startConversation ? (
+          <ChatPromptComposer
+            promptText={startConversation.promptText}
+            setPromptText={startConversation.setPromptText}
+            sendPrompt={() => startConversation.startConversation()}
+            canSendPrompt={startConversation.canSendPrompt}
+            isSending={startConversation.isSending}
+            helperText="Start a new conversation in this project."
+          />
+        ) : null
+      }
+      composerErrorMessage={startConversation?.errorMessage ?? null}
+    />
+  )
 }
 
 export function SessionRouteActivePane({
@@ -379,6 +408,7 @@ function ChatMessageBubble({ message }: { message: ChatMessage }): JSX.Element {
       aria-label={`${message.author} message at ${message.createdAt}`}
     >
       <div
+        data-pending={message.createdAt === 'Pending' ? 'true' : undefined}
         className={`max-w-2xl min-w-0 border px-4 py-3 shadow-sm ${isUser ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-card-foreground'}`}
       >
         <div className="mb-2 flex items-center justify-between gap-4 text-xs opacity-80">
@@ -396,13 +426,15 @@ function ChatPromptComposer({
   setPromptText,
   sendPrompt,
   canSendPrompt,
-  isSending
+  isSending,
+  helperText = 'Send to the selected session.'
 }: {
   promptText: string
   setPromptText: (value: string) => void
   sendPrompt: () => void
   canSendPrompt: boolean
   isSending: boolean
+  helperText?: string
 }): JSX.Element {
   return (
     <form
@@ -432,7 +464,7 @@ function ChatPromptComposer({
           </InputGroupButton>
         </InputGroupAddon>
       </InputGroup>
-      <p className="text-muted-foreground mt-2 text-xs">Send to the selected session.</p>
+      <p className="text-muted-foreground mt-2 text-xs">{helperText}</p>
     </form>
   )
 }

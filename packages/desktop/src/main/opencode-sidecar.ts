@@ -11,6 +11,11 @@ type HealthResponse = {
   version?: string
 }
 
+type ExternalTestServerConfig =
+  | { enabled: false }
+  | { enabled: true; url: string }
+  | { enabled: true; error: string }
+
 type SidecarMessage =
   | { type: 'ready' }
   | { type: 'stopped' }
@@ -42,6 +47,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
   let stopping = false
   let startPromise: Promise<OpenCodeSidecarStatus> | null = null
   let status = createStatus('stopped', 'OpenCode sidecar is not running.')
+  let externalTestServerUrl: string | null = null
   const listeners = new Set<StatusListener>()
 
   function setStatus(next: OpenCodeSidecarStatus): void {
@@ -75,6 +81,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
     const current = opencodeChildProcess
     if (!current) {
       connection = null
+      externalTestServerUrl = null
       setStatus(createStatus('stopped', 'OpenCode sidecar is not running.'))
       return status
     }
@@ -91,6 +98,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
 
     opencodeChildProcess = null
     connection = null
+    externalTestServerUrl = null
     stopping = false
     setStatus(createStatus('stopped', 'OpenCode sidecar stopped.'))
     return status
@@ -104,6 +112,15 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
   }
 
   async function startInner(): Promise<OpenCodeSidecarStatus> {
+    const externalServer = resolveExternalTestServer()
+    if (externalServer.enabled) {
+      if ('error' in externalServer) {
+        setStatus(createStatus('error', externalServer.error))
+        return status
+      }
+      return connectToExternalTestServer(externalServer.url)
+    }
+
     const cliPath = resolveOpenCodeCliPath()
     if (!existsSync(cliPath)) {
       const message = `OpenCode binary was not found at ${cliPath}. Run pnpm approve-builds opencode-ai, then pnpm install.`
@@ -234,6 +251,44 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
     return status
   }
 
+  async function connectToExternalTestServer(url: string): Promise<OpenCodeSidecarStatus> {
+    if (externalTestServerUrl === url && connection?.url === url && status.state === 'connected') {
+      return status
+    }
+
+    const password = process.env.OPENCODE_TEST_SERVER_PASSWORD ?? 'opencode-test-password'
+    connection = {
+      url,
+      username,
+      password,
+      corsOrigins: resolveCorsOrigins()
+    }
+    externalTestServerUrl = url
+    setStatus({
+      ...createStatus('starting', 'Connecting to external test OpenCode server...', url),
+      pid: null
+    })
+
+    try {
+      const health = await waitForHealth(url, password, () => true)
+      setStatus({
+        state: 'connected',
+        url,
+        version: health.version ?? null,
+        pid: null,
+        message: 'External test OpenCode server is connected.',
+        updatedAt: Date.now()
+      })
+    } catch (error) {
+      connection = null
+      externalTestServerUrl = null
+      const message = error instanceof Error ? error.message : String(error)
+      setStatus(createStatus('error', message, url))
+    }
+
+    return status
+  }
+
   return {
     getConnection,
     getStatus: () => status,
@@ -311,6 +366,27 @@ function resolveRendererOrigin(rendererUrl: string | undefined): string | undefi
   } catch {
     return rendererUrl
   }
+}
+
+function resolveExternalTestServer(): ExternalTestServerConfig {
+  if (process.env.OPENCODE_USE_EXTERNAL_TEST_SERVER !== '1') return { enabled: false }
+  if (process.env.NODE_ENV !== 'test' && process.env.OPENCODE_TEST_SERVER_INTENT !== 'e2e') {
+    return {
+      enabled: true,
+      error:
+        'External OpenCode test server override requires NODE_ENV=test or OPENCODE_TEST_SERVER_INTENT=e2e.'
+    }
+  }
+
+  const url = process.env.OPENCODE_EXTERNAL_TEST_SERVER_URL
+  if (!url) {
+    return {
+      enabled: true,
+      error: 'External OpenCode test server override is enabled but no server URL was provided.'
+    }
+  }
+
+  return { enabled: true, url: url.replace(/\/$/, '') }
 }
 
 function resolveOpenCodeCliPath(): string {
