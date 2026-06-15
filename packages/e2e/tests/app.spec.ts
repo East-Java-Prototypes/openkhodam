@@ -75,6 +75,12 @@ async function sendPrompt(page: Page, prompt: string): Promise<void> {
   await page.getByRole('button', { name: 'Send' }).click()
 }
 
+async function articleTexts(page: Page): Promise<string[]> {
+  return page.getByRole('article').evaluateAll((articles) =>
+    articles.map((article) => article.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+  )
+}
+
 test('renders the built desktop chat shell', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
   await expect(appWindow.getByText(/^(connected|starting|stopped|error)$/).first()).toBeVisible()
@@ -288,11 +294,7 @@ test('keeps a newly sent prompt at the bottom of seeded chat history', async ({
   await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(0)
 
   await expect
-    .poll(async () =>
-      appWindow.getByRole('article').evaluateAll((articles) =>
-        articles.map((article) => article.textContent?.replace(/\s+/g, ' ').trim() ?? '')
-      )
-    )
+    .poll(async () => articleTexts(appWindow))
     .toEqual([
       expect.stringContaining('Seeded user prompt'),
       expect.stringContaining('Seeded assistant response'),

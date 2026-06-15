@@ -12,6 +12,7 @@ const messages = new Map<string, unknown[]>()
 const pendingPrompts = new Map<string, { id: string; text: string; fetches: number }[]>()
 let promptIdSequence = 0
 let stableMessageSequence = 0
+let nativeOpenCodeTime = BigInt(Date.now() - 60_000) * BigInt(0x1000)
 const project = {
   id: 'fake-project',
   name: 'Fake Project',
@@ -100,8 +101,8 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       const text = getPromptText(body)
       const id =
         typeof body?.messageID === 'string' ? body.messageID : `input-${++promptIdSequence}`
-      if (!id.startsWith('msg')) {
-        return json(response, { message: 'messageID must start with msg' }, 400)
+      if (!isOpenCodeID(id, 'msg')) {
+        return json(response, { message: 'messageID must be OpenCode-compatible' }, 400)
       }
       if (!hasValidPartIDs(body)) {
         return json(response, { message: 'part ids must start with prt' }, 400)
@@ -141,6 +142,7 @@ function resetState(): void {
   pendingPrompts.clear()
   promptIdSequence = 0
   stableMessageSequence = 0
+  nativeOpenCodeTime = BigInt(Date.now() - 60_000) * BigInt(0x1000)
   const seeded = createSession('seeded-session', 'Seeded deterministic chat', directory)
   sessions.set(seeded.id, seeded)
   messages.set(seeded.id, [
@@ -174,13 +176,35 @@ function projectPendingMessages(sessionID: string): void {
 }
 
 function stableMessageID(): string {
-  stableMessageSequence += 1
-  return `msg_00000000000${stableMessageSequence.toString(16)}${stableMessageSequence.toString().padStart(14, '0')}`
+  return openCodeID('msg', nextNativeOpenCodeSortable())
 }
 
 function assistantMessageIDAfterPrompt(promptID: string): string {
+  return openCodeID('msg', BigInt(`0x${promptID.slice(4, 16)}`) + BigInt(1))
+}
+
+function nextNativeOpenCodeSortable(): bigint {
+  nativeOpenCodeTime += BigInt(0x1000)
   stableMessageSequence += 1
-  return `${promptID}z${stableMessageSequence.toString().padStart(4, '0')}`
+  return nativeOpenCodeTime
+}
+
+function openCodeID(prefix: 'msg' | 'prt', sortable: bigint): string {
+  return `${prefix}_${encodeNativeSortable(sortable)}${stableMessageSequence.toString(36).padStart(14, '0')}`
+}
+
+function encodeNativeSortable(value: bigint): string {
+  let result = ''
+  for (let i = 0; i < 6; i++) {
+    const shift = BigInt(40 - 8 * i)
+    const byte = Number((value >> shift) & BigInt(0xff))
+    result += byte.toString(16).padStart(2, '0')
+  }
+  return result
+}
+
+function isOpenCodeID(id: string, prefix: 'msg' | 'prt'): boolean {
+  return new RegExp(`^${prefix}_[0-9a-f]{12}[0-9A-Za-z]{14}$`).test(id)
 }
 
 function createSession(id: string, title: string, sessionDirectory: string): FakeSession {
@@ -241,7 +265,7 @@ function hasValidPartIDs(body: any): boolean {
   return (
     Array.isArray(body?.parts) &&
     body.parts.length > 0 &&
-    body.parts.every((part: any) => typeof part?.id === 'string' && part.id.startsWith('prt'))
+    body.parts.every((part: any) => typeof part?.id === 'string' && isOpenCodeID(part.id, 'prt'))
   )
 }
 
