@@ -315,12 +315,18 @@ function createStatus(
 }
 
 function createSidecarEnv(password: string): NodeJS.ProcessEnv {
+  const profileDir = join(app.getPath('userData'), 'opencode-sidecar')
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCODE_CLIENT: 'openkhodam-desktop',
+    OPENCODE_CONFIG_DIR: join(profileDir, 'config'),
     OPENCODE_SERVER_USERNAME: username,
     OPENCODE_SERVER_PASSWORD: password,
-    XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? app.getPath('userData')
+    XDG_CACHE_HOME: join(profileDir, 'cache'),
+    XDG_CONFIG_HOME: join(profileDir, 'config'),
+    XDG_DATA_HOME: join(profileDir, 'data'),
+    XDG_STATE_HOME: join(profileDir, 'state')
   }
 
   return {
