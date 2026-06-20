@@ -3,6 +3,10 @@
     "opencode": {
       "repository": "anomalyco/opencode",
       "description": "Use for OpenCode app, desktop, SDK, and implementation reference behavior."
+    },
+    "openwork": {
+      "repository": "different-ai/openwork",
+      "description": "Use for an example implementation of opencode as a core."
     }
   }
 }
