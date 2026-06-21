@@ -175,15 +175,25 @@ async function fetchSessionMessages(
     console.debug('[opencode] Session messages next cursor', { directory, sessionID, cursor })
   }
 
-  return (response.data ?? [])
-    .filter(hasMessageInfoID)
-    .sort((a, b) => a.info.id.localeCompare(b.info.id))
+  return (response.data ?? []).filter(isRenderableMessage).sort(compareMessages)
 }
 
-function hasMessageInfoID(message: OpenCodeSessionMessage): message is OpenCodeSessionMessage & {
-  info: { id: string }
-} {
-  return isRecord(message.info) && typeof message.info.id === 'string' && message.info.id.length > 0
+function isRenderableMessage(message: OpenCodeSessionMessage): boolean {
+  return getMessageSortID(message) !== null
+}
+
+function compareMessages(a: OpenCodeSessionMessage, b: OpenCodeSessionMessage): number {
+  return (getMessageSortID(a) ?? '').localeCompare(getMessageSortID(b) ?? '')
+}
+
+function getMessageSortID(message: OpenCodeSessionMessage): string | null {
+  const info = isRecord(message.info) ? message.info : null
+  return (
+    getString(info, 'id') ??
+    getString(info, 'messageID') ??
+    getString(message, 'id') ??
+    getString(message, 'messageID')
+  )
 }
 
 function logOpenCodeError(message: string, error: unknown, context: Record<string, unknown>): void {

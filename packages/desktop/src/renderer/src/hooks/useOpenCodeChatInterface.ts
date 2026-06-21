@@ -20,7 +20,6 @@ import {
 import {
   type OpenCodeSession,
   type OpenCodeSessionDetails,
-  type OpenCodeSessionMessage,
   useOpenCodeSession,
   useProjectSessions,
   useSessionMessages
@@ -31,10 +30,11 @@ import {
   type OpenCodeModelSelection
 } from './useOpenCodeModels'
 import type { ChatMessage, ChatProject, ProjectChat } from './useChatInterfaceData'
+import { normalizeOpenCodeMessage } from './opencode/message-normalizer'
 
 const emptyProjects: OpenCodeProject[] = []
 const emptySessions: OpenCodeSession[] = []
-const emptyMessages: OpenCodeSessionMessage[] = []
+const emptyMessages: unknown[] = []
 
 type TimeValue = string | number | null
 
@@ -368,6 +368,7 @@ function appendOptimisticPrompts(
       id: `optimistic-${prompt.sessionID}-${prompt.id}`,
       author: 'user' as const,
       content: prompt.text,
+      parts: [{ id: `optimistic-${prompt.id}-text`, type: 'text' as const, text: prompt.text }],
       createdAt: 'Pending'
     }))
   ]
@@ -499,12 +500,14 @@ function mapSessionToChat(
   }
 }
 
-function mapMessage(message: OpenCodeSessionMessage, index: number): ChatMessage {
+function mapMessage(message: unknown, index: number): ChatMessage {
+  const normalized = normalizeOpenCodeMessage(message)
   return {
-    id: getMessageId(message) ?? `message-${index}`,
-    author: getMessageRole(message) === 'user' ? 'user' : 'assistant',
-    content: getMessageText(message),
-    createdAt: formatTime(getMessageTime(message))
+    id: normalized.id ?? `message-${index}`,
+    author: normalized.author,
+    content: normalized.content,
+    parts: normalized.parts,
+    createdAt: formatTime(normalized.createdAt)
   }
 }
 
@@ -595,116 +598,6 @@ function getSessionTime(session: OpenCodeSession | OpenCodeSessionDetails): Time
     getTimeFromRecord(session, 'time')
   )
 }
-function getMessageId(message: OpenCodeSessionMessage): string | null {
-  const info = getRecordProperty(message, 'info')
-  return (
-    getStringFromRecord(info, 'id') ??
-    getStringFromRecord(info, 'messageID') ??
-    getStringFromRecord(message, 'id') ??
-    getStringFromRecord(message, 'messageID')
-  )
-}
-function getMessageRole(message: OpenCodeSessionMessage): string | null {
-  const info = getRecordProperty(message, 'info')
-  return (
-    getStringFromRecord(info, 'role') ??
-    getStringFromRecord(message, 'role') ??
-    getStringFromRecord(message, 'type')
-  )
-}
-function getMessageTime(message: OpenCodeSessionMessage): TimeValue {
-  const info = getRecordProperty(message, 'info')
-  const infoTime = getRecordProperty(info, 'time')
-  const time = getRecordProperty(message, 'time')
-  return (
-    getTimeFromRecord(infoTime, 'created') ??
-    getTimeFromRecord(infoTime, 'updated') ??
-    getTimeFromRecord(info, 'time') ??
-    getTimeFromRecord(info, 'createdAt') ??
-    getTimeFromRecord(time, 'created') ??
-    getTimeFromRecord(message, 'time')
-  )
-}
-function getMessageText(message: OpenCodeSessionMessage): string {
-  const v2Text = formatV2MessageText(message)
-  if (v2Text) return v2Text
-  const direct = getStringFromRecord(message, 'text') ?? getStringFromRecord(message, 'content')
-  if (direct) return direct
-  const parts =
-    getArrayProperty(message, 'parts') ??
-    getArrayProperty(getRecordProperty(message, 'info'), 'parts')
-  if (!parts?.length) return 'No text content.'
-  return (
-    parts.map(formatMessagePart).filter(Boolean).join('\n') ||
-    `${parts.length} non-text message part${parts.length === 1 ? '' : 's'}.`
-  )
-}
-
-function formatV2MessageText(message: OpenCodeSessionMessage): string | null {
-  const type = getStringFromRecord(message, 'type')
-  if (type === 'user' || type === 'synthetic' || type === 'system') {
-    return getStringFromRecord(message, 'text')
-  }
-  if (type === 'assistant') {
-    const content = getArrayProperty(message, 'content') ?? []
-    return content.map(formatV2AssistantContent).filter(Boolean).join('\n') || null
-  }
-  if (type === 'shell') {
-    const command = getStringFromRecord(message, 'command') ?? 'shell command'
-    const output = getStringFromRecord(message, 'output')
-    return output ? `Ran ${command}\n${output}` : `Ran ${command}`
-  }
-  if (type === 'compaction') {
-    return getStringFromRecord(message, 'summary') ?? 'Session compacted.'
-  }
-  if (type === 'agent-switched') {
-    const agent = getStringFromRecord(message, 'agent') ?? 'unknown agent'
-    return `Switched agent to ${agent}.`
-  }
-  if (type === 'model-switched') {
-    const model = getRecordProperty(message, 'model')
-    const modelID = getStringFromRecord(model, 'id') ?? 'unknown model'
-    const providerID = getStringFromRecord(model, 'providerID')
-    return `Switched model to ${providerID ? `${providerID}/` : ''}${modelID}.`
-  }
-  return null
-}
-
-function formatV2AssistantContent(content: unknown): string {
-  if (!isRecord(content)) return ''
-  const type = getStringFromRecord(content, 'type')
-  if (type === 'text') return getStringFromRecord(content, 'text') ?? ''
-  if (type === 'reasoning') {
-    const text = getStringFromRecord(content, 'text')
-    return text ? `Reasoning: ${text}` : 'Reasoning updated.'
-  }
-  if (type === 'tool') return formatV2ToolContent(content)
-  return ''
-}
-
-function formatV2ToolContent(content: Record<string, unknown>): string {
-  const name = getStringFromRecord(content, 'name') ?? 'tool'
-  const state = getRecordProperty(content, 'state')
-  const status = getStringFromRecord(state, 'status') ?? 'updated'
-  const toolContent = getArrayProperty(state, 'content') ?? []
-  const text = toolContent.map(formatToolContentItem).filter(Boolean).join('\n')
-  return text ? `[${name} ${status}]\n${text}` : `[${name} ${status}]`
-}
-
-function formatToolContentItem(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (!isRecord(content)) return ''
-  return getStringFromRecord(content, 'text') ?? getStringFromRecord(content, 'url') ?? ''
-}
-function formatMessagePart(part: unknown): string {
-  if (typeof part === 'string') return part
-  if (!isRecord(part)) return ''
-  return (
-    getStringFromRecord(part, 'text') ??
-    getStringFromRecord(part, 'content') ??
-    `[${getStringFromRecord(part, 'type') ?? 'part'}]`
-  )
-}
 function formatTime(value: TimeValue): string {
   if (!value) return ''
   const date = new Date(value)
@@ -726,9 +619,6 @@ function getStringFromRecord(value: unknown, property: string): string | null {
 }
 function getRecordProperty(value: unknown, property: string): Record<string, unknown> | null {
   return isRecord(value) && isRecord(value[property]) ? value[property] : null
-}
-function getArrayProperty(value: unknown, property: string): unknown[] | null {
-  return isRecord(value) && Array.isArray(value[property]) ? value[property] : null
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null

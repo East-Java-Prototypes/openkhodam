@@ -11,6 +11,7 @@ const sessions = new Map<string, FakeSession>()
 const messages = new Map<string, unknown[]>()
 const pendingPrompts = new Map<string, { id: string; text: string; fetches: number }[]>()
 let promptIdSequence = 0
+let newSessionSequence = 1
 let stableMessageSequence = 0
 let nativeOpenCodeTime = BigInt(Date.now() - 60_000) * BigInt(0x1000)
 const project = {
@@ -79,7 +80,7 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       return json(response, [...sessions.values()])
     }
     if (request.method === 'POST' && url.pathname === '/session') {
-      const id = `new-session-${sessions.size + 1}`
+      const id = `new-session-${++newSessionSequence}`
       const session = createSession(id, 'New deterministic chat', body?.directory ?? directory)
       sessions.set(id, session)
       messages.set(id, [])
@@ -141,13 +142,21 @@ function resetState(): void {
   messages.clear()
   pendingPrompts.clear()
   promptIdSequence = 0
+  newSessionSequence = 1
   stableMessageSequence = 0
   nativeOpenCodeTime = BigInt(Date.now() - 60_000) * BigInt(0x1000)
   const seeded = createSession('seeded-session', 'Seeded deterministic chat', directory)
+  const structured = createSession('structured-session', 'Structured fixture chat', directory)
   sessions.set(seeded.id, seeded)
   messages.set(seeded.id, [
     userMessage(stableMessageID(), 'Seeded user prompt'),
     assistantMessage(stableMessageID(), 'Seeded assistant response')
+  ])
+  sessions.set(structured.id, structured)
+  messages.set(structured.id, [
+    structuredV1AssistantMessage(stableMessageID()),
+    longCollapsedToolMessage(stableMessageID()),
+    structuredV2AssistantMessage(stableMessageID())
   ])
 }
 
@@ -251,6 +260,68 @@ function assistantMessage(id: string, text: string): unknown {
       time: { created: Date.now() }
     },
     parts: [{ id: `${id}-text`, type: 'text', text }]
+  }
+}
+
+function structuredV1AssistantMessage(id: string): unknown {
+  return {
+    info: { id, role: 'assistant', time: { created: Date.now() } },
+    parts: [
+      { id: `${id}-step-start`, type: 'step-start', text: 'Hidden v1 step start marker' },
+      { id: `${id}-text`, type: 'text', text: 'Inspecting project files.' },
+      { id: `${id}-reasoning`, type: 'reasoning', text: 'Need file context before responding.' },
+      {
+        id: `${id}-tool`,
+        type: 'tool',
+        name: 'read',
+        status: 'completed',
+        input: { filePath: 'README.md' },
+        output: 'V1 fixture tool output'
+      },
+      { id: `${id}-step-finish`, type: 'step-finish', text: 'Hidden v1 step finish marker' },
+      { id: `${id}-unknown`, type: 'future-part', detail: 'V1 unknown fixture' }
+    ]
+  }
+}
+
+function longCollapsedToolMessage(id: string): unknown {
+  return {
+    info: { id, role: 'assistant', time: { created: Date.now() } },
+    parts: [
+      { id: `${id}-text`, type: 'text', text: 'A collapsed tool should stay anchored when opened.' },
+      {
+        id: `${id}-tool`,
+        type: 'tool',
+        name: 'plan',
+        status: 'completed',
+        input: { topic: 'scroll stability' },
+        output: Array.from({ length: 80 }, (_, index) => `Long tool output line ${index + 1}`).join('\n')
+      }
+    ]
+  }
+}
+
+function structuredV2AssistantMessage(id: string): unknown {
+  return {
+    id,
+    type: 'assistant',
+    time: { created: Date.now() },
+    content: [
+      { type: 'step-start', text: 'Hidden v2 step start marker' },
+      { type: 'text', text: 'Running the v2 shell check.' },
+      {
+        type: 'tool',
+        name: 'bash',
+        state: {
+          status: 'error',
+          input: { command: 'pnpm test' },
+          content: [{ text: 'V2 fixture tool output' }],
+          error: { message: 'V2 fixture tool error' }
+        }
+      },
+      { type: 'step-finish', text: 'Hidden v2 step finish marker' },
+      { type: 'future-content', text: 'V2 unknown fixture' }
+    ]
   }
 }
 
