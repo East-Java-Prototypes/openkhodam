@@ -30,6 +30,7 @@ import {
   type OpenCodeModelOption,
   type OpenCodeModelSelection
 } from './useOpenCodeModels'
+import { isTitleGenerationSession, sessionTitle } from './opencode/session-title'
 import type { ChatMessage, ChatProject, ProjectChat } from './useChatInterfaceData'
 
 const emptyProjects: OpenCodeProject[] = []
@@ -245,6 +246,7 @@ export function useOpenCodeSessionRoute(
 
   const mappedMessages = useMemo(() => messages.map(mapMessage), [messages])
   const refetchMessages = messagesQuery.refetch
+  const refetchSession = sessionQuery.refetch
   const visibleMessages = useMemo(
     () => appendOptimisticPrompts(mappedMessages, optimisticPrompts, sessionID),
     [mappedMessages, optimisticPrompts, sessionID]
@@ -286,16 +288,20 @@ export function useOpenCodeSessionRoute(
       attempts += 1
       void refetchMessages().finally(() => {
         if (cancelled) return
+        void refetchSession()
+        void queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions'] })
         window.setTimeout(refetch, 350)
       })
     }
     void refetchMessages()
+    void refetchSession()
+    void queryClient.invalidateQueries({ queryKey: ['opencode', 'sessions'] })
     const timeout = window.setTimeout(refetch, 150)
     return () => {
       cancelled = true
       window.clearTimeout(timeout)
     }
-  }, [mappedMessages, optimisticPrompts, refetchMessages, sessionID])
+  }, [mappedMessages, optimisticPrompts, queryClient, refetchMessages, refetchSession, sessionID])
 
   return {
     activeChat: activeSession,
@@ -474,7 +480,7 @@ function mapProjects(projects: OpenCodeProject[]): ChatProject[] {
 }
 
 function mapSessionsToChats(sessions: OpenCodeSession[]): ProjectChat[] {
-  return sessions.map(mapSessionToChat)
+  return sessions.filter((session) => !isTitleGenerationSession(session)).map(mapSessionToChat)
 }
 
 
@@ -491,10 +497,11 @@ function mapSessionToChat(
   index = 0
 ): ProjectChat {
   const id = getSessionId(session) ?? `session-${index}`
+  const title = sessionTitle(getSessionTitle(session) ?? undefined)
   return {
     id,
     kind: 'session',
-    title: getSessionTitle(session) ?? `Session ${index + 1}`,
+    title: title ?? `Session ${index + 1}`,
     summary: id,
     updatedAt: formatTime(getSessionTime(session))
   }

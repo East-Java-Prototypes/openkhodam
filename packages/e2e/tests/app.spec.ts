@@ -249,10 +249,8 @@ test('starts a new stable chat from the project route', async ({ appWindow }) =>
   await expect
     .poll(() => appWindow.evaluate(() => window.location.hash))
     .toMatch(/\/projects\/[^/]+\/sessions\/new-session-2$/)
-  await expect(
-    sessionChatLink(appWindow).filter({ hasText: 'New deterministic chat' })
-  ).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'New deterministic chat' })).toBeVisible()
+  await expect(appWindow.getByText(/New session - 2026-/)).toHaveCount(0)
+  await expect(appWindow.locator('#active-chat-heading')).not.toHaveText(/New session - 2026-/)
   await expect(
     appWindow.getByText('Create a deterministic test chat', { exact: true })
   ).toBeVisible()
@@ -263,6 +261,21 @@ test('starts a new stable chat from the project route', async ({ appWindow }) =>
   ).toBeVisible()
   await expect(
     appWindow.getByText('Fake response for: Create a deterministic test chat')
+  ).toBeVisible()
+  await expect(
+    sessionChatLink(appWindow).filter({ hasText: 'Generated deterministic chat title' })
+  ).toBeVisible()
+  await expect(
+    appWindow.getByRole('heading', { name: 'Generated deterministic chat title' })
+  ).toBeVisible()
+  const sessionUrl = appWindow.url()
+  await appWindow.reload()
+  await expect(appWindow).toHaveURL(sessionUrl)
+  await expect(
+    sessionChatLink(appWindow).filter({ hasText: 'Generated deterministic chat title' })
+  ).toBeVisible()
+  await expect(
+    appWindow.getByRole('heading', { name: 'Generated deterministic chat title' })
   ).toBeVisible()
   await expect(
     appWindow
