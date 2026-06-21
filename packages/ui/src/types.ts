@@ -21,3 +21,29 @@ export type RendererHttpHealthSnapshot = {
   statusCode: number | null
   message: string
 }
+
+export type GoogleWorkspaceIntegrationStatus =
+  | {
+      state: 'not-configured'
+      account: null
+      scopes: string[]
+      message: string
+      updatedAt: number
+    }
+  | {
+      state: 'disconnected'
+      account: null
+      scopes: string[]
+      message: string
+      updatedAt: number
+    }
+  | {
+      state: 'connected'
+      account: {
+        email: string | null
+        name: string | null
+      }
+      scopes: string[]
+      message: string
+      updatedAt: number
+    }

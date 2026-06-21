@@ -444,6 +444,12 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) =
   await expect(appWindow.getByText('Renderer Origin', { exact: true })).toBeVisible()
   await expect(appWindow.getByText('Renderer HTTP', { exact: true })).toBeVisible()
   await expect(appWindow.getByRole('button', { name: /^(Restart|Restarting)$/ })).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
+  await expect(
+    appWindow.getByText('Google OAuth client ID is not configured.', { exact: true })
+  ).toBeVisible()
+  await expect(appWindow.getByRole('button', { name: 'Connect', exact: true })).toBeDisabled()
+  await expect(appWindow.getByText(/access[_ ]?token|refresh[_ ]?token/i)).toHaveCount(0)
 
   await projectHomeLink(appWindow).click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/#\/$/)

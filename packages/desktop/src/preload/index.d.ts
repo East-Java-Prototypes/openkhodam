@@ -1,12 +1,23 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
-import type { OpenCodeConnection, OpenCodeSidecarStatus } from '@openkhodam/ui/types'
+import type {
+  GoogleWorkspaceIntegrationStatus,
+  OpenCodeConnection,
+  OpenCodeSidecarStatus
+} from '@openkhodam/ui/types'
 
-export type { OpenCodeConnection, OpenCodeSidecarStatus } from '@openkhodam/ui/types'
+export type {
+  GoogleWorkspaceIntegrationStatus,
+  OpenCodeConnection,
+  OpenCodeSidecarStatus
+} from '@openkhodam/ui/types'
 
 export type OpenKhodamAPI = {
   getOpenCodeConnection: () => Promise<OpenCodeConnection>
   getOpenCodeStatus: () => Promise<OpenCodeSidecarStatus>
   restartOpenCode: () => Promise<OpenCodeSidecarStatus>
+  getGoogleWorkspaceStatus: () => Promise<GoogleWorkspaceIntegrationStatus>
+  connectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
+  disconnectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void) => () => void
 }
 
