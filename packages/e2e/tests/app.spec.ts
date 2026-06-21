@@ -67,6 +67,15 @@ async function openSeededDeterministicChat(page: Page): Promise<void> {
   )
 }
 
+async function openStructuredFixtureChat(page: Page): Promise<void> {
+  await waitForChatShell(page)
+  await expect(projectChatLink(page).filter({ hasText: 'Fake Project' })).toBeVisible()
+  await projectChatLink(page).filter({ hasText: 'Fake Project' }).click()
+  await expectOpenedProjectRouteResolved(page)
+  await sessionChatLink(page).filter({ hasText: 'Structured fixture chat' }).click()
+  await expect(page.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
+}
+
 async function sendPrompt(page: Page, prompt: string): Promise<void> {
   await page.getByLabel('Message OpenKhodam').fill(prompt)
   await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -221,6 +230,60 @@ test('renders seeded stable chat messages', async ({ appWindow }) => {
   await openSeededDeterministicChat(appWindow)
   await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
   await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
+})
+
+test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
+  await openStructuredFixtureChat(appWindow)
+  await expect(appWindow.getByText('Inspecting project files.')).toBeVisible()
+  await expect(appWindow.getByText('Need file context before responding.')).toBeVisible()
+  await expect(appWindow.getByText('Hidden v1 step start marker')).toHaveCount(0)
+  await expect(appWindow.getByText('Hidden v1 step finish marker')).toHaveCount(0)
+  await expect(appWindow.getByText('Hidden v2 step start marker')).toHaveCount(0)
+  await expect(appWindow.getByText('Hidden v2 step finish marker')).toHaveCount(0)
+  const readTool = appWindow.locator('[aria-label="Tool read"]')
+  await expect(readTool).toContainText('read')
+  await expect(readTool).toContainText('completed')
+  await expect(readTool).not.toContainText('Input')
+  await readTool.getByRole('button', { name: 'Toggle details for tool read' }).click()
+  await expect(readTool).toContainText('Input')
+  await expect(readTool).toContainText('V1 fixture tool output')
+  await readTool.getByRole('button', { name: 'Toggle details for tool read' }).click()
+  await expect(readTool).not.toContainText('V1 fixture tool output')
+  await expect(appWindow.getByText('Unsupported part: future-part')).toBeVisible()
+  await expect(appWindow.getByText('Running the v2 shell check.')).toBeVisible()
+  const bashTool = appWindow.locator('[aria-label="Tool bash"]')
+  await expect(bashTool).toContainText('bash')
+  await expect(bashTool).toContainText('error')
+  await expect(bashTool).toContainText('Output')
+  await expect(bashTool).toContainText('V2 fixture tool output')
+  await expect(bashTool).toContainText('Error')
+  await expect(bashTool).toContainText('V2 fixture tool error')
+  await bashTool.getByRole('button', { name: 'Toggle details for tool bash' }).click()
+  await expect(bashTool).not.toContainText('V2 fixture tool output')
+  await expect(bashTool).toContainText('bash')
+  await expect(appWindow.getByText('Unsupported part: future-content')).toBeVisible()
+})
+
+test('keeps a long collapsed tool disclosure anchored when opening it', async ({ appWindow }) => {
+  await openStructuredFixtureChat(appWindow)
+
+  const tool = appWindow.locator('[aria-label="Tool plan"]')
+  const toggle = tool.getByRole('button', { name: 'Toggle details for tool plan' })
+
+  await expect(toggle).toBeVisible()
+  const triggerBoxBefore = await toggle.boundingBox()
+  expect(triggerBoxBefore).not.toBeNull()
+  const beforeScroll = await appWindow.locator('[data-slot="scroll-area-viewport"]').evaluate((el) => el.scrollTop)
+
+  await toggle.click()
+  await expect(tool).toContainText('Long tool output line 80')
+
+  const triggerBoxAfter = await toggle.boundingBox()
+  expect(triggerBoxAfter).not.toBeNull()
+  const afterScroll = await appWindow.locator('[data-slot="scroll-area-viewport"]').evaluate((el) => el.scrollTop)
+
+  expect(Math.abs((triggerBoxAfter?.y ?? 0) - (triggerBoxBefore?.y ?? 0))).toBeLessThan(2)
+  expect(afterScroll).toBe(beforeScroll)
 })
 
 test('shows only connected OpenCode models in the composer picker', async ({ appWindow }) => {

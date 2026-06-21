@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/sidebar'
 
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
+import { ChatMessageParts } from './ChatMessageParts'
 import type {
   OpenCodeChatShellState,
   OpenCodeModelOption,
@@ -499,6 +500,18 @@ function ChatMessageList({
 
   const initialScrollKey = messages.length > 0 ? messages[0]!.id : 'empty'
 
+  const handleDisclosureOpen = (trigger: HTMLElement): void => {
+    const viewport = viewportRef.current
+    if (!viewport || !trigger.isConnected) return
+    const beforeTop = trigger.getBoundingClientRect().top
+    requestAnimationFrame(() => {
+      if (!trigger.isConnected || !viewport.isConnected) return
+      const afterTop = trigger.getBoundingClientRect().top
+      const delta = afterTop - beforeTop
+      if (Math.abs(delta) > 1) viewport.scrollTop += delta
+    })
+  }
+
   useEffect(() => {
     if (lastInitialScrollKeyRef.current === initialScrollKey) return
     lastInitialScrollKeyRef.current = initialScrollKey
@@ -527,7 +540,10 @@ function ChatMessageList({
                 className="absolute left-0 top-0 w-full pb-4"
                 style={{ transform: `translateY(${virtualRow.start}px)` }}
               >
-                <ChatMessageBubble message={message} />
+                <ChatMessageBubble
+                  message={message}
+                  onDisclosureOpen={handleDisclosureOpen}
+                />
               </div>
             )
           })}
@@ -553,7 +569,13 @@ function StatusCard({
   )
 }
 
-function ChatMessageBubble({ message }: { message: ChatMessage }): JSX.Element {
+function ChatMessageBubble({
+  message,
+  onDisclosureOpen
+}: {
+  message: ChatMessage
+  onDisclosureOpen: (trigger: HTMLElement) => void
+}): JSX.Element {
   const isUser = message.author === 'user'
   return (
     <article
@@ -568,7 +590,7 @@ function ChatMessageBubble({ message }: { message: ChatMessage }): JSX.Element {
           <span className="font-medium capitalize">{message.author}</span>
           <time>{message.createdAt}</time>
         </div>
-        <p className="whitespace-pre-wrap break-words leading-7">{message.content}</p>
+        <ChatMessageParts parts={message.parts} onDisclosureOpen={onDisclosureOpen} />
       </div>
     </article>
   )
