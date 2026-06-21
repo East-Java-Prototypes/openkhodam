@@ -174,6 +174,12 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   await appWindow.reload()
   await expect(appWindow).toHaveURL(projectUrl)
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
+  await expect(
+    appWindow
+      .getByText('No sessions found for this project.')
+      .or(sessionChatLink(appWindow))
+      .first()
+  ).toBeVisible()
 
   const sessionLinks = sessionChatLink(appWindow)
   const sessionCount = await sessionLinks.count()
