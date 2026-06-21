@@ -7,6 +7,7 @@ export type FakeOpenCodeServer = {
 
 const directory = process.cwd()
 const now = Date.now()
+const newSessionDefaultTitle = 'New session - 2026-01-01T00:00:00.000Z'
 const sessions = new Map<string, FakeSession>()
 const messages = new Map<string, unknown[]>()
 const pendingPrompts = new Map<string, { id: string; text: string; fetches: number }[]>()
@@ -52,6 +53,7 @@ type FakeSession = {
   id: string
   title: string
   directory: string
+  metadata?: Record<string, unknown>
   time: { created: number; updated: number }
   location: { directory: string }
 }
@@ -61,7 +63,7 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     if (request.method === 'OPTIONS') return preflight(response)
-    const body = request.method === 'POST' ? await readJson(request) : null
+    const body = ['POST', 'PATCH'].includes(request.method ?? '') ? await readJson(request) : null
 
     if (request.method === 'GET' && url.pathname === '/global/health') {
       return json(response, { healthy: true, version: 'fake-stable' })
@@ -80,7 +82,12 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     }
     if (request.method === 'POST' && url.pathname === '/session') {
       const id = `new-session-${sessions.size + 1}`
-      const session = createSession(id, 'New deterministic chat', body?.directory ?? directory)
+      const session = createSession(
+        id,
+        typeof body?.title === 'string' ? body.title : newSessionDefaultTitle,
+        body?.directory ?? directory,
+        isRecord(body?.metadata) ? body.metadata : undefined
+      )
       sessions.set(id, session)
       messages.set(id, [])
       return json(response, session)
@@ -94,6 +101,19 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
         session ? session : { _tag: 'SessionNotFoundError', message: 'Session not found.' },
         session ? 200 : 404
       )
+    }
+    if (request.method === 'PATCH' && sessionMatch) {
+      const session = sessions.get(sessionMatch[1])
+      if (!session) return json(response, { message: 'Session not found.' }, 404)
+      if (typeof body?.title === 'string') session.title = body.title
+      session.time.updated = Date.now()
+      return json(response, session)
+    }
+    if (request.method === 'DELETE' && sessionMatch) {
+      sessions.delete(sessionMatch[1])
+      messages.delete(sessionMatch[1])
+      pendingPrompts.delete(sessionMatch[1])
+      return json(response, true)
     }
     const promptMatch = url.pathname.match(/^\/session\/([^/]+)\/prompt_async$/)
     if (request.method === 'POST' && promptMatch) {
@@ -117,6 +137,18 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       return json(response, {})
     }
     const messagesMatch = url.pathname.match(/^\/session\/([^/]+)\/message$/)
+    if (request.method === 'POST' && messagesMatch) {
+      const sessionID = messagesMatch[1]
+      if (body?.agent === 'title') return json(response, { message: 'Unknown agent' }, 400)
+      const promptText = getPromptText(body)
+      const title = promptText.includes('Create a deterministic test chat')
+        ? 'Generated deterministic chat title'
+        : 'Wrong missing context title'
+      const existing = messages.get(sessionID) ?? []
+      existing.push(userMessage(stableMessageID(), promptText), assistantMessage(stableMessageID(), title))
+      messages.set(sessionID, existing)
+      return json(response, assistantMessage(stableMessageID(), title))
+    }
     if (request.method === 'GET' && messagesMatch) {
       projectPendingMessages(messagesMatch[1])
       response.setHeader('x-next-cursor', '')
@@ -207,12 +239,18 @@ function isOpenCodeID(id: string, prefix: 'msg' | 'prt'): boolean {
   return new RegExp(`^${prefix}_[0-9a-f]{12}[0-9A-Za-z]{14}$`).test(id)
 }
 
-function createSession(id: string, title: string, sessionDirectory: string): FakeSession {
+function createSession(
+  id: string,
+  title: string,
+  sessionDirectory: string,
+  metadata?: Record<string, unknown>
+): FakeSession {
   return {
     id,
     slug: id,
     projectID: 'fake-project',
     title,
+    metadata,
     directory: sessionDirectory,
     location: { directory: sessionDirectory },
     version: 'fake-stable',
@@ -276,6 +314,10 @@ function isConnectedModel(model: any): boolean {
   return model.providerID === connectedProviderID && model.modelID in providers.all[0].models
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 async function readJson(request: IncomingMessage): Promise<any> {
   const chunks: Buffer[] = []
   for await (const chunk of request) chunks.push(Buffer.from(chunk))
@@ -298,6 +340,6 @@ function corsHeaders(headers: Record<string, string> = {}): Record<string, strin
     ...headers,
     'access-control-allow-origin': '*',
     'access-control-allow-headers': 'content-type, authorization, x-requested-with',
-    'access-control-allow-methods': 'GET, POST, OPTIONS'
+    'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS'
   }
 }

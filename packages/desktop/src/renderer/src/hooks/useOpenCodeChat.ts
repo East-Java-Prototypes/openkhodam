@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useOpenCodeSdk } from './opencode/client'
 import { Identifier } from './opencode/id'
+import { generateOpenCodeSessionTitle } from './opencode/session-title-generation'
 import {
   openCodeSessionQueryKey,
   projectSessionsQueryKey,
@@ -59,6 +60,19 @@ export function useSendOpenCodePrompt(
           queryKey: sessionMessagesQueryKey(status, directory, sessionID)
         })
       ])
+    },
+    onSettled: (_data, _error, options) => {
+      if (_data && client && directory && options.model) {
+        void generateOpenCodeSessionTitle({
+          client,
+          queryClient,
+          status,
+          directory,
+          sessionID: _data.sessionID,
+          promptText: _data.text,
+          model: options.model
+        })
+      }
     }
   })
 
@@ -100,8 +114,19 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
         text
       }
     },
-    onSettled: async (_data, _error, _variables, _context) => {
+    onSettled: async (_data, _error, options) => {
       await queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) })
+      if (_data && client && directory && options.model) {
+        void generateOpenCodeSessionTitle({
+          client,
+          queryClient,
+          status,
+          directory,
+          sessionID: _data.sessionID,
+          promptText: _data.text,
+          model: options.model
+        })
+      }
     },
     onSuccess: async ({ sessionID }) => {
       await Promise.all([
