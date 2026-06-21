@@ -184,7 +184,7 @@ export function useOpenCodeProjectRoute(
   const sessions = sessionsQuery.data ?? emptySessions
 
   return {
-    sessions: useMemo(() => sessions.map(mapSessionToChat), [sessions]),
+    sessions: useMemo(() => mapSessionsToChats(sessions), [sessions]),
     selectedProject: selectedProject
       ? mapProject(selectedProject, projects.indexOf(selectedProject))
       : null,
@@ -473,6 +473,11 @@ function mapProjects(projects: OpenCodeProject[]): ChatProject[] {
   return projects.map(mapProject)
 }
 
+function mapSessionsToChats(sessions: OpenCodeSession[]): ProjectChat[] {
+  return sessions.map(mapSessionToChat)
+}
+
+
 function mapProject(project: OpenCodeProject, index: number): ChatProject {
   return {
     id: getProjectRouteId(project, index),
@@ -494,6 +499,7 @@ function mapSessionToChat(
     updatedAt: formatTime(getSessionTime(session))
   }
 }
+
 
 function mapMessage(message: OpenCodeSessionMessage, index: number): ChatMessage {
   return {

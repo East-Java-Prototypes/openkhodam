@@ -65,9 +65,8 @@ export function ChatHomePage({
       }
       className="h-dvh min-h-0 overflow-hidden"
     >
-      <ProjectChatSidebar shell={shell} selectedDirectory={project?.selectedDirectory ?? null} />
-      <main className="grid h-dvh min-h-0 min-w-0 flex-1 grid-cols-1 overflow-hidden bg-background text-foreground md:grid-cols-[18rem_minmax(0,1fr)]">
-        <SessionChatSidebar project={project} session={session} />
+      <ProjectChatSidebar shell={shell} project={project} session={session} />
+      <main className="grid h-dvh min-h-0 min-w-0 flex-1 grid-cols-1 overflow-hidden bg-background text-foreground">
         {activePane ?? <ActiveChatPanel project={project} session={session} />}
       </main>
     </SidebarProvider>
@@ -76,10 +75,12 @@ export function ChatHomePage({
 
 function ProjectChatSidebar({
   shell,
-  selectedDirectory
+  project,
+  session
 }: {
   shell: OpenCodeChatShellState
-  selectedDirectory: string | null
+  project?: OpenCodeProjectRouteState
+  session?: OpenCodeSessionRouteState
 }): JSX.Element {
   return (
     <Sidebar
@@ -126,11 +127,12 @@ function ProjectChatSidebar({
                     <StatusCard tone="error">{shell.errorMessage}</StatusCard>
                   </SidebarMenuItem>
                 ) : null}
-                {shell.projects.map((project) => (
-                  <ProjectButton
-                    key={project.id}
-                    project={project}
-                    isActive={project.subtitle === selectedDirectory}
+                {shell.projects.map((chatProject) => (
+                  <ProjectWithSessions
+                    key={chatProject.id}
+                    project={chatProject}
+                    routeProject={project}
+                    session={session}
                   />
                 ))}
               </SidebarMenu>
@@ -154,47 +156,6 @@ function ProjectChatSidebar({
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
-  )
-}
-
-function SessionChatSidebar({
-  project,
-  session
-}: {
-  project?: OpenCodeProjectRouteState
-  session?: OpenCodeSessionRouteState
-}): JSX.Element {
-  return (
-    <aside
-      className="relative min-h-0 overflow-hidden bg-sidebar/40 p-4"
-      aria-labelledby="sessions-heading"
-    >
-      <ScrollArea className="h-full pr-2">
-        <div className="mb-4">
-          <p className="text-muted-foreground text-sm">Selected project</p>
-          <h2 id="sessions-heading" className="text-lg font-semibold tracking-tight">
-            Project sessions
-          </h2>
-        </div>
-        <nav className="flex flex-col gap-2" aria-label="Project sessions">
-          {!project ? <StatusCard>Select a project to view sessions.</StatusCard> : null}
-          {project?.isLoading ? <StatusCard>Loading OpenCode data…</StatusCard> : null}
-          {project?.errorMessage ? (
-            <StatusCard tone="error">{project.errorMessage}</StatusCard>
-          ) : null}
-          {project?.emptyMessage ? <StatusCard>{project.emptyMessage}</StatusCard> : null}
-          {project?.sessions.map((chat) => (
-            <ProjectChatListItem
-              key={chat.id}
-              chat={chat}
-              projectId={project.selectedProject?.id}
-              isActive={chat.id === session?.activeChat?.id}
-            />
-          ))}
-        </nav>
-      </ScrollArea>
-      <Separator orientation="vertical" className="absolute right-0 top-0 hidden h-full md:block" />
-    </aside>
   )
 }
 
@@ -268,27 +229,88 @@ function ProjectButton({
   isActive: boolean
 }): JSX.Element {
   return (
+    <SidebarMenuButton
+      asChild
+      disabled={!project.id}
+      isActive={isActive}
+      size="lg"
+      variant={isActive ? 'outline' : 'default'}
+      className="h-auto px-3 py-2"
+    >
+      <Link to="/projects/$projectId" params={{ projectId: project.id }}>
+        <span className="flex min-w-0 flex-1 flex-col items-stretch gap-1 text-left">
+          <span className="truncate text-sm font-medium">{project.name}</span>
+          {project.subtitle ? (
+            <span className="text-muted-foreground line-clamp-2 text-xs leading-5 whitespace-normal break-words">
+              {project.subtitle}
+            </span>
+          ) : null}
+        </span>
+      </Link>
+    </SidebarMenuButton>
+  )
+}
+
+function ProjectWithSessions({
+  project,
+  routeProject,
+  session
+}: {
+  project: ChatProject
+  routeProject?: OpenCodeProjectRouteState
+  session?: OpenCodeSessionRouteState
+}): JSX.Element {
+  const isActive = project.subtitle === routeProject?.selectedDirectory
+  return (
     <SidebarMenuItem>
-      <SidebarMenuButton
-        asChild
-        disabled={!project.id}
-        isActive={isActive}
-        size="lg"
-        variant={isActive ? 'outline' : 'default'}
-        className="h-auto px-3 py-2"
-      >
-        <Link to="/projects/$projectId" params={{ projectId: project.id }}>
-          <span className="flex min-w-0 flex-1 flex-col items-stretch gap-1 text-left">
-            <span className="truncate text-sm font-medium">{project.name}</span>
-            {project.subtitle ? (
-              <span className="text-muted-foreground line-clamp-2 text-xs leading-5 whitespace-normal break-words">
-                {project.subtitle}
-              </span>
-            ) : null}
-          </span>
-        </Link>
-      </SidebarMenuButton>
+      <ProjectButton project={project} isActive={isActive} />
+      {isActive ? <SelectedProjectSessions project={routeProject} session={session} /> : null}
     </SidebarMenuItem>
+  )
+}
+
+function SelectedProjectSessions({
+  project,
+  session
+}: {
+  project?: OpenCodeProjectRouteState
+  session?: OpenCodeSessionRouteState
+}): JSX.Element {
+  return (
+    <nav className="mt-2 ml-3 border-l pl-3" aria-label="Project sessions">
+      <h2 id="sessions-heading" className="sr-only">
+        Project sessions
+      </h2>
+      <ul className="flex flex-col gap-1">
+        {project?.isLoading ? <StatusListItem>Loading OpenCode data…</StatusListItem> : null}
+        {project?.errorMessage ? (
+          <StatusListItem tone="error">{project.errorMessage}</StatusListItem>
+        ) : null}
+        {project?.emptyMessage ? <StatusListItem>{project.emptyMessage}</StatusListItem> : null}
+        {project?.sessions.map((chat) => (
+          <ProjectChatListItem
+            key={chat.id}
+            chat={chat}
+            projectId={project.selectedProject?.id}
+            isActive={chat.id === session?.activeChat?.id}
+          />
+        ))}
+      </ul>
+    </nav>
+  )
+}
+
+function StatusListItem({
+  children,
+  tone
+}: {
+  children: string
+  tone?: 'default' | 'error'
+}): JSX.Element {
+  return (
+    <li>
+      <StatusCard tone={tone}>{children}</StatusCard>
+    </li>
   )
 }
 
