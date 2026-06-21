@@ -15,6 +15,8 @@ const projectHomeLink = (page: Page): Locator =>
     .getByRole('link', { name: 'Home', exact: true })
 const sessionChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' }).getByRole('link')
+const selectedProjectSessions = (page: Page): Locator =>
+  page.getByRole('navigation', { name: 'Project sessions' })
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
@@ -37,16 +39,12 @@ async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
 async function waitForChatShell(page: Page): Promise<void> {
   await expect(projectHomeLink(page)).toBeVisible()
   await expect(projectSettingsLink(page)).toBeVisible()
-  await expect(
-    page
-      .getByRole('complementary', { name: 'Project sessions' })
-      .getByRole('link', { name: 'Settings', exact: true })
-  ).toHaveCount(0)
+  await expect(page.getByRole('complementary', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Project folders' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Project folders' })).toBeVisible()
-  await expect(page.getByRole('navigation', { name: 'Project sessions' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toBeVisible()
 }
@@ -109,7 +107,7 @@ test('opens a project by directory from the final chat shell', async ({ appWindo
 
   await openButton.click()
   await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
-  await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
   await expectOpenedProjectRouteResolved(appWindow)
 })
 
@@ -126,7 +124,7 @@ test('opens a project by directory into the project route with start composer', 
   await directoryInput.fill(repositoryDirectory)
   await openButton.click()
   await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
-  await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
   await expectOpenedProjectRouteResolved(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
@@ -175,7 +173,7 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   const projectUrl = appWindow.url()
   await appWindow.reload()
   await expect(appWindow).toHaveURL(projectUrl)
-  await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
 
   const sessionLinks = sessionChatLink(appWindow)
   const sessionCount = await sessionLinks.count()
@@ -373,10 +371,10 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) =
   await expect(projectHomeLink(appWindow)).toBeVisible()
   await expect(projectSettingsLink(appWindow)).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Project folders' })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toHaveCount(0)
   await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
   await expect(appWindow.getByRole('navigation', { name: 'Project folders' })).toBeVisible()
-  await expect(appWindow.getByRole('navigation', { name: 'Project sessions' })).toBeVisible()
+  await expect(appWindow.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(appWindow.getByRole('heading', { name: 'OpenCode Server' })).toBeVisible()
   await expect(appWindow.getByText(/^Status:/)).toBeVisible()
   await expect(appWindow.getByText(/^Message:/)).toBeVisible()
