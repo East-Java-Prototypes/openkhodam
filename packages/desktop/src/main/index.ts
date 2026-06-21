@@ -3,6 +3,11 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { createOpenCodeSidecar } from './opencode-sidecar'
+import { OpenKhodamConfigStore } from './integrations/openkhodam-config'
+import {
+  getGoogleWorkspaceClientId,
+  GoogleWorkspaceIntegration
+} from './integrations/google-workspace'
 
 const opencodeSidecar = createOpenCodeSidecar()
 const isE2e = process.env['OPENKHODAM_E2E'] === '1'
@@ -43,6 +48,12 @@ function createWindow(): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  const openKhodamConfig = new OpenKhodamConfigStore(app.getPath('userData'))
+  const googleWorkspace = new GoogleWorkspaceIntegration(
+    openKhodamConfig,
+    getGoogleWorkspaceClientId()
+  )
+
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -56,6 +67,9 @@ app.whenReady().then(() => {
   ipcMain.handle('opencode:get-status', () => opencodeSidecar.getStatus())
   ipcMain.handle('opencode:get-connection', () => opencodeSidecar.getConnection())
   ipcMain.handle('opencode:restart', () => opencodeSidecar.restart())
+  ipcMain.handle('google-workspace:get-status', () => googleWorkspace.getStatus())
+  ipcMain.handle('google-workspace:connect', () => googleWorkspace.connect())
+  ipcMain.handle('google-workspace:disconnect', () => googleWorkspace.disconnect())
 
   opencodeSidecar.onStatusChange((status) => {
     BrowserWindow.getAllWindows().forEach((window) => {

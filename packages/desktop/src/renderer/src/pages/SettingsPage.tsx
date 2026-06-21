@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { JSX } from 'react'
 import {
+  type GoogleWorkspaceIntegrationStatus,
   OpenCodeServerView,
   type OpenCodeConnection,
   type OpenCodeSidecarStatus,
@@ -16,6 +17,10 @@ type RendererHttpHealth = RendererHttpHealthSnapshot & {
 function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient()
   const { status, connectionQuery, connection } = useOpenCodeSdk()
+  const googleWorkspaceQuery = useQuery({
+    queryKey: ['google-workspace', 'status'],
+    queryFn: window.api.getGoogleWorkspaceStatus
+  })
   const rendererHttpHealthQuery = useQuery({
     queryKey: ['opencode', 'renderer-http-health', status.updatedAt],
     queryFn: async (): Promise<RendererHttpHealth> => ({
@@ -33,6 +38,20 @@ function SettingsPage(): JSX.Element {
     }
   })
 
+  const connectGoogleWorkspace = useMutation({
+    mutationFn: window.api.connectGoogleWorkspace,
+    onSuccess: (nextStatus) => {
+      queryClient.setQueryData(['google-workspace', 'status'], nextStatus)
+    }
+  })
+
+  const disconnectGoogleWorkspace = useMutation({
+    mutationFn: window.api.disconnectGoogleWorkspace,
+    onSuccess: (nextStatus) => {
+      queryClient.setQueryData(['google-workspace', 'status'], nextStatus)
+    }
+  })
+
   const displayedRendererHttpHealth = getDisplayedRendererHttpHealth(
     status,
     connectionQuery.error,
@@ -41,15 +60,97 @@ function SettingsPage(): JSX.Element {
   )
 
   return (
-    <OpenCodeServerView
-      status={status}
-      connection={connection}
-      rendererHttpHealth={displayedRendererHttpHealth}
-      rendererOrigin={window.location.origin}
-      isRestarting={restartOpenCode.isPending}
-      onRestart={() => restartOpenCode.mutateAsync().then(() => undefined)}
-    />
+    <main>
+      <GoogleWorkspaceCard
+        status={googleWorkspaceQuery.data}
+        isLoading={googleWorkspaceQuery.isLoading}
+        error={googleWorkspaceQuery.error}
+        isConnecting={connectGoogleWorkspace.isPending}
+        isDisconnecting={disconnectGoogleWorkspace.isPending}
+        connectError={connectGoogleWorkspace.error}
+        disconnectError={disconnectGoogleWorkspace.error}
+        onConnect={() => connectGoogleWorkspace.mutateAsync().then(() => undefined)}
+        onDisconnect={() => disconnectGoogleWorkspace.mutateAsync().then(() => undefined)}
+      />
+
+      <OpenCodeServerView
+        status={status}
+        connection={connection}
+        rendererHttpHealth={displayedRendererHttpHealth}
+        rendererOrigin={window.location.origin}
+        isRestarting={restartOpenCode.isPending}
+        onRestart={() => restartOpenCode.mutateAsync().then(() => undefined)}
+      />
+    </main>
   )
+}
+
+function GoogleWorkspaceCard({
+  status,
+  isLoading,
+  error,
+  isConnecting,
+  isDisconnecting,
+  connectError,
+  disconnectError,
+  onConnect,
+  onDisconnect
+}: {
+  status: GoogleWorkspaceIntegrationStatus | undefined
+  isLoading: boolean
+  error: Error | null
+  isConnecting: boolean
+  isDisconnecting: boolean
+  connectError: Error | null
+  disconnectError: Error | null
+  onConnect: () => void | Promise<void>
+  onDisconnect: () => void | Promise<void>
+}): JSX.Element {
+  const mutationError = connectError ?? disconnectError
+  const disabled =
+    isLoading || isConnecting || isDisconnecting || status?.state === 'not-configured'
+
+  return (
+    <section aria-labelledby="google-workspace-heading">
+      <h1 id="google-workspace-heading">Google Workspace</h1>
+      <p>{getGoogleWorkspaceSummary(status, isLoading, error)}</p>
+
+      {status?.state === 'connected' ? (
+        <dl>
+          <dt>Account</dt>
+          <dd>{status.account.email ?? status.account.name ?? 'Connected'}</dd>
+
+          <dt>Scopes</dt>
+          <dd>{status.scopes.join(', ') || 'None'}</dd>
+        </dl>
+      ) : null}
+
+      {error ? <p role="alert">Unable to read Google Workspace status: {error.message}</p> : null}
+      {mutationError ? (
+        <p role="alert">Google Workspace update failed: {mutationError.message}</p>
+      ) : null}
+
+      {status?.state === 'connected' ? (
+        <button type="button" onClick={() => void onDisconnect()} disabled={isDisconnecting}>
+          {isDisconnecting ? 'Disconnecting' : 'Disconnect'}
+        </button>
+      ) : (
+        <button type="button" onClick={() => void onConnect()} disabled={disabled}>
+          {isConnecting ? 'Connecting' : 'Connect'}
+        </button>
+      )}
+    </section>
+  )
+}
+
+function getGoogleWorkspaceSummary(
+  status: GoogleWorkspaceIntegrationStatus | undefined,
+  isLoading: boolean,
+  error: Error | null
+): string {
+  if (isLoading) return 'Checking Google Workspace status...'
+  if (error) return 'Google Workspace status is unavailable.'
+  return status?.message ?? 'Google Workspace status is unavailable.'
 }
 
 function getDisplayedRendererHttpHealth(

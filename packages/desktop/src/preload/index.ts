@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { OpenCodeConnection, OpenCodeSidecarStatus } from '@openkhodam/ui/types'
+import type {
+  GoogleWorkspaceIntegrationStatus,
+  OpenCodeConnection,
+  OpenCodeSidecarStatus
+} from '@openkhodam/ui/types'
 
 // Custom APIs for renderer
 const api = {
@@ -9,6 +13,12 @@ const api = {
   getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>
     ipcRenderer.invoke('opencode:get-status'),
   restartOpenCode: (): Promise<OpenCodeSidecarStatus> => ipcRenderer.invoke('opencode:restart'),
+  getGoogleWorkspaceStatus: (): Promise<GoogleWorkspaceIntegrationStatus> =>
+    ipcRenderer.invoke('google-workspace:get-status'),
+  connectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
+    ipcRenderer.invoke('google-workspace:connect'),
+  disconnectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
+    ipcRenderer.invoke('google-workspace:disconnect'),
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, status: OpenCodeSidecarStatus): void =>
       callback(status)
