@@ -4,10 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { createOpenCodeSidecar } from './opencode-sidecar'
 import { OpenKhodamConfigStore } from './integrations/openkhodam-config'
-import {
-  getGoogleWorkspaceClientId,
-  GoogleWorkspaceIntegration
-} from './integrations/google-workspace'
+import { createGoogleWorkspaceIntegration } from './integrations/google-workspace'
 
 const opencodeSidecar = createOpenCodeSidecar()
 const isE2e = process.env['OPENKHODAM_E2E'] === '1'
@@ -49,10 +46,7 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   const openKhodamConfig = new OpenKhodamConfigStore(app.getPath('userData'))
-  const googleWorkspace = new GoogleWorkspaceIntegration(
-    openKhodamConfig,
-    getGoogleWorkspaceClientId()
-  )
+  const googleWorkspace = createGoogleWorkspaceIntegration(openKhodamConfig)
 
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
