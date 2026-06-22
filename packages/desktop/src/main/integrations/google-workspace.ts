@@ -45,7 +45,8 @@ type UserInfoResponse = {
 
 export function createGoogleWorkspaceIntegration(configStore: OpenKhodamConfigStore) {
   const clientId = getGoogleWorkspaceClientId()
-  const isConfigured = () => Boolean(clientId)
+  const clientSecret = getGoogleWorkspaceClientSecret()
+  const isConfigured = () => Boolean(clientId && clientSecret)
   let activeOAuthController: AbortController | null = null
 
   const getCurrentStatus = async (): Promise<GoogleWorkspaceIntegrationStatus> =>
@@ -56,13 +57,16 @@ export function createGoogleWorkspaceIntegration(configStore: OpenKhodamConfigSt
       return getCurrentStatus()
     },
     connect: async (): Promise<GoogleWorkspaceIntegrationStatus> => {
-      if (!clientId) {
+      if (!isConfigured()) {
         return getCurrentStatus()
       }
 
       if (activeOAuthController) {
         return getCurrentStatus()
       }
+
+      const oauthClientId = clientId!
+      const oauthClientSecret = clientSecret!
 
       const cancellation = new AbortController()
       activeOAuthController = cancellation
@@ -78,7 +82,7 @@ export function createGoogleWorkspaceIntegration(configStore: OpenKhodamConfigSt
         }
 
         const authUrl = new URL(GOOGLE_AUTH_URL)
-        authUrl.searchParams.set('client_id', clientId)
+        authUrl.searchParams.set('client_id', oauthClientId)
         authUrl.searchParams.set('redirect_uri', callback.redirectUri)
         authUrl.searchParams.set('response_type', 'code')
         authUrl.searchParams.set('scope', GOOGLE_SCOPES.join(' '))
@@ -100,7 +104,8 @@ export function createGoogleWorkspaceIntegration(configStore: OpenKhodamConfigSt
 
         const token = await exchangeCodeForToken({
           code,
-          clientId,
+          clientId: oauthClientId,
+          clientSecret: oauthClientSecret,
           redirectUri: callback.redirectUri,
           verifier
         })
@@ -144,6 +149,10 @@ export function createGoogleWorkspaceIntegration(configStore: OpenKhodamConfigSt
 
 export function getGoogleWorkspaceClientId(): string | null {
   return process.env['OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID']?.trim() || null
+}
+
+function getGoogleWorkspaceClientSecret(): string | null {
+  return process.env['OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET']?.trim() || null
 }
 
 async function waitForOAuthCallback(signal: AbortSignal): Promise<{
@@ -300,6 +309,7 @@ async function waitForOAuthCallback(signal: AbortSignal): Promise<{
 async function exchangeCodeForToken(input: {
   code: string
   clientId: string
+  clientSecret: string
   redirectUri: string
   verifier: string
 }): Promise<GoogleWorkspaceTokenConfig & { scopes: string[]; accessToken: string }> {
@@ -308,6 +318,7 @@ async function exchangeCodeForToken(input: {
     code: input.code,
     code_verifier: input.verifier,
     grant_type: 'authorization_code',
+    client_secret: input.clientSecret,
     redirect_uri: input.redirectUri
   })
   const response = await fetch(GOOGLE_TOKEN_URL, { method: 'POST', body })
