@@ -82,17 +82,16 @@ function ToolPart({
   const openRef = useRef(Boolean(part.error))
   const correctionGenerationRef = useRef(0)
   const [open, setOpen] = useState(Boolean(part.error))
-  useEffect(() => {
-    openRef.current = open
-  }, [open])
+  const syncOpenRef = (nextOpen: boolean): void => {
+    openRef.current = nextOpen
+  }
   const clearCorrectionTimers = (): void => {
     for (const timer of correctionTimersRef.current) window.clearTimeout(timer)
     correctionTimersRef.current = []
   }
   useEffect(() => clearCorrectionTimers, [])
-  const preserveTriggerTop = (beforeTop: number, generation: number): void => {
+  const preserveTriggerTop = (trigger: HTMLElement | null, beforeTop: number, generation: number): void => {
     if (!openRef.current || generation !== correctionGenerationRef.current) return
-    const trigger = triggerRef.current
     if (!trigger?.isConnected) return
     const viewport = trigger.closest('[data-slot="scroll-area-viewport"]') as HTMLDivElement | null
     if (!viewport?.isConnected) return
@@ -102,29 +101,28 @@ function ToolPart({
       viewport.scrollTop += delta
     }
   }
-  const scheduleCorrectionPasses = (beforeTop: number): void => {
+  const scheduleCorrectionPasses = (trigger: HTMLElement, beforeTop: number): void => {
     clearCorrectionTimers()
     const generation = correctionGenerationRef.current
     const runCorrection = (): void => {
-      preserveTriggerTop(beforeTop, generation)
+      preserveTriggerTop(trigger, beforeTop, generation)
     }
     requestAnimationFrame(runCorrection)
     for (const delay of [0, 50, 100, 200, 400, 750]) {
       correctionTimersRef.current.push(window.setTimeout(runCorrection, delay))
     }
   }
+  const beginOpenCorrection = (trigger: HTMLElement): void => {
+    const beforeTop = trigger.getBoundingClientRect().top
+    correctionGenerationRef.current += 1
+    syncOpenRef(true)
+    setOpen(true)
+    scheduleCorrectionPasses(trigger, beforeTop)
+  }
   const handleOpenChange = (nextOpen: boolean): void => {
-    if (!open && nextOpen && triggerRef.current) {
-      const beforeTop = triggerRef.current.getBoundingClientRect().top
-      correctionGenerationRef.current += 1
-      openRef.current = true
-      setOpen(nextOpen)
-      scheduleCorrectionPasses(beforeTop)
-      return
-    }
     if (open && !nextOpen) {
       correctionGenerationRef.current += 1
-      openRef.current = false
+      syncOpenRef(false)
       clearCorrectionTimers()
     }
     setOpen(nextOpen)
@@ -140,6 +138,15 @@ function ToolPart({
         className="flex w-full flex-wrap items-center justify-between gap-2 text-left"
         aria-label={`Toggle details for tool ${part.name}`}
         ref={triggerRef}
+        onClickCapture={(event) => {
+          if (openRef.current) return
+          beginOpenCorrection(event.currentTarget)
+        }}
+        onKeyDownCapture={(event) => {
+          if (openRef.current) return
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          beginOpenCorrection(event.currentTarget)
+        }}
       >
         <span className="flex flex-wrap items-center gap-2">
           <span className="font-semibold">{part.title ?? part.name}</span>
