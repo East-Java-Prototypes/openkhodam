@@ -7,6 +7,8 @@ import {
   type OpenCodeSidecarStatus,
   type RendererHttpHealthSnapshot
 } from '@openkhodam/ui'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
 import { openCodeQueryKeys, openCodeSidecarState } from '../hooks/opencode/sidecar'
 import { getOpenCodeAuthorizationHeader, useOpenCodeSdk } from '../hooks/opencode/client'
 
@@ -121,7 +123,19 @@ function GoogleWorkspaceCard({
           <dd>{status.account.email ?? status.account.name ?? 'Connected'}</dd>
 
           <dt>Scopes</dt>
-          <dd>{status.scopes.join(', ') || 'None'}</dd>
+          <dd>
+            {status.scopes.length > 0 ? (
+              <div>
+                {status.scopes.map((scope) => (
+                  <Badge key={scope} variant="secondary">
+                    {scope}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              'None'
+            )}
+          </dd>
         </dl>
       ) : null}
 
@@ -131,13 +145,13 @@ function GoogleWorkspaceCard({
       ) : null}
 
       {status?.state === 'connected' ? (
-        <button type="button" onClick={() => void onDisconnect()} disabled={isDisconnecting}>
+        <Button type="button" onClick={() => void onDisconnect()} disabled={isDisconnecting}>
           {isDisconnecting ? 'Disconnecting' : 'Disconnect'}
-        </button>
+        </Button>
       ) : (
-        <button type="button" onClick={() => void onConnect()} disabled={disabled}>
+        <Button type="button" onClick={() => void onConnect()} disabled={disabled}>
           {isConnecting ? 'Connecting' : 'Connect'}
-        </button>
+        </Button>
       )}
     </section>
   )

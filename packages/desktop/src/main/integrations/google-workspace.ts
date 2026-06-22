@@ -11,7 +11,8 @@ const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo'
 const GOOGLE_SCOPES = ['openid', 'email', 'profile']
-const GOOGLE_OAUTH_TIMEOUT_MS = 5 * 60 * 1000
+const ONE_MINUTE_MS = 60 * 1000
+const GOOGLE_OAUTH_TIMEOUT_MS = 5 * ONE_MINUTE_MS
 
 type TokenResponse = {
   access_token?: string
@@ -29,60 +30,54 @@ type UserInfoResponse = {
   name?: string
 }
 
-export class GoogleWorkspaceIntegration {
-  constructor(
-    private readonly configStore: OpenKhodamConfigStore,
-    private readonly clientId: string | null
-  ) {}
+export function createGoogleWorkspaceIntegration(configStore: OpenKhodamConfigStore) {
+  const clientId = getGoogleWorkspaceClientId()
+  const isConfigured = () => Boolean(clientId)
 
-  async getStatus(): Promise<GoogleWorkspaceIntegrationStatus> {
-    return this.configStore.getGoogleWorkspaceStatus(this.isConfigured())
-  }
+  return {
+    getStatus: async (): Promise<GoogleWorkspaceIntegrationStatus> => {
+      return configStore.getGoogleWorkspaceStatus(isConfigured())
+    },
+    connect: async (): Promise<GoogleWorkspaceIntegrationStatus> => {
+      if (!clientId) {
+        return configStore.getGoogleWorkspaceStatus(false)
+      }
 
-  async connect(): Promise<GoogleWorkspaceIntegrationStatus> {
-    if (!this.clientId) {
-      return this.configStore.getGoogleWorkspaceStatus(false)
+      const verifier = base64Url(randomBytes(32))
+      const challenge = base64Url(createHash('sha256').update(verifier).digest())
+      const state = base64Url(randomBytes(24))
+      const callback = await waitForOAuthCallback()
+
+      try {
+        const authUrl = new URL(GOOGLE_AUTH_URL)
+        authUrl.searchParams.set('client_id', clientId)
+        authUrl.searchParams.set('redirect_uri', callback.redirectUri)
+        authUrl.searchParams.set('response_type', 'code')
+        authUrl.searchParams.set('scope', GOOGLE_SCOPES.join(' '))
+        authUrl.searchParams.set('code_challenge', challenge)
+        authUrl.searchParams.set('code_challenge_method', 'S256')
+        authUrl.searchParams.set('state', state)
+        authUrl.searchParams.set('access_type', 'offline')
+        authUrl.searchParams.set('prompt', 'consent')
+
+        await shell.openExternal(authUrl.toString())
+        const code = await callback.waitForCode(state, GOOGLE_OAUTH_TIMEOUT_MS)
+        const token = await exchangeCodeForToken({
+          code,
+          clientId,
+          redirectUri: callback.redirectUri,
+          verifier
+        })
+        const account = await fetchAccount(token.accessToken)
+
+        return configStore.setGoogleWorkspaceConnection(account, token.scopes, token)
+      } finally {
+        await callback.close()
+      }
+    },
+    disconnect: async (): Promise<GoogleWorkspaceIntegrationStatus> => {
+      return configStore.disconnectGoogleWorkspace(isConfigured())
     }
-
-    const verifier = base64Url(randomBytes(32))
-    const challenge = base64Url(createHash('sha256').update(verifier).digest())
-    const state = base64Url(randomBytes(24))
-    const callback = await waitForOAuthCallback()
-
-    try {
-      const authUrl = new URL(GOOGLE_AUTH_URL)
-      authUrl.searchParams.set('client_id', this.clientId)
-      authUrl.searchParams.set('redirect_uri', callback.redirectUri)
-      authUrl.searchParams.set('response_type', 'code')
-      authUrl.searchParams.set('scope', GOOGLE_SCOPES.join(' '))
-      authUrl.searchParams.set('code_challenge', challenge)
-      authUrl.searchParams.set('code_challenge_method', 'S256')
-      authUrl.searchParams.set('state', state)
-      authUrl.searchParams.set('access_type', 'offline')
-      authUrl.searchParams.set('prompt', 'consent')
-
-      await shell.openExternal(authUrl.toString())
-      const code = await callback.waitForCode(state, GOOGLE_OAUTH_TIMEOUT_MS)
-      const token = await exchangeCodeForToken({
-        code,
-        clientId: this.clientId,
-        redirectUri: callback.redirectUri,
-        verifier
-      })
-      const account = await fetchAccount(token.accessToken)
-
-      return this.configStore.setGoogleWorkspaceConnection(account, token.scopes, token)
-    } finally {
-      await callback.close()
-    }
-  }
-
-  async disconnect(): Promise<GoogleWorkspaceIntegrationStatus> {
-    return this.configStore.disconnectGoogleWorkspace(this.isConfigured())
-  }
-
-  private isConfigured(): boolean {
-    return Boolean(this.clientId)
   }
 }
 
@@ -103,6 +98,7 @@ async function waitForOAuthCallback(): Promise<{
     rejectCode = reject
   })
 
+  // Bind a temporary loopback listener for the OAuth callback.
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     const code = url.searchParams.get('code')
