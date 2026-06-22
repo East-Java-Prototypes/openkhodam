@@ -17,6 +17,8 @@ const api = {
     ipcRenderer.invoke('google-workspace:get-status'),
   connectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
     ipcRenderer.invoke('google-workspace:connect'),
+  cancelGoogleWorkspaceConnect: (): Promise<GoogleWorkspaceIntegrationStatus> =>
+    ipcRenderer.invoke('google-workspace:cancel-connect'),
   disconnectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
     ipcRenderer.invoke('google-workspace:disconnect'),
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void): (() => void) => {

@@ -16,7 +16,13 @@ type Fixtures = {
   fakeOpenCodeServer: FakeOpenCodeServer
 }
 
-export const test = base.extend<Fixtures>({
+type Options = {
+  googleWorkspaceClientId: string | undefined
+}
+
+export const test = base.extend<Fixtures & Options>({
+  googleWorkspaceClientId: [undefined, { option: true }],
+
   fakeOpenCodeServer: async ({ browserName }, use) => {
     void browserName
     const server = await startFakeOpenCodeServer()
@@ -24,7 +30,7 @@ export const test = base.extend<Fixtures>({
     await server.close()
   },
 
-  electronApp: async ({ browserName, fakeOpenCodeServer }, use) => {
+  electronApp: async ({ browserName, fakeOpenCodeServer, googleWorkspaceClientId }, use) => {
     void browserName
     const app = await electron.launch({
       args: [join(testDir, '../../desktop/out/main/index.js')],
@@ -33,6 +39,9 @@ export const test = base.extend<Fixtures>({
         NODE_ENV: 'test',
         OPENCODE_USE_EXTERNAL_TEST_SERVER: '1',
         OPENCODE_EXTERNAL_TEST_SERVER_URL: fakeOpenCodeServer.url,
+        ...(googleWorkspaceClientId
+          ? { OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID: googleWorkspaceClientId }
+          : {}),
         OPENCODE_TEST_SERVER_INTENT: 'e2e',
         OPENCODE_TEST_SERVER_PASSWORD: 'opencode-test-password'
       }

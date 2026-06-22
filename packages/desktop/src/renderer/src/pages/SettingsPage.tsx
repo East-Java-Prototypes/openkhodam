@@ -47,6 +47,13 @@ function SettingsPage(): JSX.Element {
     }
   })
 
+  const cancelGoogleWorkspaceConnect = useMutation({
+    mutationFn: window.api.cancelGoogleWorkspaceConnect,
+    onSuccess: (nextStatus) => {
+      queryClient.setQueryData(['google-workspace', 'status'], nextStatus)
+    }
+  })
+
   const disconnectGoogleWorkspace = useMutation({
     mutationFn: window.api.disconnectGoogleWorkspace,
     onSuccess: (nextStatus) => {
@@ -68,11 +75,13 @@ function SettingsPage(): JSX.Element {
         isLoading={googleWorkspaceQuery.isLoading}
         error={googleWorkspaceQuery.error}
         isConnecting={connectGoogleWorkspace.isPending}
+        isCancelling={cancelGoogleWorkspaceConnect.isPending}
         isDisconnecting={disconnectGoogleWorkspace.isPending}
         connectError={connectGoogleWorkspace.error}
         disconnectError={disconnectGoogleWorkspace.error}
-        onConnect={() => connectGoogleWorkspace.mutateAsync().then(() => undefined)}
-        onDisconnect={() => disconnectGoogleWorkspace.mutateAsync().then(() => undefined)}
+        onConnect={() => connectGoogleWorkspace.mutate()}
+        onCancel={() => cancelGoogleWorkspaceConnect.mutate()}
+        onDisconnect={() => disconnectGoogleWorkspace.mutate()}
       />
 
       <OpenCodeServerView
@@ -92,21 +101,25 @@ function GoogleWorkspaceCard({
   isLoading,
   error,
   isConnecting,
+  isCancelling,
   isDisconnecting,
   connectError,
   disconnectError,
   onConnect,
+  onCancel,
   onDisconnect
 }: {
   status: GoogleWorkspaceIntegrationStatus | undefined
   isLoading: boolean
   error: Error | null
   isConnecting: boolean
+  isCancelling: boolean
   isDisconnecting: boolean
   connectError: Error | null
   disconnectError: Error | null
-  onConnect: () => void | Promise<void>
-  onDisconnect: () => void | Promise<void>
+  onConnect: () => void
+  onCancel: () => void
+  onDisconnect: () => void
 }): JSX.Element {
   const mutationError = connectError ?? disconnectError
   const disabled =
@@ -144,14 +157,30 @@ function GoogleWorkspaceCard({
         <p role="alert">Google Workspace update failed: {mutationError.message}</p>
       ) : null}
 
+      {isConnecting ? (
+        <p role="status">Waiting for the Google Workspace sign-in to finish.</p>
+      ) : null}
+
       {status?.state === 'connected' ? (
-        <Button type="button" onClick={() => void onDisconnect()} disabled={isDisconnecting}>
+        <Button type="button" onClick={() => onDisconnect()} disabled={isDisconnecting}>
           {isDisconnecting ? 'Disconnecting' : 'Disconnect'}
         </Button>
       ) : (
-        <Button type="button" onClick={() => void onConnect()} disabled={disabled}>
-          {isConnecting ? 'Connecting' : 'Connect'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" onClick={() => onConnect()} disabled={disabled}>
+            {isConnecting ? 'Connecting' : 'Connect'}
+          </Button>
+          {isConnecting ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => onCancel()}
+              disabled={isCancelling}
+            >
+              {isCancelling ? 'Cancelling' : 'Cancel'}
+            </Button>
+          ) : null}
+        </div>
       )}
     </section>
   )
