@@ -82,7 +82,11 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
     correctionTimersRef.current = []
   }
   useEffect(() => clearCorrectionTimers, [])
-  const preserveTriggerTop = (trigger: HTMLElement | null, beforeTop: number, generation: number): void => {
+  const preserveTriggerTop = (
+    trigger: HTMLElement | null,
+    beforeTop: number,
+    generation: number
+  ): void => {
     if (!openRef.current || generation !== correctionGenerationRef.current) return
     if (!trigger?.isConnected) return
     const viewport = trigger.closest('[data-slot="scroll-area-viewport"]') as HTMLDivElement | null
