@@ -111,17 +111,20 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
   const beginOpenCorrection = (trigger: HTMLElement): void => {
     const beforeTop = trigger.getBoundingClientRect().top
     correctionGenerationRef.current += 1
-    syncOpenRef(true)
-    setOpen(true)
     scheduleCorrectionPasses(trigger, beforeTop)
   }
   const handleOpenChange = (nextOpen: boolean): void => {
+    if (nextOpen) {
+      syncOpenRef(true)
+      setOpen(true)
+      return
+    }
     if (open && !nextOpen) {
       correctionGenerationRef.current += 1
       syncOpenRef(false)
       clearCorrectionTimers()
     }
-    setOpen(nextOpen)
+    setOpen(false)
   }
   return (
     <Collapsible
