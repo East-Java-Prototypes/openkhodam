@@ -504,12 +504,17 @@ function ChatMessageList({
     const viewport = viewportRef.current
     if (!viewport || !trigger.isConnected) return
     const beforeTop = trigger.getBoundingClientRect().top
-    requestAnimationFrame(() => {
+    let frame = 0
+    const correct = (): void => {
       if (!trigger.isConnected || !viewport.isConnected) return
       const afterTop = trigger.getBoundingClientRect().top
       const delta = afterTop - beforeTop
-      if (Math.abs(delta) > 1) viewport.scrollTop += delta
-    })
+      if (Math.abs(delta) <= 1 || frame >= 4) return
+      viewport.scrollTop += delta
+      frame += 1
+      requestAnimationFrame(correct)
+    }
+    requestAnimationFrame(correct)
   }
 
   useEffect(() => {
