@@ -456,3 +456,35 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) =
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(appWindow.getByText('OpenCode', { exact: true })).toBeVisible()
 })
+
+test.describe('Google Workspace connect cancellation', () => {
+  test.use({ googleWorkspaceClientId: 'fake-client-id' })
+
+  test('cancels a pending Google Workspace connect attempt', async ({ appWindow, electronApp }) => {
+    await waitForChatShell(appWindow)
+    await projectSettingsLink(appWindow).click()
+
+    await electronApp.evaluate(({ shell }) => {
+      shell.openExternal = async () => undefined
+    })
+
+    await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
+    await expect(appWindow.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+
+    await appWindow.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(appWindow.getByRole('button', { name: 'Connecting', exact: true })).toBeVisible()
+    await expect(appWindow.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+    await expect(appWindow.getByRole('status')).toHaveText(
+      'Waiting for the Google Workspace sign-in to finish.'
+    )
+
+    await appWindow.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(appWindow.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+    await expect(appWindow.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+    await expect(appWindow.getByRole('status')).toHaveCount(0)
+    await expect(
+      appWindow.getByText('Google Workspace is disconnected.', { exact: true })
+    ).toBeVisible()
+    await expect(appWindow.getByRole('alert')).toHaveCount(0)
+  })
+})

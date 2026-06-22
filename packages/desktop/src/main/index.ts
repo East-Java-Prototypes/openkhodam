@@ -63,6 +63,7 @@ app.whenReady().then(() => {
   ipcMain.handle('opencode:restart', () => opencodeSidecar.restart())
   ipcMain.handle('google-workspace:get-status', () => googleWorkspace.getStatus())
   ipcMain.handle('google-workspace:connect', () => googleWorkspace.connect())
+  ipcMain.handle('google-workspace:cancel-connect', () => googleWorkspace.cancelConnect())
   ipcMain.handle('google-workspace:disconnect', () => googleWorkspace.disconnect())
 
   opencodeSidecar.onStatusChange((status) => {

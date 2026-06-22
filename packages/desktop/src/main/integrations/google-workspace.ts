@@ -14,6 +14,19 @@ const GOOGLE_SCOPES = ['openid', 'email', 'profile']
 const ONE_MINUTE_MS = 60 * 1000
 const GOOGLE_OAUTH_TIMEOUT_MS = 5 * ONE_MINUTE_MS
 
+class GoogleWorkspaceOAuthCancelledError extends Error {
+  constructor() {
+    super('Google Workspace OAuth connection was cancelled.')
+    this.name = 'GoogleWorkspaceOAuthCancelledError'
+  }
+}
+
+function isGoogleWorkspaceOAuthCancelledError(
+  error: unknown
+): error is GoogleWorkspaceOAuthCancelledError {
+  return error instanceof Error && error.name === 'GoogleWorkspaceOAuthCancelledError'
+}
+
 type TokenResponse = {
   access_token?: string
   refresh_token?: string
@@ -33,22 +46,37 @@ type UserInfoResponse = {
 export function createGoogleWorkspaceIntegration(configStore: OpenKhodamConfigStore) {
   const clientId = getGoogleWorkspaceClientId()
   const isConfigured = () => Boolean(clientId)
+  let activeOAuthController: AbortController | null = null
+
+  const getCurrentStatus = async (): Promise<GoogleWorkspaceIntegrationStatus> =>
+    configStore.getGoogleWorkspaceStatus(isConfigured())
 
   return {
     getStatus: async (): Promise<GoogleWorkspaceIntegrationStatus> => {
-      return configStore.getGoogleWorkspaceStatus(isConfigured())
+      return getCurrentStatus()
     },
     connect: async (): Promise<GoogleWorkspaceIntegrationStatus> => {
       if (!clientId) {
-        return configStore.getGoogleWorkspaceStatus(false)
+        return getCurrentStatus()
       }
 
+      if (activeOAuthController) {
+        return getCurrentStatus()
+      }
+
+      const cancellation = new AbortController()
+      activeOAuthController = cancellation
       const verifier = base64Url(randomBytes(32))
       const challenge = base64Url(createHash('sha256').update(verifier).digest())
       const state = base64Url(randomBytes(24))
-      const callback = await waitForOAuthCallback()
+      let callback: Awaited<ReturnType<typeof waitForOAuthCallback>> | null = null
 
       try {
+        callback = await waitForOAuthCallback(cancellation.signal)
+        if (cancellation.signal.aborted) {
+          throw new GoogleWorkspaceOAuthCancelledError()
+        }
+
         const authUrl = new URL(GOOGLE_AUTH_URL)
         authUrl.searchParams.set('client_id', clientId)
         authUrl.searchParams.set('redirect_uri', callback.redirectUri)
@@ -61,19 +89,52 @@ export function createGoogleWorkspaceIntegration(configStore: OpenKhodamConfigSt
         authUrl.searchParams.set('prompt', 'consent')
 
         await shell.openExternal(authUrl.toString())
+        if (cancellation.signal.aborted) {
+          throw new GoogleWorkspaceOAuthCancelledError()
+        }
+
         const code = await callback.waitForCode(state, GOOGLE_OAUTH_TIMEOUT_MS)
+        if (cancellation.signal.aborted) {
+          throw new GoogleWorkspaceOAuthCancelledError()
+        }
+
         const token = await exchangeCodeForToken({
           code,
           clientId,
           redirectUri: callback.redirectUri,
           verifier
         })
+        if (cancellation.signal.aborted) {
+          throw new GoogleWorkspaceOAuthCancelledError()
+        }
+
         const account = await fetchAccount(token.accessToken)
+        if (cancellation.signal.aborted) {
+          throw new GoogleWorkspaceOAuthCancelledError()
+        }
 
         return configStore.setGoogleWorkspaceConnection(account, token.scopes, token)
+      } catch (error) {
+        if (isGoogleWorkspaceOAuthCancelledError(error)) {
+          return getCurrentStatus()
+        }
+
+        throw error
       } finally {
-        await callback.close()
+        try {
+          await callback?.close()
+        } catch {
+          // Ignore cleanup failures so cancel and success still resolve cleanly.
+        } finally {
+          if (activeOAuthController === cancellation) {
+            activeOAuthController = null
+          }
+        }
       }
+    },
+    cancelConnect: async (): Promise<GoogleWorkspaceIntegrationStatus> => {
+      activeOAuthController?.abort()
+      return getCurrentStatus()
     },
     disconnect: async (): Promise<GoogleWorkspaceIntegrationStatus> => {
       return configStore.disconnectGoogleWorkspace(isConfigured())
@@ -85,27 +146,63 @@ export function getGoogleWorkspaceClientId(): string | null {
   return process.env['OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID']?.trim() || null
 }
 
-async function waitForOAuthCallback(): Promise<{
+async function waitForOAuthCallback(signal: AbortSignal): Promise<{
   redirectUri: string
   waitForCode: (expectedState: string, timeoutMs: number) => Promise<string>
   close: () => Promise<void>
 }> {
+  let server: ReturnType<typeof createServer>
   let resolveCode: ((code: string) => void) | null = null
   let rejectCode: ((error: Error) => void) | null = null
+  let listening = false
+  let closed = false
+  let closePromise: Promise<void> | null = null
+  let abortListener: (() => void) | null = null
 
   const codePromise = new Promise<string>((resolve, reject) => {
     resolveCode = resolve
     rejectCode = reject
   })
 
+  const closeServer = async (): Promise<void> => {
+    if (closePromise) {
+      return closePromise
+    }
+
+    if (abortListener) {
+      signal.removeEventListener('abort', abortListener)
+      abortListener = null
+    }
+
+    closePromise = new Promise<void>((resolve, reject) => {
+      if (!listening || closed) {
+        closed = true
+        resolve()
+        return
+      }
+
+      closed = true
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+
+    return closePromise
+  }
+
   // Bind a temporary loopback listener for the OAuth callback.
-  const server = createServer((request, response) => {
+  server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     const code = url.searchParams.get('code')
     const state = url.searchParams.get('state')
     const error = url.searchParams.get('error')
 
     response.setHeader('content-type', 'text/html; charset=utf-8')
+
+    if (signal.aborted) {
+      response.end(
+        '<h1>Google Workspace connection was canceled.</h1><p>You can close this window.</p>'
+      )
+      return
+    }
 
     if (error) {
       response.end('<h1>Google Workspace connection failed.</h1><p>You can close this window.</p>')
@@ -125,9 +222,29 @@ async function waitForOAuthCallback(): Promise<{
   })
 
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => resolve())
+    const onError = (error: Error) => {
+      server.off('error', onError)
+      reject(error)
+    }
+
+    server.once('error', onError)
+    try {
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', onError)
+        resolve()
+      })
+    } catch (error) {
+      server.off('error', onError)
+      reject(error as Error)
+    }
   })
+
+  listening = true
+
+  if (signal.aborted) {
+    await closeServer().catch(() => undefined)
+    throw new GoogleWorkspaceOAuthCancelledError()
+  }
 
   const address = server.address()
   if (!address || typeof address === 'string') {
@@ -138,9 +255,24 @@ async function waitForOAuthCallback(): Promise<{
     redirectUri: `http://127.0.0.1:${address.port}/oauth/google/callback`,
     waitForCode: async (expectedState, timeoutMs) => {
       let timeout: NodeJS.Timeout | null = null
+      const cancellationError = new GoogleWorkspaceOAuthCancelledError()
+
       try {
+        const cancellationPromise = new Promise<string>((_, reject) => {
+          abortListener = () => reject(cancellationError)
+
+          if (signal.aborted) {
+            abortListener = null
+            reject(cancellationError)
+            return
+          }
+
+          signal.addEventListener('abort', abortListener, { once: true })
+        })
+
         const value = await Promise.race([
           codePromise,
+          cancellationPromise,
           new Promise<string>((_, reject) => {
             timeout = setTimeout(
               () => reject(new Error('Google OAuth connection timed out. Please try again.')),
@@ -155,12 +287,13 @@ async function waitForOAuthCallback(): Promise<{
         return code
       } finally {
         if (timeout) clearTimeout(timeout)
+        if (abortListener) {
+          signal.removeEventListener('abort', abortListener)
+          abortListener = null
+        }
       }
     },
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()))
-      })
+    close: () => closeServer()
   }
 }
 

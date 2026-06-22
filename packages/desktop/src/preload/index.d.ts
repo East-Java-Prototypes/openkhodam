@@ -17,6 +17,7 @@ export type OpenKhodamAPI = {
   restartOpenCode: () => Promise<OpenCodeSidecarStatus>
   getGoogleWorkspaceStatus: () => Promise<GoogleWorkspaceIntegrationStatus>
   connectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
+  cancelGoogleWorkspaceConnect: () => Promise<GoogleWorkspaceIntegrationStatus>
   disconnectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void) => () => void
 }
