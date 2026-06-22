@@ -1,8 +1,11 @@
 import { dirname } from 'node:path'
 
+import type { ElectronApplication } from '@playwright/test'
 import { expect, test, type Locator, type Page } from '../fixtures/electron'
 
 const repositoryDirectory = dirname(process.cwd())
+const googleWorkspaceNotConfiguredMessage =
+  'Google OAuth client ID or client secret is not configured.'
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
 const projectSettingsLink = (page: Page): Locator =>
@@ -88,6 +91,70 @@ async function articleTexts(page: Page): Promise<string[]> {
     .evaluateAll((articles) =>
       articles.map((article) => article.textContent?.replace(/\s+/g, ' ').trim() ?? '')
     )
+}
+
+async function waitForMainProcessValue(
+  getter: () => Promise<string | null>,
+  timeoutMs = 10_000
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    const value = await getter()
+    if (value !== null) return value
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  throw new Error('Timed out waiting for the Electron main process capture.')
+}
+
+async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(({ shell }) => {
+    const globalObject = globalThis as any
+
+    const capture =
+      globalObject.__googleWorkspaceOAuthCapture ??
+      (globalObject.__googleWorkspaceOAuthCapture = {
+        authUrl: null,
+        tokenBody: null,
+        userInfoAuthorization: null
+      })
+
+    shell.openExternal = async (url: string) => {
+      capture.authUrl = String(url)
+      return undefined
+    }
+
+    const originalFetch = globalObject.fetch.bind(globalObject)
+    globalObject.fetch = async (input: any, init: any) => {
+      const url = String(input)
+
+      if (url === 'https://oauth2.googleapis.com/token') {
+        const body = init?.body
+        capture.tokenBody =
+          body instanceof URLSearchParams ? body.toString() : (body?.toString() ?? null)
+        return new Response(
+          JSON.stringify({
+            access_token: 'fake-access-token',
+            expires_in: 3600,
+            scope: 'openid email profile',
+            token_type: 'Bearer'
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      }
+
+      if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+        capture.userInfoAuthorization = init?.headers?.authorization ?? null
+        return new Response(JSON.stringify({ email: 'fake@example.com', name: 'Fake User' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+
+      return originalFetch(input, init)
+    }
+  })
 }
 
 test('renders the built desktop chat shell', async ({ appWindow }) => {
@@ -446,7 +513,7 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) =
   await expect(appWindow.getByRole('button', { name: /^(Restart|Restarting)$/ })).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
   await expect(
-    appWindow.getByText('Google OAuth client ID is not configured.', { exact: true })
+    appWindow.getByText(googleWorkspaceNotConfiguredMessage, { exact: true })
   ).toBeVisible()
   await expect(appWindow.getByRole('button', { name: 'Connect', exact: true })).toBeDisabled()
   await expect(appWindow.getByText(/access[_ ]?token|refresh[_ ]?token/i)).toHaveCount(0)
@@ -457,8 +524,27 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) =
   await expect(appWindow.getByText('OpenCode', { exact: true })).toBeVisible()
 })
 
-test.describe('Google Workspace connect cancellation', () => {
+test.describe('Google Workspace settings gating', () => {
   test.use({ googleWorkspaceClientId: 'fake-client-id' })
+
+  test('disables Connect when the client secret is missing', async ({ appWindow }) => {
+    await waitForChatShell(appWindow)
+    await projectSettingsLink(appWindow).click()
+
+    await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
+    await expect(
+      appWindow.getByText(googleWorkspaceNotConfiguredMessage, { exact: true })
+    ).toBeVisible()
+    await expect(appWindow.getByRole('button', { name: 'Connect', exact: true })).toBeDisabled()
+    await expect(appWindow.getByText(/access[_ ]?token|refresh[_ ]?token/i)).toHaveCount(0)
+  })
+})
+
+test.describe('Google Workspace connect cancellation', () => {
+  test.use({
+    googleWorkspaceClientId: 'fake-client-id',
+    googleWorkspaceClientSecret: 'fake-client-secret'
+  })
 
   test('cancels a pending Google Workspace connect attempt', async ({ appWindow, electronApp }) => {
     await waitForChatShell(appWindow)
@@ -486,5 +572,112 @@ test.describe('Google Workspace connect cancellation', () => {
       appWindow.getByText('Google Workspace is disconnected.', { exact: true })
     ).toBeVisible()
     await expect(appWindow.getByRole('alert')).toHaveCount(0)
+  })
+
+  test('sends the Google Workspace client secret during token exchange', async ({
+    appWindow,
+    electronApp
+  }) => {
+    await installGoogleWorkspaceOAuthCapture(electronApp)
+    await waitForChatShell(appWindow)
+    await projectSettingsLink(appWindow).click()
+
+    await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
+    await expect(appWindow.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+
+    await appWindow.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(appWindow.getByRole('button', { name: 'Connecting', exact: true })).toBeVisible()
+
+    const authUrl = new URL(
+      await waitForMainProcessValue(async () =>
+        electronApp.evaluate(
+          () => (globalThis as any).__googleWorkspaceOAuthCapture?.authUrl ?? null
+        )
+      )
+    )
+    const redirectUri = authUrl.searchParams.get('redirect_uri')
+    const state = authUrl.searchParams.get('state')
+
+    expect(redirectUri).not.toBeNull()
+    expect(state).not.toBeNull()
+
+    await fetch(`${redirectUri}?code=test-auth-code&state=${state}`)
+
+    const tokenBody = await waitForMainProcessValue(async () =>
+      electronApp.evaluate(
+        () => (globalThis as any).__googleWorkspaceOAuthCapture?.tokenBody ?? null
+      )
+    )
+    const tokenParams = new URLSearchParams(tokenBody)
+
+    expect(tokenParams.get('client_id')).toBe('fake-client-id')
+    expect(tokenParams.get('client_secret')).toBe('fake-client-secret')
+    expect(tokenParams.get('code')).toBe('test-auth-code')
+    expect(tokenParams.get('code_verifier')).not.toBeNull()
+    expect(tokenParams.get('code_verifier')).not.toBe('')
+    expect(tokenParams.get('grant_type')).toBe('authorization_code')
+    expect(tokenParams.get('redirect_uri')).toBe(redirectUri)
+
+    const userInfoAuthorization = await waitForMainProcessValue(async () =>
+      electronApp.evaluate(
+        () => (globalThis as any).__googleWorkspaceOAuthCapture?.userInfoAuthorization ?? null
+      )
+    )
+
+    expect(userInfoAuthorization).toBe('Bearer fake-access-token')
+    await expect(appWindow.getByRole('button', { name: 'Disconnect', exact: true })).toBeVisible()
+    await expect(
+      appWindow.getByText('Connected as fake@example.com.', { exact: true })
+    ).toBeVisible()
+
+    const status = await appWindow.evaluate(() => window.api.getGoogleWorkspaceStatus())
+    expect(status).toMatchObject({
+      state: 'connected',
+      account: { email: 'fake@example.com', name: 'Fake User' },
+      scopes: ['email', 'openid', 'profile'],
+      message: 'Connected as fake@example.com.'
+    })
+    expect(status).not.toHaveProperty('accessToken')
+    expect(status).not.toHaveProperty('refreshToken')
+    expect(status).not.toHaveProperty('clientSecret')
+
+    const apiKeys = await appWindow.evaluate(() => Object.keys(window.api))
+    expect(apiKeys).not.toContain('clientSecret')
+    expect(apiKeys).not.toContain('accessToken')
+    expect(apiKeys).not.toContain('refreshToken')
+  })
+
+  test('surfaces a Google Workspace OAuth timeout', async ({ appWindow, electronApp }) => {
+    await electronApp.evaluate(() => {
+      const globalObject = globalThis as any
+      const originalSetTimeout = globalObject.setTimeout.bind(globalObject)
+      globalObject.setTimeout = ((handler: any, timeout?: number, ...args: any[]) =>
+        originalSetTimeout(
+          handler,
+          typeof timeout === 'number' ? Math.min(timeout, 50) : timeout,
+          ...args
+        )) as typeof setTimeout
+    })
+
+    await waitForChatShell(appWindow)
+    await projectSettingsLink(appWindow).click()
+
+    await electronApp.evaluate(({ shell }) => {
+      shell.openExternal = async () => undefined
+    })
+
+    await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
+    await expect(appWindow.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+    await appWindow.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(appWindow.getByRole('button', { name: 'Connecting', exact: true })).toBeVisible()
+    await expect(appWindow.getByRole('alert')).toContainText(
+      'Google OAuth connection timed out. Please try again.'
+    )
+    await expect(appWindow.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+    await expect(appWindow.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+    await expect(appWindow.getByRole('status')).toHaveCount(0)
+    await expect(
+      appWindow.getByText('Google Workspace is disconnected.', { exact: true })
+    ).toBeVisible()
   })
 })

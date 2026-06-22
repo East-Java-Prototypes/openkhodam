@@ -129,7 +129,7 @@ export function toGoogleWorkspaceStatus(
       state: 'not-configured',
       account: null,
       scopes: [],
-      message: 'Google OAuth client ID is not configured.',
+      message: 'Google OAuth client ID or client secret is not configured.',
       updatedAt
     }
   }
