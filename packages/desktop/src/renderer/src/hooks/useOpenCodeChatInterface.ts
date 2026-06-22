@@ -477,7 +477,6 @@ function mapSessionsToChats(sessions: OpenCodeSession[]): ProjectChat[] {
   return sessions.map(mapSessionToChat)
 }
 
-
 function mapProject(project: OpenCodeProject, index: number): ChatProject {
   return {
     id: getProjectRouteId(project, index),
@@ -499,7 +498,6 @@ function mapSessionToChat(
     updatedAt: formatTime(getSessionTime(session))
   }
 }
-
 
 function mapMessage(message: OpenCodeSessionMessage, index: number): ChatMessage {
   return {

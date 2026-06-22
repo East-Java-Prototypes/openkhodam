@@ -8,20 +8,19 @@ function TooltipProvider({
   delayDuration = 0,
   ...props
 }: Omit<TooltipPrimitive.Provider.Props, 'delay'> & { delayDuration?: number }) {
-  return (
-    <TooltipPrimitive.Provider
-      data-slot="tooltip-provider"
-      delay={delayDuration}
-      {...props}
-    />
-  )
+  return <TooltipPrimitive.Provider data-slot="tooltip-provider" delay={delayDuration} {...props} />
 }
 
 function Tooltip({ ...props }: TooltipPrimitive.Root.Props) {
   return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
 }
 
-function TooltipTrigger({ asChild, children, render, ...props }: TooltipPrimitive.Trigger.Props & { asChild?: boolean }) {
+function TooltipTrigger({
+  asChild,
+  children,
+  render,
+  ...props
+}: TooltipPrimitive.Trigger.Props & { asChild?: boolean }) {
   return (
     <TooltipPrimitive.Trigger
       data-slot="tooltip-trigger"

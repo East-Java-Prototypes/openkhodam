@@ -74,9 +74,11 @@ async function sendPrompt(page: Page, prompt: string): Promise<void> {
 }
 
 async function articleTexts(page: Page): Promise<string[]> {
-  return page.getByRole('article').evaluateAll((articles) =>
-    articles.map((article) => article.textContent?.replace(/\s+/g, ' ').trim() ?? '')
-  )
+  return page
+    .getByRole('article')
+    .evaluateAll((articles) =>
+      articles.map((article) => article.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+    )
 }
 
 test('renders the built desktop chat shell', async ({ appWindow }) => {
@@ -286,16 +288,16 @@ test('shows optimistic prompt before delayed stable message projection', async (
   await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toHaveCount(1)
 })
 
-test('keeps a newly sent prompt at the bottom of seeded chat history', async ({
-  appWindow
-}) => {
+test('keeps a newly sent prompt at the bottom of seeded chat history', async ({ appWindow }) => {
   await openSeededDeterministicChat(appWindow)
 
   const prompt = 'Order-sensitive prompt'
   await sendPrompt(appWindow, prompt)
   await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toBeVisible()
   await expect(appWindow.getByText(`Fake response for: ${prompt}`)).toBeVisible()
-  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(0)
+  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(
+    0
+  )
 
   await expect
     .poll(async () => articleTexts(appWindow))
