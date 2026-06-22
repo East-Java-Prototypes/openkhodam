@@ -528,9 +528,7 @@ function ChatMessageList({
                 className="absolute left-0 top-0 w-full pb-4"
                 style={{ transform: `translateY(${virtualRow.start}px)` }}
               >
-                <ChatMessageBubble
-                  message={message}
-                />
+                <ChatMessageBubble message={message} />
               </div>
             )
           })}
@@ -556,11 +554,7 @@ function StatusCard({
   )
 }
 
-function ChatMessageBubble({
-  message
-}: {
-  message: ChatMessage
-}): JSX.Element {
+function ChatMessageBubble({ message }: { message: ChatMessage }): JSX.Element {
   const isUser = message.author === 'user'
   return (
     <article
