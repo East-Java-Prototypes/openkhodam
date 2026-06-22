@@ -504,13 +504,14 @@ function ChatMessageList({
     const viewport = viewportRef.current
     if (!viewport || !trigger.isConnected) return
     let frame = 0
+    const maxFrames = 10
     const correct = (): void => {
       if (!trigger.isConnected || !viewport.isConnected) return
       const afterTop = trigger.getBoundingClientRect().top
       const delta = afterTop - beforeTop
-      if (Math.abs(delta) <= 1 || frame >= 4) return
-      viewport.scrollTop += delta
       frame += 1
+      if (Math.abs(delta) > 1) viewport.scrollTop += delta
+      if (frame >= maxFrames) return
       requestAnimationFrame(correct)
     }
     requestAnimationFrame(correct)
