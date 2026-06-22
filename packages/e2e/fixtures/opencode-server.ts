@@ -288,14 +288,20 @@ function longCollapsedToolMessage(id: string): unknown {
   return {
     info: { id, role: 'assistant', time: { created: Date.now() } },
     parts: [
-      { id: `${id}-text`, type: 'text', text: 'A collapsed tool should stay anchored when opened.' },
+      {
+        id: `${id}-text`,
+        type: 'text',
+        text: 'A collapsed tool should stay anchored when opened.'
+      },
       {
         id: `${id}-tool`,
         type: 'tool',
         name: 'plan',
         status: 'completed',
         input: { topic: 'scroll stability' },
-        output: Array.from({ length: 80 }, (_, index) => `Long tool output line ${index + 1}`).join('\n')
+        output: Array.from({ length: 80 }, (_, index) => `Long tool output line ${index + 1}`).join(
+          '\n'
+        )
       }
     ]
   }

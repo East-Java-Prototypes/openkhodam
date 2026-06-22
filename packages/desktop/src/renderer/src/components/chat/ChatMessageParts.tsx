@@ -18,11 +18,7 @@ const PART_COMPONENTS = {
   unknown: UnknownPart
 } satisfies PartComponentMap
 
-export function ChatMessageParts({
-  parts
-}: {
-  parts: ChatMessagePart[]
-}): JSX.Element {
+export function ChatMessageParts({ parts }: { parts: ChatMessagePart[] }): JSX.Element {
   return (
     <div className="space-y-3">
       {parts.map((part) => (
@@ -72,11 +68,7 @@ function StatusPart({ part }: { part: Extract<ChatMessagePart, { type: 'status' 
   )
 }
 
-function ToolPart({
-  part
-}: {
-  part: Extract<ChatMessagePart, { type: 'tool' }>
-}): JSX.Element {
+function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }): JSX.Element {
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const correctionTimersRef = useRef<number[]>([])
   const openRef = useRef(Boolean(part.error))

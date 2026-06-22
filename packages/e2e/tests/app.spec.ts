@@ -273,22 +273,30 @@ test('keeps a long collapsed tool disclosure anchored when opening it', async ({
   await expect(toggle).toBeVisible()
   const triggerBoxBefore = await toggle.boundingBox()
   expect(triggerBoxBefore).not.toBeNull()
-  const beforeScroll = await appWindow.locator('[data-slot="scroll-area-viewport"]').evaluate((el) => el.scrollTop)
+  const beforeScroll = await appWindow
+    .locator('[data-slot="scroll-area-viewport"]')
+    .evaluate((el) => el.scrollTop)
 
   await toggle.click()
   await expect(tool).toContainText('Long tool output line 80')
 
-  await expect.poll(async () => {
-    const triggerBox = await toggle.boundingBox()
-    return Math.abs((triggerBox?.y ?? 0) - (triggerBoxBefore?.y ?? 0))
-  }).toBeLessThan(2)
-  await expect.poll(async () => {
-    return appWindow.locator('[data-slot="scroll-area-viewport"]').evaluate((el) => el.scrollTop)
-  }).toBe(beforeScroll)
+  await expect
+    .poll(async () => {
+      const triggerBox = await toggle.boundingBox()
+      return Math.abs((triggerBox?.y ?? 0) - (triggerBoxBefore?.y ?? 0))
+    })
+    .toBeLessThan(2)
+  await expect
+    .poll(async () => {
+      return appWindow.locator('[data-slot="scroll-area-viewport"]').evaluate((el) => el.scrollTop)
+    })
+    .toBe(beforeScroll)
 
   const triggerBoxAfter = await toggle.boundingBox()
   expect(triggerBoxAfter).not.toBeNull()
-  const afterScroll = await appWindow.locator('[data-slot="scroll-area-viewport"]').evaluate((el) => el.scrollTop)
+  const afterScroll = await appWindow
+    .locator('[data-slot="scroll-area-viewport"]')
+    .evaluate((el) => el.scrollTop)
 
   expect(Math.abs((triggerBoxAfter?.y ?? 0) - (triggerBoxBefore?.y ?? 0))).toBeLessThan(2)
   expect(afterScroll).toBe(beforeScroll)
