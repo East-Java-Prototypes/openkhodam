@@ -498,11 +498,13 @@ function SidebarMenuButton({
       { className: cn(sidebarMenuButtonVariants({ variant, size }), className), children },
       props
     ),
-    render: tooltip
-      ? <TooltipTrigger render={asChild ? (children as React.ReactElement) : render} />
-      : asChild
-        ? (children as React.ReactElement)
-        : render,
+    render: tooltip ? (
+      <TooltipTrigger render={asChild ? (children as React.ReactElement) : render} />
+    ) : asChild ? (
+      (children as React.ReactElement)
+    ) : (
+      render
+    ),
     state: { slot: 'sidebar-menu-button', sidebar: 'menu-button', size, active: isActive }
   })
 
