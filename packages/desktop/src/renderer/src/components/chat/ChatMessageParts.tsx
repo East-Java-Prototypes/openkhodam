@@ -1,4 +1,4 @@
-import { useRef, useState, type JSX } from 'react'
+import { useEffect, useRef, useState, type JSX } from 'react'
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
@@ -7,7 +7,6 @@ import type { ChatMessagePart } from '../../hooks/useChatInterfaceData'
 type PartComponentMap = {
   [K in ChatMessagePart['type']]: (props: {
     part: Extract<ChatMessagePart, { type: K }>
-    onDisclosureOpen?: (trigger: HTMLElement, beforeTop: number) => void
   }) => JSX.Element
 }
 
@@ -20,25 +19,20 @@ const PART_COMPONENTS = {
 } satisfies PartComponentMap
 
 export function ChatMessageParts({
-  parts,
-  onDisclosureOpen
+  parts
 }: {
   parts: ChatMessagePart[]
-  onDisclosureOpen: (trigger: HTMLElement, beforeTop: number) => void
 }): JSX.Element {
   return (
     <div className="space-y-3">
       {parts.map((part) => (
-        <div key={part.id}>{renderPart(part, onDisclosureOpen)}</div>
+        <div key={part.id}>{renderPart(part)}</div>
       ))}
     </div>
   )
 }
 
-function renderPart(
-  part: ChatMessagePart,
-  onDisclosureOpen: (trigger: HTMLElement, beforeTop: number) => void
-): JSX.Element {
+function renderPart(part: ChatMessagePart): JSX.Element {
   switch (part.type) {
     case 'text':
       return <PART_COMPONENTS.text part={part} />
@@ -47,7 +41,7 @@ function renderPart(
     case 'status':
       return <PART_COMPONENTS.status part={part} />
     case 'tool':
-      return <PART_COMPONENTS.tool part={part} onDisclosureOpen={onDisclosureOpen} />
+      return <PART_COMPONENTS.tool part={part} />
     case 'unknown':
       return <PART_COMPONENTS.unknown part={part} />
   }
@@ -79,18 +73,59 @@ function StatusPart({ part }: { part: Extract<ChatMessagePart, { type: 'status' 
 }
 
 function ToolPart({
-  part,
-  onDisclosureOpen
+  part
 }: {
   part: Extract<ChatMessagePart, { type: 'tool' }>
-  onDisclosureOpen: (trigger: HTMLElement, beforeTop: number) => void
 }): JSX.Element {
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const correctionTimersRef = useRef<number[]>([])
+  const openRef = useRef(Boolean(part.error))
+  const correctionGenerationRef = useRef(0)
   const [open, setOpen] = useState(Boolean(part.error))
+  useEffect(() => {
+    openRef.current = open
+  }, [open])
+  const clearCorrectionTimers = (): void => {
+    for (const timer of correctionTimersRef.current) window.clearTimeout(timer)
+    correctionTimersRef.current = []
+  }
+  useEffect(() => clearCorrectionTimers, [])
+  const preserveTriggerTop = (beforeTop: number, generation: number): void => {
+    if (!openRef.current || generation !== correctionGenerationRef.current) return
+    const trigger = triggerRef.current
+    if (!trigger?.isConnected) return
+    const viewport = trigger.closest('[data-slot="scroll-area-viewport"]') as HTMLDivElement | null
+    if (!viewport?.isConnected) return
+    const currentTop = trigger.getBoundingClientRect().top
+    const delta = currentTop - beforeTop
+    if (Math.abs(delta) > 1 && openRef.current && generation === correctionGenerationRef.current) {
+      viewport.scrollTop += delta
+    }
+  }
+  const scheduleCorrectionPasses = (beforeTop: number): void => {
+    clearCorrectionTimers()
+    const generation = correctionGenerationRef.current
+    const runCorrection = (): void => {
+      preserveTriggerTop(beforeTop, generation)
+    }
+    requestAnimationFrame(runCorrection)
+    for (const delay of [0, 50, 100, 200, 400, 750]) {
+      correctionTimersRef.current.push(window.setTimeout(runCorrection, delay))
+    }
+  }
   const handleOpenChange = (nextOpen: boolean): void => {
     if (!open && nextOpen && triggerRef.current) {
       const beforeTop = triggerRef.current.getBoundingClientRect().top
-      onDisclosureOpen(triggerRef.current, beforeTop)
+      correctionGenerationRef.current += 1
+      openRef.current = true
+      setOpen(nextOpen)
+      scheduleCorrectionPasses(beforeTop)
+      return
+    }
+    if (open && !nextOpen) {
+      correctionGenerationRef.current += 1
+      openRef.current = false
+      clearCorrectionTimers()
     }
     setOpen(nextOpen)
   }

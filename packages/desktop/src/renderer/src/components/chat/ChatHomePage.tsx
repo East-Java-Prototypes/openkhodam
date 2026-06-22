@@ -500,23 +500,6 @@ function ChatMessageList({
 
   const initialScrollKey = messages.length > 0 ? messages[0]!.id : 'empty'
 
-  const handleDisclosureOpen = (trigger: HTMLElement, beforeTop: number): void => {
-    const viewport = viewportRef.current
-    if (!viewport || !trigger.isConnected) return
-    let frame = 0
-    const maxFrames = 10
-    const correct = (): void => {
-      if (!trigger.isConnected || !viewport.isConnected) return
-      const afterTop = trigger.getBoundingClientRect().top
-      const delta = afterTop - beforeTop
-      frame += 1
-      if (Math.abs(delta) > 1) viewport.scrollTop += delta
-      if (frame >= maxFrames) return
-      requestAnimationFrame(correct)
-    }
-    requestAnimationFrame(correct)
-  }
-
   useEffect(() => {
     if (lastInitialScrollKeyRef.current === initialScrollKey) return
     lastInitialScrollKeyRef.current = initialScrollKey
@@ -547,7 +530,6 @@ function ChatMessageList({
               >
                 <ChatMessageBubble
                   message={message}
-                  onDisclosureOpen={handleDisclosureOpen}
                 />
               </div>
             )
@@ -575,11 +557,9 @@ function StatusCard({
 }
 
 function ChatMessageBubble({
-  message,
-  onDisclosureOpen
+  message
 }: {
   message: ChatMessage
-  onDisclosureOpen: (trigger: HTMLElement, beforeTop: number) => void
 }): JSX.Element {
   const isUser = message.author === 'user'
   return (
@@ -595,7 +575,7 @@ function ChatMessageBubble({
           <span className="font-medium capitalize">{message.author}</span>
           <time>{message.createdAt}</time>
         </div>
-        <ChatMessageParts parts={message.parts} onDisclosureOpen={onDisclosureOpen} />
+        <ChatMessageParts parts={message.parts} />
       </div>
     </article>
   )
