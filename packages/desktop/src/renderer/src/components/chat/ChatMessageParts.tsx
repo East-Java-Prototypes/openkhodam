@@ -1,4 +1,4 @@
-import { useRef, type JSX } from 'react'
+import { useRef, useState, type JSX } from 'react'
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
@@ -7,7 +7,7 @@ import type { ChatMessagePart } from '../../hooks/useChatInterfaceData'
 type PartComponentMap = {
   [K in ChatMessagePart['type']]: (props: {
     part: Extract<ChatMessagePart, { type: K }>
-    onDisclosureOpen?: (trigger: HTMLElement) => void
+    onDisclosureOpen?: (trigger: HTMLElement, beforeTop: number) => void
   }) => JSX.Element
 }
 
@@ -24,7 +24,7 @@ export function ChatMessageParts({
   onDisclosureOpen
 }: {
   parts: ChatMessagePart[]
-  onDisclosureOpen: (trigger: HTMLElement) => void
+  onDisclosureOpen: (trigger: HTMLElement, beforeTop: number) => void
 }): JSX.Element {
   return (
     <div className="space-y-3">
@@ -37,7 +37,7 @@ export function ChatMessageParts({
 
 function renderPart(
   part: ChatMessagePart,
-  onDisclosureOpen: (trigger: HTMLElement) => void
+  onDisclosureOpen: (trigger: HTMLElement, beforeTop: number) => void
 ): JSX.Element {
   switch (part.type) {
     case 'text':
@@ -83,17 +83,23 @@ function ToolPart({
   onDisclosureOpen
 }: {
   part: Extract<ChatMessagePart, { type: 'tool' }>
-  onDisclosureOpen: (trigger: HTMLElement) => void
+  onDisclosureOpen: (trigger: HTMLElement, beforeTop: number) => void
 }): JSX.Element {
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const [open, setOpen] = useState(Boolean(part.error))
+  const handleOpenChange = (nextOpen: boolean): void => {
+    if (!open && nextOpen && triggerRef.current) {
+      const beforeTop = triggerRef.current.getBoundingClientRect().top
+      onDisclosureOpen(triggerRef.current, beforeTop)
+    }
+    setOpen(nextOpen)
+  }
   return (
     <Collapsible
-      defaultOpen={Boolean(part.error)}
+      open={open}
       className={`border p-3 text-sm ${part.error ? 'border-destructive/70' : 'border-border bg-background/60'}`}
       aria-label={`Tool ${part.name}`}
-      onOpenChange={(open) => {
-        if (open && triggerRef.current) onDisclosureOpen(triggerRef.current)
-      }}
+      onOpenChange={handleOpenChange}
     >
       <CollapsibleTrigger
         className="flex w-full flex-wrap items-center justify-between gap-2 text-left"

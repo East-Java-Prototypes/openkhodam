@@ -277,18 +277,14 @@ test('keeps a long collapsed tool disclosure anchored when opening it', async ({
 
   await toggle.click()
   await expect(tool).toContainText('Long tool output line 80')
-  await expect
-    .poll(async () => {
-      const [before, after] = await Promise.all([
-        toggle.boundingBox(),
-        appWindow.locator('[data-slot="scroll-area-viewport"]').evaluate((el) => el.scrollTop)
-      ])
-      return { before, after }
-    })
-    .toMatchObject({
-      before: { y: expect.closeTo(triggerBoxBefore?.y ?? 0, 2) },
-      after: beforeScroll
-    })
+
+  await expect.poll(async () => {
+    const triggerBox = await toggle.boundingBox()
+    return Math.abs((triggerBox?.y ?? 0) - (triggerBoxBefore?.y ?? 0))
+  }).toBeLessThan(2)
+  await expect.poll(async () => {
+    return appWindow.locator('[data-slot="scroll-area-viewport"]').evaluate((el) => el.scrollTop)
+  }).toBe(beforeScroll)
 
   const triggerBoxAfter = await toggle.boundingBox()
   expect(triggerBoxAfter).not.toBeNull()

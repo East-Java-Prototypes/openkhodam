@@ -500,10 +500,9 @@ function ChatMessageList({
 
   const initialScrollKey = messages.length > 0 ? messages[0]!.id : 'empty'
 
-  const handleDisclosureOpen = (trigger: HTMLElement): void => {
+  const handleDisclosureOpen = (trigger: HTMLElement, beforeTop: number): void => {
     const viewport = viewportRef.current
     if (!viewport || !trigger.isConnected) return
-    const beforeTop = trigger.getBoundingClientRect().top
     let frame = 0
     const correct = (): void => {
       if (!trigger.isConnected || !viewport.isConnected) return
@@ -579,7 +578,7 @@ function ChatMessageBubble({
   onDisclosureOpen
 }: {
   message: ChatMessage
-  onDisclosureOpen: (trigger: HTMLElement) => void
+  onDisclosureOpen: (trigger: HTMLElement, beforeTop: number) => void
 }): JSX.Element {
   const isUser = message.author === 'user'
   return (
