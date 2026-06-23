@@ -151,6 +151,9 @@ export function getGoogleWorkspaceClientId(): string | null {
   return process.env['OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID']?.trim() || null
 }
 
+// TODO(issue #25): Keep this POC-only secret path out of distributed builds; do not ship an
+// OpenKhodam-owned embedded client secret in the desktop app. Replace with BYO OAuth client
+// config or a token broker before this becomes a release strategy.
 function getGoogleWorkspaceClientSecret(): string | null {
   return process.env['OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET']?.trim() || null
 }
