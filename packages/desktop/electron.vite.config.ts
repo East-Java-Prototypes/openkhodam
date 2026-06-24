@@ -10,6 +10,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: 'src/main/index.ts',
+          'opencode-plugins/openkhodam-poc': 'src/main/opencode-plugins/openkhodam-poc.ts',
           'opencode-sidecar-worker': 'src/main/opencode-sidecar-worker.ts'
         }
       }

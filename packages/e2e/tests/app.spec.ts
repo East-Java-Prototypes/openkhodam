@@ -1,9 +1,11 @@
-import { dirname } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 import type { ElectronApplication } from '@playwright/test'
 import { expect, test, type Locator, type Page } from '../fixtures/electron'
 
 const repositoryDirectory = dirname(process.cwd())
+const desktopOutMainDirectory = join(repositoryDirectory, 'desktop', 'out', 'main')
 const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
 const projectChatLink = (page: Page): Locator =>
@@ -492,8 +494,20 @@ test('shows the real live events status surface without fake SSE data', async ({
   await expect(appWindow.getByText(/^(Live( · .*)?|Events paused)$/).first()).toBeVisible()
 })
 
-test('shows the real OpenCode sidecar settings surface', async ({ appWindow }) => {
+test('shows the real OpenCode sidecar settings surface', async ({ appWindow, electronApp }) => {
   await waitForChatShell(appWindow)
+
+  const userDataPath = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+  const runtimeConfigPath = join(userDataPath, 'opencode-sidecar', 'runtime-opencode-config.json')
+  const runtimeConfig = JSON.parse(await readFile(runtimeConfigPath, 'utf8')) as {
+    $schema: string
+    plugin: string[]
+  }
+  expect(runtimeConfig).toEqual({
+    $schema: 'https://opencode.ai/config.json',
+    plugin: [join(desktopOutMainDirectory, 'opencode-plugins', 'openkhodam-poc.js')]
+  })
+
   await projectSettingsLink(appWindow).click()
 
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/\/settings$/)

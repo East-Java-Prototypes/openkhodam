@@ -6,6 +6,10 @@ import { dirname, join, sep } from 'node:path'
 import { app, utilityProcess, type UtilityProcess } from 'electron'
 import type { OpenCodeConnection, OpenCodeSidecarStatus } from '@openkhodam/ui/types'
 
+import { resolveOpenKhodamPluginPath } from './opencode-plugin-path'
+import { createSidecarEnv } from './opencode-sidecar-env'
+import { writeRuntimeOpenCodeConfig } from './opencode-runtime-config'
+
 type HealthResponse = {
   healthy?: boolean
   version?: string
@@ -112,6 +116,27 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
   }
 
   async function startInner(): Promise<OpenCodeSidecarStatus> {
+    const userDataPath = app.getPath('userData')
+    const profileDir = join(userDataPath, 'opencode-sidecar')
+
+    let runtimeConfigPath: string
+    try {
+      // Write the managed runtime config before the sidecar worker starts so
+      // OpenCode only sees the bundled plugin through OPENCODE_CONFIG.
+      runtimeConfigPath = await writeRuntimeOpenCodeConfig(
+        userDataPath,
+        resolveOpenKhodamPluginPath({
+          baseDir: __dirname,
+          packaged: app.isPackaged,
+          resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+        })
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setStatus(createStatus('error', `Failed to write OpenCode runtime config: ${message}`))
+      return status
+    }
+
     const externalServer = resolveExternalTestServer()
     if (externalServer.enabled) {
       if ('error' in externalServer) {
@@ -149,7 +174,13 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
 
     const sidecarProcess = utilityProcess.fork(sidecarPath, [], {
       cwd: process.cwd(),
-      env: createSidecarEnv(password),
+      env: createSidecarEnv({
+        env: process.env,
+        password,
+        profileDir,
+        runtimeConfigPath,
+        username
+      }),
       serviceName,
       stdio: 'pipe'
     })
@@ -312,41 +343,6 @@ function createStatus(
     message,
     updatedAt: Date.now()
   }
-}
-
-function createSidecarEnv(password: string): NodeJS.ProcessEnv {
-  const profileDir = join(app.getPath('userData'), 'opencode-sidecar')
-
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    OPENCODE_CLIENT: 'openkhodam-desktop',
-    OPENCODE_CONFIG_DIR: join(profileDir, 'config'),
-    OPENCODE_SERVER_USERNAME: username,
-    OPENCODE_SERVER_PASSWORD: password,
-    XDG_CACHE_HOME: join(profileDir, 'cache'),
-    XDG_CONFIG_HOME: join(profileDir, 'config'),
-    XDG_DATA_HOME: join(profileDir, 'data'),
-    XDG_STATE_HOME: join(profileDir, 'state')
-  }
-
-  return {
-    ...env,
-    NO_PROXY: withLoopbackNoProxy(env.NO_PROXY),
-    no_proxy: withLoopbackNoProxy(env.no_proxy)
-  }
-}
-
-function withLoopbackNoProxy(value: string | undefined): string {
-  const items = (value ?? '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-
-  for (const item of ['127.0.0.1', 'localhost', '::1']) {
-    if (!items.some((current) => current.toLowerCase() === item)) items.push(item)
-  }
-
-  return items.join(',')
 }
 
 function resolveCorsOrigins(): string[] {
