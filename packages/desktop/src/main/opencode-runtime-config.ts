@@ -31,7 +31,10 @@ export async function writeRuntimeOpenCodeConfig(
   const handle = await open(temporaryPath, 'w', 0o600)
 
   try {
-    await handle.writeFile(`${JSON.stringify(createRuntimeOpenCodeConfig(pluginPath), null, 2)}\n`, 'utf8')
+    await handle.writeFile(
+      `${JSON.stringify(createRuntimeOpenCodeConfig(pluginPath), null, 2)}\n`,
+      'utf8'
+    )
     await handle.sync()
   } finally {
     await handle.close()

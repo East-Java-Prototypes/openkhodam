@@ -10,9 +10,9 @@ const desktopOutMainDirectory = join(testsDirectory, '..', '..', 'desktop', 'out
 const pluginBundlePath = join(desktopOutMainDirectory, 'opencode-plugins', 'openkhodam-poc.js')
 
 test('resolves the bundled and packaged OpenKhodam plugin paths', () => {
-  expect(
-    join('/tmp/openkhodam/out/main', 'opencode-plugins', 'openkhodam-poc.js')
-  ).toBe('/tmp/openkhodam/out/main/opencode-plugins/openkhodam-poc.js')
+  expect(join('/tmp/openkhodam/out/main', 'opencode-plugins', 'openkhodam-poc.js')).toBe(
+    '/tmp/openkhodam/out/main/opencode-plugins/openkhodam-poc.js'
+  )
   expect(
     join('/Applications/OpenKhodam.app/Contents/Resources', 'opencode-plugins', 'openkhodam-poc.js')
   ).toBe('/Applications/OpenKhodam.app/Contents/Resources/opencode-plugins/openkhodam-poc.js')
@@ -40,21 +40,23 @@ test('loads the compiled bundled plugin and exposes the ping tool', async () => 
     expect(typeof value).toBe('function')
   }
 
-  const [factory] = exportedValues as [() => Promise<{
-    'experimental.chat.system.transform': (
-      input: { model: { providerID: string; modelID: string }; sessionID?: string },
-      output: { system: string[] }
-    ) => Promise<void>
-    tool: {
-      openkhodam_plugin_ping: {
-        description: string
-        execute: (
-          args: { payload?: { message?: string } },
-          context: { directory: string; sessionID: string; worktree: string }
-        ) => Promise<string>
+  const [factory] = exportedValues as [
+    () => Promise<{
+      'experimental.chat.system.transform': (
+        input: { model: { providerID: string; modelID: string }; sessionID?: string },
+        output: { system: string[] }
+      ) => Promise<void>
+      tool: {
+        openkhodam_plugin_ping: {
+          description: string
+          execute: (
+            args: { payload?: { message?: string } },
+            context: { directory: string; sessionID: string; worktree: string }
+          ) => Promise<string>
+        }
       }
-    }
-  }>]
+    }>
+  ]
 
   const plugin = await factory()
 
@@ -76,10 +78,7 @@ test('loads the compiled bundled plugin and exposes the ping tool', async () => 
   }
 
   const echoed = JSON.parse(
-    await plugin.tool.openkhodam_plugin_ping.execute(
-      { payload: { message: 'hello' } },
-      pingContext
-    )
+    await plugin.tool.openkhodam_plugin_ping.execute({ payload: { message: 'hello' } }, pingContext)
   ) as {
     hasDirectory: boolean
     hasSessionID: boolean
