@@ -42,47 +42,43 @@ const pluginName = 'openkhodam-poc'
 const toolName = 'openkhodam_plugin_ping'
 const loadedMessage = `OpenKhodam Desktop loaded the bundled ${pluginName} plugin; ${toolName} is available.`
 
-// Export a single function so OpenCode's loader sees a loader-compatible
-// module shape when it imports the bundled artifact from OPENCODE_CONFIG.
-export default async function openkhodamPocPlugin(): Promise<OpenKhodamPocHooks> {
-  return {
-    tool: {
-      openkhodam_plugin_ping: {
-        description:
-          'Ping the bundled OpenKhodam plugin and optionally echo payload.message while returning a non-sensitive proof that session context is present.',
-        args: {
-          payload: {
-            additionalProperties: false,
-            description: 'Optional message payload. Leave it empty to get pong.',
-            properties: {
-              message: {
-                description: 'Optional message to echo back.',
-                type: 'string'
-              }
-            },
-            type: 'object'
-          }
-        },
-        async execute(args, context) {
-          const message =
-            typeof args.payload?.message === 'string' && args.payload.message.trim()
-              ? args.payload.message
-              : 'pong'
-
-          return JSON.stringify({
-            ok: true,
-            plugin: pluginName,
-            tool: toolName,
-            message,
-            hasSessionID: Boolean(context.sessionID),
-            hasDirectory: Boolean(context.directory),
-            hasWorktree: Boolean(context.worktree)
-          })
+export const OpenKhodamPoc = async (): Promise<OpenKhodamPocHooks> => ({
+  tool: {
+    openkhodam_plugin_ping: {
+      description:
+        'Ping the bundled OpenKhodam plugin and optionally echo payload.message while returning a non-sensitive proof that session context is present.',
+      args: {
+        payload: {
+          additionalProperties: false,
+          description: 'Optional message payload. Leave it empty to get pong.',
+          properties: {
+            message: {
+              description: 'Optional message to echo back.',
+              type: 'string'
+            }
+          },
+          type: 'object'
         }
+      },
+      async execute(args, context) {
+        const message =
+          typeof args.payload?.message === 'string' && args.payload.message.trim()
+            ? args.payload.message
+            : 'pong'
+
+        return JSON.stringify({
+          ok: true,
+          plugin: pluginName,
+          tool: toolName,
+          message,
+          hasSessionID: Boolean(context.sessionID),
+          hasDirectory: Boolean(context.directory),
+          hasWorktree: Boolean(context.worktree)
+        })
       }
-    },
-    'experimental.chat.system.transform': async (_input, output) => {
-      output.system.push(loadedMessage)
     }
+  },
+  'experimental.chat.system.transform': async (_input, output) => {
+    output.system.push(loadedMessage)
   }
-}
+})

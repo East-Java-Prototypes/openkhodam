@@ -10,12 +10,13 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!out/main/opencode-plugins/**'
+  - '!out/opencode-plugins/**'
 asarUnpack:
   - resources/**
   - node_modules/opencode-ai/bin/**
 extraResources:
-  - from: out/main/opencode-plugins/openkhodam-poc.js
-    to: opencode-plugins/openkhodam-poc.js
+  - from: out/opencode-plugins/openkhodam-poc.mjs
+    to: opencode-plugins/openkhodam-poc.mjs
 win:
   executableName: openkhodam
 nsis:
