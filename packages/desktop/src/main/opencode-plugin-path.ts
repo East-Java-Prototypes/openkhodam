@@ -1,16 +1,19 @@
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 const pluginDirectory = 'opencode-plugins'
-const pluginFileName = 'openkhodam-poc.js'
+const builtPluginFileName = 'openkhodam-poc.mjs'
+const sourcePluginFileName = 'openkhodam-poc.ts'
 
 export type OpenKhodamPluginPathOptions = {
   baseDir?: string
+  dev?: boolean
   packaged?: boolean
   resourcesPath?: string
 }
 
 export function resolveOpenKhodamPluginPath({
   baseDir,
+  dev = false,
   packaged = false,
   resourcesPath
 }: OpenKhodamPluginPathOptions = {}): string {
@@ -22,14 +25,30 @@ export function resolveOpenKhodamPluginPath({
       )
     }
 
-    return join(resolvedResourcesPath, pluginDirectory, pluginFileName)
+    return join(resolvedResourcesPath, pluginDirectory, builtPluginFileName)
   }
 
   if (!baseDir) {
     throw new Error('baseDir is required to resolve the OpenKhodam plugin path.')
   }
 
-  return join(baseDir, pluginDirectory, pluginFileName)
+  const desktopDirectory = resolveDesktopDirectory(baseDir)
+  if (dev) {
+    return join(desktopDirectory, 'src', 'main', pluginDirectory, sourcePluginFileName)
+  }
+
+  return join(desktopDirectory, 'out', pluginDirectory, builtPluginFileName)
+}
+
+function resolveDesktopDirectory(baseDir: string): string {
+  const currentDirectory = basename(baseDir)
+  const parentDirectory = basename(dirname(baseDir))
+
+  if (currentDirectory === 'main' && (parentDirectory === 'out' || parentDirectory === 'src')) {
+    return dirname(dirname(baseDir))
+  }
+
+  return baseDir
 }
 
 function getResourcesPath(): string | undefined {

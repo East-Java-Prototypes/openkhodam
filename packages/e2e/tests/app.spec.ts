@@ -5,7 +5,7 @@ import type { ElectronApplication } from '@playwright/test'
 import { expect, test, type Locator, type Page } from '../fixtures/electron'
 
 const repositoryDirectory = dirname(process.cwd())
-const desktopOutMainDirectory = join(repositoryDirectory, 'desktop', 'out', 'main')
+const desktopOutDirectory = join(repositoryDirectory, 'desktop', 'out')
 const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
 const projectChatLink = (page: Page): Locator =>
@@ -505,7 +505,7 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   }
   expect(runtimeConfig).toEqual({
     $schema: 'https://opencode.ai/config.json',
-    plugin: [join(desktopOutMainDirectory, 'opencode-plugins', 'openkhodam-poc.js')]
+    plugin: [join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs')]
   })
 
   await projectSettingsLink(appWindow).click()

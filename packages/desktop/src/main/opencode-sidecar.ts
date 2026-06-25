@@ -127,6 +127,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
         userDataPath,
         resolveOpenKhodamPluginPath({
           baseDir: __dirname,
+          dev: Boolean(process.env.ELECTRON_RENDERER_URL),
           packaged: app.isPackaged,
           resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
         })
