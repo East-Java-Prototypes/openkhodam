@@ -28,13 +28,13 @@ export type OpenKhodamConfig = {
   }
 }
 
-const CONFIG_FILE_NAME = 'openkhodam-config.json'
+export const OPENKHODAM_CONFIG_FILE_NAME = 'openkhodam-config.json'
 
-export class OpenKhodamConfigStore {
+export class OpenKhodamConfigFileStore {
   readonly filePath: string
 
-  constructor(userDataPath: string) {
-    this.filePath = join(userDataPath, CONFIG_FILE_NAME)
+  constructor(filePath: string) {
+    this.filePath = filePath
   }
 
   async read(): Promise<OpenKhodamConfig> {
@@ -100,6 +100,12 @@ export class OpenKhodamConfigStore {
     }
     await this.write(config)
     return toGoogleWorkspaceStatus(config, configured)
+  }
+}
+
+export class OpenKhodamConfigStore extends OpenKhodamConfigFileStore {
+  constructor(userDataPath: string) {
+    super(join(userDataPath, OPENKHODAM_CONFIG_FILE_NAME))
   }
 }
 

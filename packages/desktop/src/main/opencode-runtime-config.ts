@@ -12,16 +12,16 @@ export function runtimeOpenCodeConfigPath(userDataPath: string): string {
   return join(userDataPath, 'opencode-sidecar', runtimeConfigFileName)
 }
 
-export function createRuntimeOpenCodeConfig(pluginPath: string): RuntimeOpenCodeConfig {
+export function createRuntimeOpenCodeConfig(pluginPaths: string | string[]): RuntimeOpenCodeConfig {
   return {
     $schema: 'https://opencode.ai/config.json',
-    plugin: [pluginPath]
+    plugin: Array.isArray(pluginPaths) ? pluginPaths : [pluginPaths]
   }
 }
 
 export async function writeRuntimeOpenCodeConfig(
   userDataPath: string,
-  pluginPath: string
+  pluginPaths: string | string[]
 ): Promise<string> {
   const filePath = runtimeOpenCodeConfigPath(userDataPath)
   const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
@@ -32,7 +32,7 @@ export async function writeRuntimeOpenCodeConfig(
 
   try {
     await handle.writeFile(
-      `${JSON.stringify(createRuntimeOpenCodeConfig(pluginPath), null, 2)}\n`,
+      `${JSON.stringify(createRuntimeOpenCodeConfig(pluginPaths), null, 2)}\n`,
       'utf8'
     )
     await handle.sync()

@@ -8,6 +8,7 @@ const repositoryDirectory = dirname(process.cwd())
 const desktopOutDirectory = join(repositoryDirectory, 'desktop', 'out')
 const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
+const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
 const projectSettingsLink = (page: Page): Locator =>
@@ -111,7 +112,7 @@ async function waitForMainProcessValue(
 }
 
 async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplication): Promise<void> {
-  await electronApp.evaluate(({ shell }) => {
+  await electronApp.evaluate(({ shell }, driveScope) => {
     const globalObject = globalThis as any
 
     const capture =
@@ -139,7 +140,7 @@ async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplicati
           JSON.stringify({
             access_token: 'fake-access-token',
             expires_in: 3600,
-            scope: 'openid email profile',
+            scope: `openid email profile ${driveScope}`,
             token_type: 'Bearer'
           }),
           { status: 200, headers: { 'content-type': 'application/json' } }
@@ -156,7 +157,7 @@ async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplicati
 
       return originalFetch(input, init)
     }
-  })
+  }, googleDriveMetadataReadonlyScope)
 }
 
 test('renders the built desktop chat shell', async ({ appWindow }) => {
@@ -505,7 +506,10 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   }
   expect(runtimeConfig).toEqual({
     $schema: 'https://opencode.ai/config.json',
-    plugin: [join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs')]
+    plugin: [
+      join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs'),
+      join(desktopOutDirectory, 'opencode-plugins', 'google-workspace.mjs')
+    ]
   })
 
   await projectSettingsLink(appWindow).click()
@@ -614,6 +618,9 @@ test.describe('Google Workspace connect cancellation', () => {
 
     expect(redirectUri).not.toBeNull()
     expect(state).not.toBeNull()
+    expect(authUrl.searchParams.get('scope')?.split(' ').sort()).toEqual(
+      ['email', googleDriveMetadataReadonlyScope, 'openid', 'profile'].sort()
+    )
 
     await fetch(`${redirectUri}?code=test-auth-code&state=${state}`)
 
@@ -648,7 +655,7 @@ test.describe('Google Workspace connect cancellation', () => {
     expect(status).toMatchObject({
       state: 'connected',
       account: { email: 'fake@example.com', name: 'Fake User' },
-      scopes: ['email', 'openid', 'profile'],
+      scopes: ['email', googleDriveMetadataReadonlyScope, 'openid', 'profile'],
       message: 'Connected as fake@example.com.'
     })
     expect(status).not.toHaveProperty('accessToken')

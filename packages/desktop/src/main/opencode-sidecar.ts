@@ -6,7 +6,8 @@ import { dirname, join, sep } from 'node:path'
 import { app, utilityProcess, type UtilityProcess } from 'electron'
 import type { OpenCodeConnection, OpenCodeSidecarStatus } from '@openkhodam/ui/types'
 
-import { resolveOpenKhodamPluginPath } from './opencode-plugin-path'
+import { OPENKHODAM_CONFIG_FILE_NAME } from './integrations/openkhodam-config'
+import { resolveOpenKhodamPluginPaths } from './opencode-plugin-path'
 import { createSidecarEnv } from './opencode-sidecar-env'
 import { writeRuntimeOpenCodeConfig } from './opencode-runtime-config'
 
@@ -118,14 +119,15 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
   async function startInner(): Promise<OpenCodeSidecarStatus> {
     const userDataPath = app.getPath('userData')
     const profileDir = join(userDataPath, 'opencode-sidecar')
+    const openKhodamConfigPath = join(userDataPath, OPENKHODAM_CONFIG_FILE_NAME)
 
     let runtimeConfigPath: string
     try {
       // Write the managed runtime config before the sidecar worker starts so
-      // OpenCode only sees the bundled plugin through OPENCODE_CONFIG.
+      // OpenCode only sees the bundled plugins through OPENCODE_CONFIG.
       runtimeConfigPath = await writeRuntimeOpenCodeConfig(
         userDataPath,
-        resolveOpenKhodamPluginPath({
+        resolveOpenKhodamPluginPaths({
           baseDir: __dirname,
           dev: Boolean(process.env.ELECTRON_RENDERER_URL),
           packaged: app.isPackaged,
@@ -176,7 +178,10 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
     const sidecarProcess = utilityProcess.fork(sidecarPath, [], {
       cwd: process.cwd(),
       env: createSidecarEnv({
-        env: process.env,
+        env: {
+          ...process.env,
+          OPENKHODAM_CONFIG_PATH: openKhodamConfigPath
+        },
         password,
         profileDir,
         runtimeConfigPath,

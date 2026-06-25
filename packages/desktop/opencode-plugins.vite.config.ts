@@ -5,10 +5,17 @@ export default defineConfig({
   build: {
     emptyOutDir: true,
     lib: {
-      entry: resolve(__dirname, 'src/main/opencode-plugins/openkhodam-poc.ts'),
-      fileName: () => 'openkhodam-poc.mjs',
+      entry: {
+        'google-workspace': resolve(__dirname, 'src/main/opencode-plugins/google-workspace.ts'),
+        'openkhodam-poc': resolve(__dirname, 'src/main/opencode-plugins/openkhodam-poc.ts')
+      },
+      fileName: (_format, entryName) => `${entryName}.mjs`,
       formats: ['es']
     },
-    outDir: 'out/opencode-plugins'
+    outDir: 'out/opencode-plugins',
+    rollupOptions: {
+      external: [/^node:/]
+    },
+    target: 'node22'
   }
 })
