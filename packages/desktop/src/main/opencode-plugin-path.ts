@@ -1,8 +1,16 @@
 import { basename, dirname, join } from 'node:path'
 
 const pluginDirectory = 'opencode-plugins'
-const builtPluginFileName = 'openkhodam-poc.mjs'
-const sourcePluginFileName = 'openkhodam-poc.ts'
+const pluginFiles = [
+  {
+    built: 'openkhodam-poc.mjs',
+    source: 'openkhodam-poc.ts'
+  },
+  {
+    built: 'google-workspace.mjs',
+    source: 'google-workspace.ts'
+  }
+] as const
 
 export type OpenKhodamPluginPathOptions = {
   baseDir?: string
@@ -17,6 +25,15 @@ export function resolveOpenKhodamPluginPath({
   packaged = false,
   resourcesPath
 }: OpenKhodamPluginPathOptions = {}): string {
+  return resolveOpenKhodamPluginPaths({ baseDir, dev, packaged, resourcesPath })[0]
+}
+
+export function resolveOpenKhodamPluginPaths({
+  baseDir,
+  dev = false,
+  packaged = false,
+  resourcesPath
+}: OpenKhodamPluginPathOptions = {}): string[] {
   if (packaged) {
     const resolvedResourcesPath = resourcesPath?.trim() || getResourcesPath()
     if (!resolvedResourcesPath) {
@@ -25,7 +42,7 @@ export function resolveOpenKhodamPluginPath({
       )
     }
 
-    return join(resolvedResourcesPath, pluginDirectory, builtPluginFileName)
+    return pluginFiles.map((plugin) => join(resolvedResourcesPath, pluginDirectory, plugin.built))
   }
 
   if (!baseDir) {
@@ -34,10 +51,12 @@ export function resolveOpenKhodamPluginPath({
 
   const desktopDirectory = resolveDesktopDirectory(baseDir)
   if (dev) {
-    return join(desktopDirectory, 'src', 'main', pluginDirectory, sourcePluginFileName)
+    return pluginFiles.map((plugin) =>
+      join(desktopDirectory, 'src', 'main', pluginDirectory, plugin.source)
+    )
   }
 
-  return join(desktopDirectory, 'out', pluginDirectory, builtPluginFileName)
+  return pluginFiles.map((plugin) => join(desktopDirectory, 'out', pluginDirectory, plugin.built))
 }
 
 function resolveDesktopDirectory(baseDir: string): string {

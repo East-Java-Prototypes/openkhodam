@@ -10,6 +10,11 @@ const testsDirectory = dirname(fileURLToPath(import.meta.url))
 const desktopDirectory = join(testsDirectory, '..', '..', 'desktop')
 const desktopOutDirectory = join(desktopDirectory, 'out')
 const builtPluginPath = join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs')
+const builtGoogleWorkspacePluginPath = join(
+  desktopOutDirectory,
+  'opencode-plugins',
+  'google-workspace.mjs'
+)
 const sourcePluginPath = join(
   desktopDirectory,
   'src',
@@ -17,7 +22,16 @@ const sourcePluginPath = join(
   'opencode-plugins',
   'openkhodam-poc.ts'
 )
+const sourceGoogleWorkspacePluginPath = join(
+  desktopDirectory,
+  'src',
+  'main',
+  'opencode-plugins',
+  'google-workspace.ts'
+)
 const toolName = 'openkhodam_plugin_ping'
+const googleDriveToolName = 'google_drive_search_files'
+const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
 
 type OpenKhodamPocPlugin = {
   'experimental.chat.system.transform': (
@@ -35,18 +49,63 @@ type OpenKhodamPocPlugin = {
   }
 }
 
+type GoogleWorkspacePlugin = {
+  tool: {
+    google_drive_search_files: {
+      description: string
+      execute: (
+        args: { limit?: number; query?: string },
+        context: { abort?: AbortSignal }
+      ) => Promise<string>
+    }
+  }
+}
+
+type OpenKhodamConfigFixture = {
+  version: 1
+  integrations: {
+    googleWorkspace: {
+      account: { email: string | null; name: string | null } | null
+      scopes: string[]
+      token: {
+        accessToken: string
+        expiresAt: number | null
+        idToken: string | null
+        refreshToken: string | null
+        tokenType: string | null
+      } | null
+      updatedAt: number | null
+    }
+  }
+}
+
 test('resolves the bundled and packaged OpenKhodam plugin paths', () => {
   expect(sourcePluginPath).toBe(
     join(desktopDirectory, 'src', 'main', 'opencode-plugins', 'openkhodam-poc.ts')
   )
+  expect(sourceGoogleWorkspacePluginPath).toBe(
+    join(desktopDirectory, 'src', 'main', 'opencode-plugins', 'google-workspace.ts')
+  )
   expect(builtPluginPath).toBe(join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs'))
+  expect(builtGoogleWorkspacePluginPath).toBe(
+    join(desktopOutDirectory, 'opencode-plugins', 'google-workspace.mjs')
+  )
 
   const resourcesPath = join('/Applications', 'OpenKhodam.app', 'Contents', 'Resources')
   const packagedPluginPath = join(resourcesPath, 'opencode-plugins', 'openkhodam-poc.mjs')
+  const packagedGoogleWorkspacePluginPath = join(
+    resourcesPath,
+    'opencode-plugins',
+    'google-workspace.mjs'
+  )
   expect(packagedPluginPath).toBe(
     '/Applications/OpenKhodam.app/Contents/Resources/opencode-plugins/openkhodam-poc.mjs'
   )
+  expect(packagedGoogleWorkspacePluginPath).toBe(
+    '/Applications/OpenKhodam.app/Contents/Resources/opencode-plugins/google-workspace.mjs'
+  )
   expect(packagedPluginPath).not.toContain('app.asar')
+  expect(packagedGoogleWorkspacePluginPath).not.toContain('app.asar')
 })
 
 test('keeps the packaged plugin copy target aligned with the runtime path', async () => {
@@ -54,6 +113,8 @@ test('keeps the packaged plugin copy target aligned with the runtime path', asyn
 
   expect(builderConfig).toContain('from: out/opencode-plugins/openkhodam-poc.mjs')
   expect(builderConfig).toContain('to: opencode-plugins/openkhodam-poc.mjs')
+  expect(builderConfig).toContain('from: out/opencode-plugins/google-workspace.mjs')
+  expect(builderConfig).toContain('to: opencode-plugins/google-workspace.mjs')
 })
 
 test('loads the ESM bundled plugin with the OpenCode loader-compatible module shape', async () => {
@@ -112,19 +173,245 @@ test('loads the ESM bundled plugin with the OpenCode loader-compatible module sh
   expect(pong.message).toBe('pong')
 })
 
+test('loads the Google Workspace ESM plugin and searches Drive with safe metadata', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-drive-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalClientId = process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID
+  const originalClientSecret = process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET
+  let tokenBody: string | null = null
+  let driveAuthorization: string | null = null
+  let driveUrl: URL | null = null
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', 'openid', 'profile', googleDriveMetadataReadonlyScope],
+    token: {
+      accessToken: 'expired-access-token',
+      expiresAt: Date.now() - 1_000,
+      idToken: 'old-id-token',
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now() - 1_000
+  })
+
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID = 'fake-client-id'
+  process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET = 'fake-client-secret'
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url === 'https://oauth2.googleapis.com/token') {
+      const body = init?.body
+      tokenBody = body instanceof URLSearchParams ? body.toString() : (body?.toString() ?? null)
+      return new Response(
+        JSON.stringify({
+          access_token: 'new-access-token',
+          expires_in: 3600,
+          scope: `openid email profile ${googleDriveMetadataReadonlyScope}`,
+          token_type: 'Bearer'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://www.googleapis.com/drive/v3/files')) {
+      driveUrl = new URL(url)
+      driveAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          files: [
+            {
+              accessToken: 'should-not-leak',
+              id: 'file-1',
+              mimeType: 'application/pdf',
+              modifiedTime: '2026-06-25T12:00:00.000Z',
+              name: 'Budget Plan',
+              owners: [{ emailAddress: 'owner@example.com' }],
+              webViewLink: 'https://drive.google.com/file/d/file-1/view'
+            }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    expect(plugin.tool.google_drive_search_files.description).toContain('metadata only')
+
+    const output = JSON.parse(
+      await plugin.tool.google_drive_search_files.execute(
+        { limit: 50, query: "budget's \\ plan" },
+        {}
+      )
+    ) as {
+      files: Array<Record<string, unknown>>
+    }
+
+    expect(tokenBody).not.toBeNull()
+    const tokenParams = new URLSearchParams(tokenBody ?? '')
+    expect(tokenParams.get('client_id')).toBe('fake-client-id')
+    expect(tokenParams.get('client_secret')).toBe('fake-client-secret')
+    expect(tokenParams.get('grant_type')).toBe('refresh_token')
+    expect(tokenParams.get('refresh_token')).toBe('refresh-token')
+    expect(driveAuthorization).toBe('Bearer new-access-token')
+    expect(driveUrl?.searchParams.get('pageSize')).toBe('20')
+    expect(driveUrl?.searchParams.get('fields')).toBe(
+      'files(id,name,mimeType,modifiedTime,webViewLink)'
+    )
+    expect(driveUrl?.searchParams.get('q')).toBe(
+      "name contains 'budget\\'s \\\\ plan' and trashed = false"
+    )
+    expect(output).toEqual({
+      files: [
+        {
+          id: 'file-1',
+          mimeType: 'application/pdf',
+          modifiedTime: '2026-06-25T12:00:00.000Z',
+          name: 'Budget Plan',
+          webViewLink: 'https://drive.google.com/file/d/file-1/view'
+        }
+      ]
+    })
+
+    const outputText = JSON.stringify(output)
+    expect(outputText).not.toContain('expired-access-token')
+    expect(outputText).not.toContain('new-access-token')
+    expect(outputText).not.toContain('refresh-token')
+    expect(outputText).not.toContain('should-not-leak')
+    expect(outputText).not.toContain('owner@example.com')
+
+    const persisted = JSON.parse(await readFile(configPath, 'utf8')) as OpenKhodamConfigFixture
+    expect(persisted.integrations.googleWorkspace.token?.accessToken).toBe('new-access-token')
+    expect(persisted.integrations.googleWorkspace.token?.refreshToken).toBe('refresh-token')
+    expect(persisted.integrations.googleWorkspace.scopes).toEqual([
+      'email',
+      googleDriveMetadataReadonlyScope,
+      'openid',
+      'profile'
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID', originalClientId)
+    restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET', originalClientSecret)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('returns a clear Settings connection error when Google Workspace is disconnected', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-disconnected-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
+    ).rejects.toThrow(
+      'Google Workspace is disconnected. Connect Google Workspace in Settings before using google_drive_search_files.'
+    )
+  } finally {
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('returns a clear reconnect error when the Drive metadata scope is missing', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-missing-scope-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
+    ).rejects.toThrow(
+      'Google Drive access is not enabled. Reconnect Google Workspace in Settings to grant Drive metadata read-only access.'
+    )
+  } finally {
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+async function loadGoogleWorkspacePlugin(): Promise<GoogleWorkspacePlugin> {
+  const pluginModule = (await import(pathToFileURL(builtGoogleWorkspacePluginPath).href)) as Record<
+    string,
+    unknown
+  >
+
+  expect(Object.keys(pluginModule)).toEqual(['GoogleWorkspace'])
+  expect(typeof pluginModule.GoogleWorkspace).toBe('function')
+
+  return (pluginModule.GoogleWorkspace as () => Promise<GoogleWorkspacePlugin>)()
+}
+
+async function writeOpenKhodamConfig(
+  configPath: string,
+  googleWorkspace: OpenKhodamConfigFixture['integrations']['googleWorkspace']
+): Promise<void> {
+  await mkdir(dirname(configPath), { recursive: true })
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        integrations: {
+          googleWorkspace
+        }
+      } satisfies OpenKhodamConfigFixture,
+      null,
+      2
+    )}\n`,
+    'utf8'
+  )
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = value
+}
+
 test('registers the ping tool from the ESM artifact through the real OpenCode loader', async () => {
   test.setTimeout(90_000)
 
-  await expectOpenCodeLoadsPlugin(builtPluginPath)
+  await expectOpenCodeLoadsPlugins([builtPluginPath, builtGoogleWorkspacePluginPath])
 })
 
 test('registers the ping tool from the TS source through the real OpenCode loader', async () => {
   test.setTimeout(90_000)
 
-  await expectOpenCodeLoadsPlugin(sourcePluginPath)
+  await expectOpenCodeLoadsPlugins([sourcePluginPath, sourceGoogleWorkspacePluginPath])
 })
 
-async function expectOpenCodeLoadsPlugin(pluginPath: string): Promise<void> {
+async function expectOpenCodeLoadsPlugins(pluginPaths: string[]): Promise<void> {
   const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-opencode-loader-'))
   const runtimeConfigPath = join(userDataPath, 'opencode-sidecar', 'runtime-opencode-config.json')
 
@@ -134,7 +421,7 @@ async function expectOpenCodeLoadsPlugin(pluginPath: string): Promise<void> {
     `${JSON.stringify(
       {
         $schema: 'https://opencode.ai/config.json',
-        plugin: [pluginPath]
+        plugin: pluginPaths
       },
       null,
       2
@@ -145,11 +432,16 @@ async function expectOpenCodeLoadsPlugin(pluginPath: string): Promise<void> {
   const server = await startOpenCodeServe(createOpenCodeSmokeEnv(userDataPath, runtimeConfigPath))
 
   try {
-    const response = await fetch(`${server.url}/experimental/tool/ids`)
+    const response = await fetch(`${server.url}/experimental/tool/ids`, {
+      signal: AbortSignal.timeout(30_000)
+    }).catch((error) => {
+      throw new Error(`Failed to fetch OpenCode tool IDs: ${String(error)}\n${server.logs()}`)
+    })
     const body = await response.text()
 
     expect(response.status, `${body}\n${server.logs()}`).toBe(200)
     expect(JSON.parse(body) as string[]).toContain(toolName)
+    expect(JSON.parse(body) as string[]).toContain(googleDriveToolName)
     expect(server.logs()).not.toMatch(/failed to load plugin/i)
   } finally {
     await server.stop()
@@ -165,6 +457,7 @@ function createOpenCodeSmokeEnv(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: userDataPath,
+    OPENKHODAM_CONFIG_PATH: join(userDataPath, 'openkhodam-config.json'),
     OPENCODE_AUTH_CONTENT: '{}',
     OPENCODE_CLIENT: 'openkhodam-desktop',
     OPENCODE_CONFIG: runtimeConfigPath,
