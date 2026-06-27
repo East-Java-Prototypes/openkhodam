@@ -6,12 +6,21 @@ import type { GoogleWorkspaceIntegrationStatus } from '@openkhodam/ui/types'
 
 import type { GoogleWorkspaceAccountConfig, GoogleWorkspaceTokenConfig } from './openkhodam-config'
 import { OpenKhodamConfigStore } from './openkhodam-config'
-import { GOOGLE_DRIVE_METADATA_READONLY_SCOPE } from './google-workspace-runtime'
+import {
+  GOOGLE_DOCS_DOCUMENTS_SCOPE,
+  GOOGLE_DRIVE_METADATA_READONLY_SCOPE
+} from './google-workspace-runtime'
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo'
-const GOOGLE_SCOPES = ['openid', 'email', 'profile', GOOGLE_DRIVE_METADATA_READONLY_SCOPE]
+const GOOGLE_SCOPES = [
+  'openid',
+  'email',
+  'profile',
+  GOOGLE_DRIVE_METADATA_READONLY_SCOPE,
+  GOOGLE_DOCS_DOCUMENTS_SCOPE
+]
 const ONE_MINUTE_MS = 60 * 1000
 const GOOGLE_OAUTH_TIMEOUT_MS = 5 * ONE_MINUTE_MS
 
