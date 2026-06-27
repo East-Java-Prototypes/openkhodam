@@ -20,6 +20,7 @@ import {
 import {
   type OpenCodeSession,
   type OpenCodeSessionDetails,
+  isRenderableSession,
   useOpenCodeSession,
   useProjectSessions,
   useSessionMessages
@@ -216,7 +217,16 @@ export function useOpenCodeSessionRoute(
   const [optimisticPrompts, setOptimisticPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
   const queryClient = useQueryClient()
   const { sessionQuery } = useOpenCodeSession(directory, sessionID)
-  const { messagesQuery } = useSessionMessages(directory, sessionID)
+  const activeSessionFromList = sessions.find((session) => session.id === sessionID) ?? null
+  const fetchedSession = sessionQuery.data
+  const fetchedSessionIsRenderable = fetchedSession ? isRenderableSession(fetchedSession) : false
+  const activeSession = fetchedSession
+    ? fetchedSessionIsRenderable
+      ? mapSessionToChat(fetchedSession)
+      : null
+    : activeSessionFromList
+  const messageSessionID = activeSession ? sessionID : null
+  const { messagesQuery } = useSessionMessages(directory, messageSessionID)
   const models = useOpenCodeModels(directory)
   const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(
     directory,
@@ -236,18 +246,15 @@ export function useOpenCodeSessionRoute(
   const sessionEventError = sessionEventErrors.find(
     (error) => error.sessionID === sessionID || (!error.sessionID && error.directory === directory)
   )
-  const activeSessionFromList = sessions.find((session) => session.id === sessionID) ?? null
-  const activeSession = sessionQuery.data
-    ? mapSessionToChat(sessionQuery.data)
-    : activeSessionFromList
   const isSending = sendPromptMutation.isPending
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
 
   const mappedMessages = useMemo(() => messages.map(mapMessage), [messages])
   const refetchMessages = messagesQuery.refetch
   const visibleMessages = useMemo(
-    () => appendOptimisticPrompts(mappedMessages, optimisticPrompts, sessionID),
-    [mappedMessages, optimisticPrompts, sessionID]
+    () =>
+      activeSession ? appendOptimisticPrompts(mappedMessages, optimisticPrompts, sessionID) : [],
+    [activeSession, mappedMessages, optimisticPrompts, sessionID]
   )
 
   useEffect(() => {
