@@ -1,5 +1,6 @@
 import {
-  appendTextToGoogleDocDocument,
+  editGoogleDocDocument,
+  type GoogleDocsEditOperation,
   readGoogleDocDocument,
   searchGoogleDriveFiles
 } from '../integrations/google-workspace-runtime'
@@ -13,9 +14,14 @@ type GoogleDocsReadToolArgs = {
   documentId?: string
 }
 
-type GoogleDocsAppendTextToolArgs = {
+type GoogleDocsEditToolArgs = {
   documentId?: string
-  text?: string
+  operation?: {
+    match?: string
+    occurrence?: number | string
+    text?: string
+    type?: string
+  }
 }
 
 type GoogleWorkspaceToolContext = {
@@ -60,27 +66,27 @@ type GoogleDocsReadToolDefinition = {
   execute: (args: GoogleDocsReadToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
 }
 
-type GoogleDocsAppendTextToolDefinition = {
+type GoogleDocsEditToolDefinition = {
   args: {
     documentId: {
       description: string
       type: 'string'
     }
-    text: {
+    operation: {
+      additionalProperties: boolean
       description: string
-      type: 'string'
+      properties: Record<string, unknown>
+      required: string[]
+      type: 'object'
     }
   }
   description: string
-  execute: (
-    args: GoogleDocsAppendTextToolArgs,
-    context: GoogleWorkspaceToolContext
-  ) => Promise<string>
+  execute: (args: GoogleDocsEditToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
 }
 
 type GoogleWorkspaceHooks = {
   tool: {
-    google_docs_append_text: GoogleDocsAppendTextToolDefinition
+    google_docs_edit: GoogleDocsEditToolDefinition
     google_docs_read: GoogleDocsReadToolDefinition
     google_drive_search_files: GoogleDriveSearchFilesToolDefinition
   }
@@ -135,38 +141,60 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
         return JSON.stringify(result)
       }
     },
-    google_docs_append_text: {
+    google_docs_edit: {
       description:
-        'Append text to a Google Docs document using the Google Workspace account connected in OpenKhodam Settings. Requires OpenCode permission approval before writing.',
+        'Edit a Google Docs document using semantic operations with the Google Workspace account connected in OpenKhodam Settings. Supports append_text and insert_after_text, and requires OpenCode permission approval before writing.',
       args: {
         documentId: {
-          description: 'The Google Docs document ID to append to.',
+          description: 'The Google Docs document ID to edit.',
           type: 'string'
         },
-        text: {
-          description: 'The text to append near the end of the document body.',
-          type: 'string'
+        operation: {
+          additionalProperties: false,
+          description:
+            'One semantic edit operation. Use append_text with text, or insert_after_text with match, optional occurrence (defaults to last), and text. Do not provide raw Google Docs indexes.',
+          properties: {
+            type: {
+              description: 'Operation type: append_text or insert_after_text.',
+              enum: ['append_text', 'insert_after_text'],
+              type: 'string'
+            },
+            match: {
+              description: 'Text to find when type is insert_after_text.',
+              type: 'string'
+            },
+            occurrence: {
+              description:
+                'Optional match occurrence for insert_after_text: first, last, or a 1-based number. Defaults to last.',
+              type: ['number', 'string']
+            },
+            text: {
+              description:
+                'Text to insert. Literal newline escapes like \\n and \\n\\n are normalized before approval and writing.',
+              type: 'string'
+            }
+          },
+          required: ['type', 'text'],
+          type: 'object'
         }
       },
       async execute(args, context) {
         const documentId = stringArg(args.documentId).trim()
-        const text = stringArg(args.text)
+        const operation = toGoogleDocsEditOperation(args.operation)
 
         if (!documentId) throw new Error('Google Docs document ID is required.')
-        if (!text) throw new Error('Text to append to the Google Doc is required.')
 
-        const result = await appendTextToGoogleDocDocument({
-          approve: ({ document, insertionIndex }) =>
-            askForAppendApproval(context, {
+        const result = await editGoogleDocDocument({
+          approve: ({ document, operation }) =>
+            askForEditApproval(context, {
               documentId,
               documentTitle: document.title,
-              insertionIndex,
               link: document.link,
-              text
+              operation
             }),
           documentId,
-          signal: context.abort,
-          text
+          operation,
+          signal: context.abort
         })
 
         return JSON.stringify(result)
@@ -179,35 +207,79 @@ function stringArg(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-async function askForAppendApproval(
+function toGoogleDocsEditOperation(
+  value: GoogleDocsEditToolArgs['operation']
+): GoogleDocsEditOperation {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Google Docs edit operation is required.')
+  }
+
+  if (value.type === 'append_text') {
+    return {
+      type: 'append_text',
+      text: stringArg(value.text)
+    }
+  }
+
+  if (value.type === 'insert_after_text') {
+    return {
+      type: 'insert_after_text',
+      match: stringArg(value.match),
+      occurrence: occurrenceArg(value.occurrence),
+      text: stringArg(value.text)
+    }
+  }
+
+  throw new Error('Google Docs edit operation type must be append_text or insert_after_text.')
+}
+
+function occurrenceArg(value: unknown): 'first' | 'last' | number | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (value === 'first' || value === 'last') return value
+  if (typeof value === 'number') return value
+  if (typeof value === 'string') return Number(value.trim())
+  return undefined
+}
+
+async function askForEditApproval(
   context: GoogleWorkspaceToolContext,
   input: {
     documentId: string
     documentTitle: string | null
-    insertionIndex: number
     link: string | null
-    text: string
+    operation: {
+      match?: string
+      occurrence?: number | string
+      text: string
+      type: 'append_text' | 'insert_after_text'
+    }
   }
 ): Promise<void> {
   if (typeof context.ask !== 'function') {
     throw new Error(
-      'Google Docs append requires OpenCode permission approval, but approval is unavailable. Try again from an OpenCode session.'
+      'Google Docs edit requires OpenCode permission approval, but approval is unavailable. Try again from an OpenCode session.'
     )
   }
 
+  const metadata: Record<string, unknown> = {
+    action: input.operation.type,
+    characterCount: input.operation.text.length,
+    documentId: input.documentId,
+    documentTitle: input.documentTitle,
+    link: input.link,
+    textPreview: previewText(input.operation.text)
+  }
+
+  if (input.operation.type === 'insert_after_text') {
+    metadata.match = input.operation.match
+    metadata.occurrence = input.operation.occurrence
+  }
+
   await context.ask({
-    permission: 'google_docs_append_text',
+    permission: 'google_docs_edit',
     patterns: [`google-docs:${input.documentId}`],
     always: [`google-docs:${input.documentId}`],
-    metadata: {
-      action: 'append_text',
-      characterCount: input.text.length,
-      documentId: input.documentId,
-      documentTitle: input.documentTitle,
-      insertionIndex: input.insertionIndex,
-      link: input.link,
-      textPreview: previewText(input.text)
-    }
+    metadata
   })
 }
 
