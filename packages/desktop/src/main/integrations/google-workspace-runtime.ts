@@ -3,8 +3,10 @@ import { OpenKhodamConfigFileStore } from './openkhodam-config'
 
 export const GOOGLE_DRIVE_METADATA_READONLY_SCOPE =
   'https://www.googleapis.com/auth/drive.metadata.readonly'
+export const GOOGLE_DOCS_DOCUMENTS_SCOPE = 'https://www.googleapis.com/auth/documents'
 
 const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
+const GOOGLE_DOCS_DOCUMENTS_URL = 'https://docs.googleapis.com/v1/documents'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const DEFAULT_DRIVE_SEARCH_LIMIT = 10
 const MAX_DRIVE_SEARCH_LIMIT = 20
@@ -25,9 +27,30 @@ type GoogleTokenRefreshResponse = {
 
 type GoogleDriveFilesResponse = {
   files?: unknown[]
-  error?: {
+  error?: GoogleApiErrorBody
+}
+
+type GoogleDocsApiResponse = {
+  error?: GoogleApiErrorBody
+}
+
+type GoogleApiErrorBody = {
+  code?: number | string
+  errors?: Array<{
     message?: string
+    reason?: string
+  }>
+  message?: string
+  status?: string
+}
+
+type GoogleDocsDocumentResponse = GoogleDocsApiResponse & {
+  body?: {
+    content?: unknown[]
   }
+  documentId?: string
+  revisionId?: string
+  title?: string
 }
 
 export type GoogleDriveFileMetadata = {
@@ -50,6 +73,48 @@ export type GoogleDriveSearchFilesInput = {
   signal?: AbortSignal
 }
 
+export type GoogleDocDocumentArtifact = {
+  type: 'google.doc.document'
+  id: string
+  title: string | null
+  revision: string | null
+  text: string
+  markdown: string
+  link: string | null
+  body: {
+    blocks: GoogleDocBodyBlock[]
+  }
+}
+
+export type GoogleDocBodyBlock = {
+  id: string
+  ordinal: number
+  type: 'paragraph'
+  text: string
+  markdown: string
+}
+
+export type GoogleDocsReadDocumentResult = {
+  document: GoogleDocDocumentArtifact
+}
+
+export type GoogleDocsReadDocumentInput = {
+  configPath?: string
+  documentId: string
+  fetch?: Fetch
+  signal?: AbortSignal
+}
+
+type GoogleWorkspaceAccessInput = {
+  configPath: string | undefined
+  disconnectedToolName: string
+  expiredMessage: string
+  fetch: Fetch
+  missingScopeMessage: string
+  requiredScope: string
+  signal?: AbortSignal
+}
+
 export async function searchGoogleDriveFiles({
   configPath = process.env.OPENKHODAM_CONFIG_PATH,
   fetch: fetchImpl = fetch,
@@ -57,59 +122,17 @@ export async function searchGoogleDriveFiles({
   query,
   signal
 }: GoogleDriveSearchFilesInput): Promise<GoogleDriveSearchFilesResult> {
-  const resolvedConfigPath = configPath?.trim()
-  if (!resolvedConfigPath) {
-    throw new Error('Google Workspace config path is missing. Restart OpenKhodam and try again.')
-  }
-
-  const store = new OpenKhodamConfigFileStore(resolvedConfigPath)
-  const config = await store.read()
-  const google = config.integrations.googleWorkspace
-
-  if (!google.account || !google.token || !isUsableAccessToken(google.token)) {
-    throw new Error(
-      'Google Workspace is disconnected. Connect Google Workspace in Settings before using google_drive_search_files.'
-    )
-  }
-
-  if (!hasDriveMetadataScope(google.scopes)) {
-    throw new Error(
-      'Google Drive access is not enabled. Reconnect Google Workspace in Settings to grant Drive metadata read-only access.'
-    )
-  }
-
-  const now = Date.now()
-  let token = google.token
-
-  if (isTokenExpired(token, now)) {
-    if (!token.refreshToken) {
-      throw new Error(
-        'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Drive access.'
-      )
-    }
-
-    const refreshed = await refreshAccessToken({
-      fetch: fetchImpl,
-      refreshToken: token.refreshToken,
-      signal,
-      token
-    })
-
-    if (refreshed.scopes.length > 0 && !hasDriveMetadataScope(refreshed.scopes)) {
-      throw new Error(
-        'Google Drive access is not enabled. Reconnect Google Workspace in Settings to grant Drive metadata read-only access.'
-      )
-    }
-
-    token = refreshed.token
-    config.integrations.googleWorkspace = {
-      ...google,
-      scopes: refreshed.scopes.length > 0 ? sortScopes(refreshed.scopes) : google.scopes,
-      token,
-      updatedAt: now
-    }
-    await store.write(config)
-  }
+  const { token } = await getGoogleWorkspaceAccessToken({
+    configPath,
+    disconnectedToolName: 'google_drive_search_files',
+    expiredMessage:
+      'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Drive access.',
+    fetch: fetchImpl,
+    missingScopeMessage:
+      'Google Drive access is not enabled. Reconnect Google Workspace in Settings to grant Drive metadata read-only access.',
+    requiredScope: GOOGLE_DRIVE_METADATA_READONLY_SCOPE,
+    signal
+  })
 
   const resolvedLimit = clampDriveSearchLimit(limit)
   const response = await fetchImpl(createDriveFilesUrl(query, resolvedLimit), {
@@ -121,11 +144,46 @@ export async function searchGoogleDriveFiles({
 
   const body = (await response.json().catch(() => ({}))) as GoogleDriveFilesResponse
   if (!response.ok) {
-    throw new Error(toDriveApiErrorMessage(response.status, body.error?.message))
+    throwGoogleApiFailure('Google Drive files.list', response.status, body)
   }
 
   return {
     files: (body.files ?? []).map(toSafeDriveFileMetadata).filter(isGoogleDriveFileMetadata)
+  }
+}
+
+export async function readGoogleDocDocument({
+  configPath = process.env.OPENKHODAM_CONFIG_PATH,
+  documentId,
+  fetch: fetchImpl = fetch,
+  signal
+}: GoogleDocsReadDocumentInput): Promise<GoogleDocsReadDocumentResult> {
+  const resolvedDocumentId = normalizeDocumentId(documentId)
+  const { token } = await getGoogleWorkspaceAccessToken({
+    configPath,
+    disconnectedToolName: 'google_docs_read',
+    expiredMessage:
+      'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Google Docs access.',
+    fetch: fetchImpl,
+    missingScopeMessage: docsMissingScopeMessage(),
+    requiredScope: GOOGLE_DOCS_DOCUMENTS_SCOPE,
+    signal
+  })
+
+  const response = await fetchImpl(createDocsDocumentUrl(resolvedDocumentId), {
+    headers: {
+      authorization: `Bearer ${token.accessToken}`
+    },
+    signal
+  })
+
+  const body = (await response.json().catch(() => ({}))) as GoogleDocsDocumentResponse
+  if (!response.ok) {
+    throwGoogleApiFailure('Google Docs documents.get', response.status, body)
+  }
+
+  return {
+    document: toSafeGoogleDocDocument(body, resolvedDocumentId)
   }
 }
 
@@ -144,6 +202,21 @@ export function createDriveFilesUrl(query: string, limit: number): URL {
   return url
 }
 
+export function createDocsDocumentUrl(documentId: string): URL {
+  const url = new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}`)
+  url.searchParams.set(
+    'fields',
+    'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
+  )
+  return url
+}
+
+function normalizeDocumentId(documentId: string): string {
+  const trimmed = documentId.trim()
+  if (!trimmed) throw new Error('Google Docs document ID is required.')
+  return trimmed
+}
+
 function createDriveQuery(query: string): string {
   const trimmed = query.trim()
   if (!trimmed) return 'trashed = false'
@@ -155,8 +228,8 @@ function escapeDriveQueryString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 }
 
-function hasDriveMetadataScope(scopes: string[]): boolean {
-  return scopes.includes(GOOGLE_DRIVE_METADATA_READONLY_SCOPE)
+function hasScope(scopes: string[], requiredScope: string): boolean {
+  return scopes.includes(requiredScope)
 }
 
 function sortScopes(scopes: string[]): string[] {
@@ -169,6 +242,66 @@ function isUsableAccessToken(token: GoogleWorkspaceTokenConfig): boolean {
 
 function isTokenExpired(token: GoogleWorkspaceTokenConfig, now: number): boolean {
   return typeof token.expiresAt === 'number' && token.expiresAt <= now + TOKEN_EXPIRY_SKEW_MS
+}
+
+async function getGoogleWorkspaceAccessToken({
+  configPath,
+  disconnectedToolName,
+  expiredMessage,
+  fetch: fetchImpl,
+  missingScopeMessage,
+  requiredScope,
+  signal
+}: GoogleWorkspaceAccessInput): Promise<{ token: GoogleWorkspaceTokenConfig }> {
+  const resolvedConfigPath = configPath?.trim()
+  if (!resolvedConfigPath) {
+    throw new Error('Google Workspace config path is missing. Restart OpenKhodam and try again.')
+  }
+
+  const store = new OpenKhodamConfigFileStore(resolvedConfigPath)
+  const config = await store.read()
+  const google = config.integrations.googleWorkspace
+
+  if (!google.account || !google.token || !isUsableAccessToken(google.token)) {
+    throw new Error(
+      `Google Workspace is disconnected. Connect Google Workspace in Settings before using ${disconnectedToolName}.`
+    )
+  }
+
+  if (!hasScope(google.scopes, requiredScope)) {
+    throw new Error(missingScopeMessage)
+  }
+
+  const now = Date.now()
+  let token = google.token
+
+  if (isTokenExpired(token, now)) {
+    if (!token.refreshToken) {
+      throw new Error(expiredMessage)
+    }
+
+    const refreshed = await refreshAccessToken({
+      fetch: fetchImpl,
+      refreshToken: token.refreshToken,
+      signal,
+      token
+    })
+
+    if (refreshed.scopes.length > 0 && !hasScope(refreshed.scopes, requiredScope)) {
+      throw new Error(missingScopeMessage)
+    }
+
+    token = refreshed.token
+    config.integrations.googleWorkspace = {
+      ...google,
+      scopes: refreshed.scopes.length > 0 ? sortScopes(refreshed.scopes) : google.scopes,
+      token,
+      updatedAt: now
+    }
+    await store.write(config)
+  }
+
+  return { token }
 }
 
 async function refreshAccessToken({
@@ -224,16 +357,8 @@ function parseScopes(scope: string | undefined): string[] {
   return scope?.split(' ').filter(Boolean) ?? []
 }
 
-function toDriveApiErrorMessage(status: number, message: string | undefined): string {
-  if (status === 401) {
-    return 'Google Drive rejected the saved Google Workspace token. Reconnect Google Workspace in Settings.'
-  }
-
-  if (status === 403) {
-    return 'Google Drive access was denied. Reconnect Google Workspace in Settings and ensure Drive metadata access is granted.'
-  }
-
-  return message ? `Google Drive files.list failed: ${message}` : 'Google Drive files.list failed.'
+function docsMissingScopeMessage(): string {
+  return 'Google Docs access is not enabled. Reconnect Google Workspace in Settings to grant Google Docs read/write access.'
 }
 
 function toSafeDriveFileMetadata(value: unknown): GoogleDriveFileMetadata | null {
@@ -257,4 +382,157 @@ function isGoogleDriveFileMetadata(
   value: GoogleDriveFileMetadata | null
 ): value is GoogleDriveFileMetadata {
   return value !== null
+}
+
+function toSafeGoogleDocDocument(
+  value: GoogleDocsDocumentResponse,
+  fallbackDocumentId: string
+): GoogleDocDocumentArtifact {
+  const id =
+    typeof value.documentId === 'string' && value.documentId ? value.documentId : fallbackDocumentId
+  const text = extractGoogleDocText(value)
+  return {
+    type: 'google.doc.document',
+    id,
+    title: typeof value.title === 'string' && value.title ? value.title : null,
+    revision: typeof value.revisionId === 'string' && value.revisionId ? value.revisionId : null,
+    text,
+    markdown: text,
+    link: createGoogleDocLink(id),
+    body: {
+      blocks: extractGoogleDocBodyBlocks(value)
+    }
+  }
+}
+
+function extractGoogleDocText(document: GoogleDocsDocumentResponse): string {
+  const content = Array.isArray(document.body?.content) ? document.body.content : []
+  return content
+    .flatMap((block) => extractParagraphText(block))
+    .join('')
+    .trimEnd()
+}
+
+function extractParagraphText(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return []
+  const paragraph = (value as Record<string, unknown>).paragraph
+  if (!paragraph || typeof paragraph !== 'object') return []
+  const elements = (paragraph as Record<string, unknown>).elements
+  if (!Array.isArray(elements)) return []
+  return elements.flatMap((element) => {
+    if (!element || typeof element !== 'object') return []
+    const textRun = (element as Record<string, unknown>).textRun
+    if (!textRun || typeof textRun !== 'object') return []
+    const text = (textRun as Record<string, unknown>).content
+    return typeof text === 'string' ? [text] : []
+  })
+}
+
+function extractGoogleDocBodyBlocks(document: GoogleDocsDocumentResponse): GoogleDocBodyBlock[] {
+  const content = Array.isArray(document.body?.content) ? document.body.content : []
+  return content.flatMap((block, index) => {
+    if (!block || typeof block !== 'object') return []
+
+    const entry = block as Record<string, unknown>
+    const paragraph = entry.paragraph
+    if (!paragraph || typeof paragraph !== 'object') return []
+
+    const textRuns = extractParagraphTextRuns(paragraph)
+    const text = textRuns.map((run) => run.text).join('')
+    return [
+      {
+        id: `body-block-${index + 1}`,
+        ordinal: index + 1,
+        type: 'paragraph' as const,
+        text,
+        markdown: text
+      }
+    ]
+  })
+}
+
+function extractParagraphTextRuns(value: unknown): Array<{
+  text: string
+}> {
+  if (!value || typeof value !== 'object') return []
+
+  const elements = (value as Record<string, unknown>).elements
+  if (!Array.isArray(elements)) return []
+
+  return elements.flatMap((element) => {
+    if (!element || typeof element !== 'object') return []
+
+    const entry = element as Record<string, unknown>
+    const textRun = entry.textRun
+    if (!textRun || typeof textRun !== 'object') return []
+
+    const text = (textRun as Record<string, unknown>).content
+    if (typeof text !== 'string') return []
+
+    return [
+      {
+        text
+      }
+    ]
+  })
+}
+
+function throwGoogleApiFailure(
+  operation: string,
+  status: number,
+  body: GoogleDocsApiResponse | GoogleDriveFilesResponse
+): never {
+  const diagnostics = toGoogleApiFailureDiagnostics(operation, status, body.error)
+  console.warn('Google Workspace API request failed', diagnostics)
+  throw new Error(toGoogleApiFailureMessage(diagnostics))
+}
+
+function toGoogleApiFailureDiagnostics(
+  operation: string,
+  status: number,
+  error: GoogleApiErrorBody | undefined
+): {
+  code: string | null
+  message: string | null
+  operation: string
+  reason: string | null
+  status: number
+} {
+  const firstError = Array.isArray(error?.errors) ? error?.errors.find(Boolean) : undefined
+  return {
+    operation,
+    status,
+    code: sanitizeDiagnosticText(error?.status ?? error?.code),
+    reason: sanitizeDiagnosticText(firstError?.reason),
+    message: sanitizeDiagnosticText(error?.message ?? firstError?.message)
+  }
+}
+
+function toGoogleApiFailureMessage(input: {
+  code: string | null
+  message: string | null
+  operation: string
+  reason: string | null
+  status: number
+}): string {
+  const details = [`HTTP ${input.status}`, input.code, input.reason].filter(
+    (detail): detail is string => typeof detail === 'string' && detail.length > 0
+  )
+  const suffix = details.length ? ` (${details.join(', ')})` : ''
+  return input.message
+    ? `${input.operation} failed${suffix}: ${input.message}`
+    : `${input.operation} failed${suffix}.`
+}
+
+function sanitizeDiagnosticText(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null
+  const text = String(value).replace(/\s+/g, ' ').trim()
+  if (!text) return null
+  return text.length > 300 ? `${text.slice(0, 297)}...` : text
+}
+
+function createGoogleDocLink(documentId: string): string | null {
+  return documentId
+    ? `https://docs.google.com/document/d/${encodeURIComponent(documentId)}/edit`
+    : null
 }
