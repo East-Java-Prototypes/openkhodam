@@ -23,6 +23,7 @@ const projectSidebarFooter = (page: Page): Locator =>
   projectSidebar(page).locator('[data-slot="sidebar-footer"]')
 const projectHeartbeatStatus = (page: Page): Locator =>
   projectSidebarFooter(page).locator('[data-slot="sidebar-heartbeat"]')
+const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
 const projectSettingsLink = (page: Page): Locator =>
@@ -359,52 +360,55 @@ async function waitForScrollTopToSettle(locator: Locator): Promise<void> {
 }
 
 async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplication): Promise<void> {
-  await electronApp.evaluate(({ shell }, driveScope) => {
-    const globalObject = globalThis as any
+  await electronApp.evaluate(
+    ({ shell }, scopes: string[]) => {
+      const globalObject = globalThis as any
 
-    const capture =
-      globalObject.__googleWorkspaceOAuthCapture ??
-      (globalObject.__googleWorkspaceOAuthCapture = {
-        authUrl: null,
-        tokenBody: null,
-        userInfoAuthorization: null
-      })
-
-    shell.openExternal = async (url: string) => {
-      capture.authUrl = String(url)
-      return undefined
-    }
-
-    const originalFetch = globalObject.fetch.bind(globalObject)
-    globalObject.fetch = async (input: any, init: any) => {
-      const url = String(input)
-
-      if (url === 'https://oauth2.googleapis.com/token') {
-        const body = init?.body
-        capture.tokenBody =
-          body instanceof URLSearchParams ? body.toString() : (body?.toString() ?? null)
-        return new Response(
-          JSON.stringify({
-            access_token: 'fake-access-token',
-            expires_in: 3600,
-            scope: `openid email profile ${driveScope}`,
-            token_type: 'Bearer'
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } }
-        )
-      }
-
-      if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
-        capture.userInfoAuthorization = init?.headers?.authorization ?? null
-        return new Response(JSON.stringify({ email: 'fake@example.com', name: 'Fake User' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' }
+      const capture =
+        globalObject.__googleWorkspaceOAuthCapture ??
+        (globalObject.__googleWorkspaceOAuthCapture = {
+          authUrl: null,
+          tokenBody: null,
+          userInfoAuthorization: null
         })
+
+      shell.openExternal = async (url: string) => {
+        capture.authUrl = String(url)
+        return undefined
       }
 
-      return originalFetch(input, init)
-    }
-  }, googleDriveMetadataReadonlyScope)
+      const originalFetch = globalObject.fetch.bind(globalObject)
+      globalObject.fetch = async (input: any, init: any) => {
+        const url = String(input)
+
+        if (url === 'https://oauth2.googleapis.com/token') {
+          const body = init?.body
+          capture.tokenBody =
+            body instanceof URLSearchParams ? body.toString() : (body?.toString() ?? null)
+          return new Response(
+            JSON.stringify({
+              access_token: 'fake-access-token',
+              expires_in: 3600,
+              scope: scopes.join(' '),
+              token_type: 'Bearer'
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          )
+        }
+
+        if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+          capture.userInfoAuthorization = init?.headers?.authorization ?? null
+          return new Response(JSON.stringify({ email: 'fake@example.com', name: 'Fake User' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          })
+        }
+
+        return originalFetch(input, init)
+      }
+    },
+    ['openid', 'email', 'profile', googleDriveMetadataReadonlyScope, googleDocsDocumentsScope]
+  )
 }
 
 test('renders the built desktop chat shell', async ({ appWindow }) => {
@@ -1135,7 +1139,13 @@ test.describe('Google Workspace connect cancellation', () => {
     expect(redirectUri).not.toBeNull()
     expect(state).not.toBeNull()
     expect(authUrl.searchParams.get('scope')?.split(' ').sort()).toEqual(
-      ['email', googleDriveMetadataReadonlyScope, 'openid', 'profile'].sort()
+      [
+        'email',
+        googleDocsDocumentsScope,
+        googleDriveMetadataReadonlyScope,
+        'openid',
+        'profile'
+      ].sort()
     )
 
     await fetch(`${redirectUri}?code=test-auth-code&state=${state}`)
@@ -1171,7 +1181,13 @@ test.describe('Google Workspace connect cancellation', () => {
     expect(status).toMatchObject({
       state: 'connected',
       account: { email: 'fake@example.com', name: 'Fake User' },
-      scopes: ['email', googleDriveMetadataReadonlyScope, 'openid', 'profile'],
+      scopes: [
+        'email',
+        googleDocsDocumentsScope,
+        googleDriveMetadataReadonlyScope,
+        'openid',
+        'profile'
+      ],
       message: 'Connected as fake@example.com.'
     })
     expect(status).not.toHaveProperty('accessToken')
