@@ -53,6 +53,14 @@ type GoogleDocsDocumentResponse = GoogleDocsApiResponse & {
   title?: string
 }
 
+type GoogleDocsBatchUpdateResponse = GoogleDocsApiResponse & {
+  documentId?: string
+  writeControl?: {
+    requiredRevisionId?: string
+    targetRevisionId?: string
+  }
+}
+
 export type GoogleDriveFileMetadata = {
   id: string
   mimeType: string
@@ -94,6 +102,15 @@ export type GoogleDocBodyBlock = {
   markdown: string
 }
 
+type IndexedGoogleDocBodyBlock = {
+  type: 'paragraph'
+  startIndex: number | null
+  endIndex: number | null
+  textStartIndex: number | null
+  textEndIndex: number | null
+  text: string
+}
+
 export type GoogleDocsReadDocumentResult = {
   document: GoogleDocDocumentArtifact
 }
@@ -103,6 +120,72 @@ export type GoogleDocsReadDocumentInput = {
   documentId: string
   fetch?: Fetch
   signal?: AbortSignal
+}
+
+export type GoogleDocsEditInput = {
+  approve: (input: GoogleDocsEditApprovalInput) => Promise<void>
+  configPath?: string
+  documentId: string
+  fetch?: Fetch
+  operation: GoogleDocsEditOperation
+  signal?: AbortSignal
+}
+
+export type GoogleDocsEditApprovalInput = {
+  document: GoogleDocDocumentArtifact
+  operation: GoogleDocsEditApprovalOperation
+}
+
+export type GoogleDocsEditOperation =
+  | {
+      text: string
+      type: 'append_text'
+    }
+  | {
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      text: string
+      type: 'insert_after_text'
+    }
+
+export type GoogleDocsTextOccurrence = 'first' | 'last' | number
+
+export type GoogleDocsEditApprovalOperation =
+  | {
+      text: string
+      type: 'append_text'
+    }
+  | {
+      match: string
+      occurrence: GoogleDocsTextOccurrence
+      text: string
+      type: 'insert_after_text'
+    }
+
+type ResolvedGoogleDocsEditOperation =
+  | {
+      insertionIndex: number
+      text: string
+      type: 'append_text'
+    }
+  | {
+      insertionIndex: number
+      match: string
+      matchEndIndex: number
+      matchStartIndex: number
+      occurrence: GoogleDocsTextOccurrence
+      text: string
+      type: 'insert_after_text'
+    }
+
+export type GoogleDocsEditResult = {
+  ok: true
+  documentId: string
+  insertedTextLength: number
+  link: string | null
+  operation: GoogleDocsEditOperation['type']
+  revision: string | null
+  title: string | null
 }
 
 type GoogleWorkspaceAccessInput = {
@@ -187,6 +270,107 @@ export async function readGoogleDocDocument({
   }
 }
 
+export async function editGoogleDocDocument({
+  approve,
+  configPath = process.env.OPENKHODAM_CONFIG_PATH,
+  documentId,
+  fetch: fetchImpl = fetch,
+  operation,
+  signal
+}: GoogleDocsEditInput): Promise<GoogleDocsEditResult> {
+  if (typeof approve !== 'function') {
+    throw new Error('Google Docs edit requires approval before writing to Google Docs.')
+  }
+
+  const resolvedDocumentId = normalizeDocumentId(documentId)
+  const normalizedOperation = normalizeGoogleDocsEditOperation(operation)
+  const { token } = await getGoogleWorkspaceAccessToken({
+    configPath,
+    disconnectedToolName: 'google_docs_edit',
+    expiredMessage:
+      'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Google Docs access.',
+    fetch: fetchImpl,
+    missingScopeMessage: docsMissingScopeMessage(),
+    requiredScope: GOOGLE_DOCS_DOCUMENTS_SCOPE,
+    signal
+  })
+
+  const documentResponse = await fetchImpl(createDocsDocumentUrl(resolvedDocumentId), {
+    headers: {
+      authorization: `Bearer ${token.accessToken}`
+    },
+    signal
+  })
+  const documentBody = (await documentResponse
+    .json()
+    .catch(() => ({}))) as GoogleDocsDocumentResponse
+  if (!documentResponse.ok) {
+    throwGoogleApiFailure('Google Docs documents.get', documentResponse.status, documentBody)
+  }
+
+  const document = toSafeGoogleDocDocument(documentBody, resolvedDocumentId)
+  const indexedBlocks = extractIndexedGoogleDocBodyBlocks(documentBody)
+  const resolvedOperation = resolveGoogleDocsEditOperation(
+    indexedBlocks,
+    normalizedOperation,
+    getBodyEndInsertionIndex(documentBody)
+  )
+  await approve({ document, operation: toGoogleDocsEditApprovalOperation(resolvedOperation) })
+
+  const requestBody: {
+    requests: Array<{
+      insertText: {
+        location: { index: number }
+        text: string
+      }
+    }>
+    writeControl?: {
+      requiredRevisionId: string
+    }
+  } = {
+    requests: [
+      {
+        insertText: {
+          location: { index: resolvedOperation.insertionIndex },
+          text: resolvedOperation.text
+        }
+      }
+    ]
+  }
+
+  if (document.revision) {
+    requestBody.writeControl = { requiredRevisionId: document.revision }
+  }
+
+  const response = await fetchImpl(createDocsBatchUpdateUrl(resolvedDocumentId), {
+    body: JSON.stringify(requestBody),
+    headers: {
+      authorization: `Bearer ${token.accessToken}`,
+      'content-type': 'application/json'
+    },
+    method: 'POST',
+    signal
+  })
+
+  const body = (await response.json().catch(() => ({}))) as GoogleDocsBatchUpdateResponse
+  if (!response.ok) {
+    throwGoogleApiFailure('Google Docs documents.batchUpdate', response.status, body)
+  }
+
+  return {
+    ok: true,
+    documentId: body.documentId || document.id,
+    insertedTextLength: resolvedOperation.text.length,
+    link: document.link,
+    operation: resolvedOperation.type,
+    revision:
+      body.writeControl?.requiredRevisionId ??
+      body.writeControl?.targetRevisionId ??
+      document.revision,
+    title: document.title
+  }
+}
+
 export function clampDriveSearchLimit(limit: number | undefined): number {
   if (typeof limit !== 'number' || !Number.isFinite(limit)) return DEFAULT_DRIVE_SEARCH_LIMIT
   return Math.min(MAX_DRIVE_SEARCH_LIMIT, Math.max(1, Math.trunc(limit)))
@@ -211,10 +395,73 @@ export function createDocsDocumentUrl(documentId: string): URL {
   return url
 }
 
+export function createDocsBatchUpdateUrl(documentId: string): URL {
+  return new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}:batchUpdate`)
+}
+
 function normalizeDocumentId(documentId: string): string {
   const trimmed = documentId.trim()
   if (!trimmed) throw new Error('Google Docs document ID is required.')
   return trimmed
+}
+
+function normalizeGoogleDocsEditOperation(
+  operation: GoogleDocsEditOperation
+): GoogleDocsEditOperation {
+  if (!operation || typeof operation !== 'object') {
+    throw new Error('Google Docs edit operation is required.')
+  }
+
+  if (operation.type === 'append_text') {
+    return {
+      type: 'append_text',
+      text: normalizeGoogleDocsEditText(operation.text)
+    }
+  }
+
+  if (operation.type === 'insert_after_text') {
+    const match = typeof operation.match === 'string' ? operation.match : ''
+    if (!match) throw new Error('Google Docs insert_after_text requires match text.')
+
+    return {
+      type: 'insert_after_text',
+      match,
+      occurrence: normalizeTextOccurrence(operation.occurrence),
+      text: normalizeGoogleDocsEditText(operation.text)
+    }
+  }
+
+  throw new Error('Google Docs edit operation type must be append_text or insert_after_text.')
+}
+
+function normalizeGoogleDocsEditText(text: string): string {
+  if (typeof text !== 'string' || text.length === 0) {
+    throw new Error('Text to insert into the Google Doc is required.')
+  }
+
+  return text
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+}
+
+function normalizeTextOccurrence(occurrence: unknown): GoogleDocsTextOccurrence {
+  if (occurrence === undefined || occurrence === null || occurrence === '') return 'last'
+  if (occurrence === 'first' || occurrence === 'last') return occurrence
+
+  const numericOccurrence =
+    typeof occurrence === 'number'
+      ? occurrence
+      : typeof occurrence === 'string'
+        ? Number(occurrence.trim())
+        : NaN
+  if (Number.isInteger(numericOccurrence) && numericOccurrence > 0) return numericOccurrence
+
+  throw new Error(
+    'Google Docs insert_after_text occurrence must be first, last, or a 1-based number.'
+  )
 }
 
 function createDriveQuery(query: string): string {
@@ -451,7 +698,35 @@ function extractGoogleDocBodyBlocks(document: GoogleDocsDocumentResponse): Googl
   })
 }
 
+function extractIndexedGoogleDocBodyBlocks(
+  document: GoogleDocsDocumentResponse
+): IndexedGoogleDocBodyBlock[] {
+  const content = Array.isArray(document.body?.content) ? document.body.content : []
+  return content.flatMap((block) => {
+    if (!block || typeof block !== 'object') return []
+
+    const entry = block as Record<string, unknown>
+    const paragraph = entry.paragraph
+    if (!paragraph || typeof paragraph !== 'object') return []
+
+    const textRuns = extractParagraphTextRuns(paragraph)
+    const text = textRuns.map((run) => run.text).join('')
+    return [
+      {
+        type: 'paragraph' as const,
+        startIndex: finiteNumberOrNull(entry.startIndex),
+        endIndex: finiteNumberOrNull(entry.endIndex),
+        textStartIndex: minFiniteNumber(textRuns.map((run) => run.startIndex)),
+        textEndIndex: maxFiniteNumber(textRuns.map((run) => run.endIndex)),
+        text
+      }
+    ]
+  })
+}
+
 function extractParagraphTextRuns(value: unknown): Array<{
+  startIndex: number | null
+  endIndex: number | null
   text: string
 }> {
   if (!value || typeof value !== 'object') return []
@@ -471,10 +746,157 @@ function extractParagraphTextRuns(value: unknown): Array<{
 
     return [
       {
+        startIndex: finiteNumberOrNull(entry.startIndex),
+        endIndex: finiteNumberOrNull(entry.endIndex),
         text
       }
     ]
   })
+}
+
+function toGoogleDocsEditApprovalOperation(
+  operation: ResolvedGoogleDocsEditOperation
+): GoogleDocsEditApprovalOperation {
+  if (operation.type === 'append_text') {
+    return {
+      type: 'append_text',
+      text: operation.text
+    }
+  }
+
+  return {
+    type: 'insert_after_text',
+    match: operation.match,
+    occurrence: operation.occurrence,
+    text: operation.text
+  }
+}
+
+function resolveGoogleDocsEditOperation(
+  indexedBlocks: IndexedGoogleDocBodyBlock[],
+  operation: GoogleDocsEditOperation,
+  appendInsertionIndex: number
+): ResolvedGoogleDocsEditOperation {
+  if (operation.type === 'append_text') {
+    return {
+      type: 'append_text',
+      insertionIndex: appendInsertionIndex,
+      text: operation.text
+    }
+  }
+
+  return resolveInsertAfterTextOperation(indexedBlocks, operation)
+}
+
+function resolveInsertAfterTextOperation(
+  indexedBlocks: IndexedGoogleDocBodyBlock[],
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_after_text' }>
+): ResolvedGoogleDocsEditOperation {
+  const matches = indexedBlocks.flatMap((block) => findBlockMatchCandidates(block, operation.match))
+
+  if (!matches.length) {
+    throw new Error('Google Docs insert_after_text could not find the requested match text.')
+  }
+
+  const match = selectTextMatch(matches, operation.occurrence ?? 'last')
+  if (
+    match.insertionIndex === null ||
+    match.matchStartIndex === null ||
+    match.matchEndIndex === null
+  ) {
+    throw new Error(
+      'Google Docs insert_after_text matched text in an unsupported paragraph structure.'
+    )
+  }
+
+  return {
+    type: 'insert_after_text',
+    insertionIndex: match.insertionIndex,
+    match: operation.match,
+    matchEndIndex: match.matchEndIndex,
+    matchStartIndex: match.matchStartIndex,
+    occurrence: operation.occurrence ?? 'last',
+    text: operation.text
+  }
+}
+
+function findBlockMatchCandidates(
+  block: IndexedGoogleDocBodyBlock,
+  matchText: string
+): Array<{
+  insertionIndex: number | null
+  matchEndIndex: number | null
+  matchStartIndex: number | null
+}> {
+  if (block.type !== 'paragraph') return []
+  const matches = [] as Array<{
+    insertionIndex: number | null
+    matchEndIndex: number | null
+    matchStartIndex: number | null
+  }>
+  const textStartIndex = block.textStartIndex
+  const textEndIndex = block.textEndIndex
+  const baseTextStartIndex =
+    textStartIndex !== null &&
+    textEndIndex !== null &&
+    textEndIndex - textStartIndex === block.text.length
+      ? textStartIndex
+      : null
+  let searchIndex = 0
+
+  while (searchIndex <= block.text.length) {
+    const matchOffset = block.text.indexOf(matchText, searchIndex)
+    if (matchOffset === -1) break
+
+    const matchStartIndex = baseTextStartIndex === null ? null : baseTextStartIndex + matchOffset
+    const matchEndIndex = matchStartIndex === null ? null : matchStartIndex + matchText.length
+    matches.push({
+      insertionIndex: matchEndIndex,
+      matchEndIndex,
+      matchStartIndex
+    })
+    searchIndex = matchOffset + Math.max(1, matchText.length)
+  }
+
+  return matches
+}
+
+function selectTextMatch<T>(matches: T[], occurrence: GoogleDocsTextOccurrence): T {
+  const match =
+    occurrence === 'first'
+      ? matches[0]
+      : occurrence === 'last'
+        ? matches[matches.length - 1]
+        : matches[occurrence - 1]
+  if (!match) {
+    throw new Error(`Google Docs insert_after_text occurrence ${occurrence} was not found.`)
+  }
+  return match
+}
+
+function getBodyEndInsertionIndex(document: GoogleDocsDocumentResponse): number {
+  const content = Array.isArray(document.body?.content) ? document.body.content : []
+  const endIndexes = content
+    .map((block) =>
+      block && typeof block === 'object' ? (block as Record<string, unknown>).endIndex : null
+    )
+    .filter((index): index is number => typeof index === 'number' && Number.isFinite(index))
+  const maxEndIndex = endIndexes.length ? Math.max(...endIndexes) : 2
+  return Math.max(1, maxEndIndex - 1)
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function minFiniteNumber(values: Array<number | null>): number | null {
+  const finite = values.filter((value): value is number => value !== null)
+  return finite.length ? Math.min(...finite) : null
+}
+
+function maxFiniteNumber(values: Array<number | null>): number | null {
+  const finite = values.filter((value): value is number => value !== null)
+  return finite.length ? Math.max(...finite) : null
 }
 
 function throwGoogleApiFailure(
