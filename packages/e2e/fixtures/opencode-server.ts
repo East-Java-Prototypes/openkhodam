@@ -278,6 +278,23 @@ function structuredV1AssistantMessage(id: string): unknown {
         input: { filePath: 'README.md' },
         output: 'V1 fixture tool output'
       },
+      {
+        id: `${id}-google-doc-tool`,
+        type: 'tool',
+        name: 'google_docs_read',
+        status: 'completed',
+        input: { documentId: 'doc-fixture-1' },
+        output: JSON.stringify({
+          document: {
+            type: 'google.doc.document',
+            id: 'doc-fixture-1',
+            title: 'Fixture Project Plan',
+            revision: 'rev-fixture-1',
+            text: 'Fixture Project Plan\nFirst paragraph from Google Docs.\nSecond paragraph from Google Docs.',
+            link: 'https://docs.google.com/document/d/doc-fixture-1/edit'
+          }
+        })
+      },
       { id: `${id}-step-finish`, type: 'step-finish', text: 'Hidden v1 step finish marker' },
       { id: `${id}-unknown`, type: 'future-part', detail: 'V1 unknown fixture' }
     ]
