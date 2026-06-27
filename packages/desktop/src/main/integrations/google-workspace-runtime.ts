@@ -27,15 +27,21 @@ type GoogleTokenRefreshResponse = {
 
 type GoogleDriveFilesResponse = {
   files?: unknown[]
-  error?: {
-    message?: string
-  }
+  error?: GoogleApiErrorBody
 }
 
 type GoogleDocsApiResponse = {
-  error?: {
+  error?: GoogleApiErrorBody
+}
+
+type GoogleApiErrorBody = {
+  code?: number | string
+  errors?: Array<{
     message?: string
-  }
+    reason?: string
+  }>
+  message?: string
+  status?: string
 }
 
 type GoogleDocsDocumentResponse = GoogleDocsApiResponse & {
@@ -73,7 +79,19 @@ export type GoogleDocDocumentArtifact = {
   title: string | null
   revision: string | null
   text: string
+  markdown: string
   link: string | null
+  body: {
+    blocks: GoogleDocBodyBlock[]
+  }
+}
+
+export type GoogleDocBodyBlock = {
+  id: string
+  ordinal: number
+  type: 'paragraph'
+  text: string
+  markdown: string
 }
 
 export type GoogleDocsReadDocumentResult = {
@@ -126,7 +144,7 @@ export async function searchGoogleDriveFiles({
 
   const body = (await response.json().catch(() => ({}))) as GoogleDriveFilesResponse
   if (!response.ok) {
-    throw new Error(toDriveApiErrorMessage(response.status, body.error?.message))
+    throwGoogleApiFailure('Google Drive files.list', response.status, body)
   }
 
   return {
@@ -161,7 +179,7 @@ export async function readGoogleDocDocument({
 
   const body = (await response.json().catch(() => ({}))) as GoogleDocsDocumentResponse
   if (!response.ok) {
-    throw new Error(toDocsApiErrorMessage('get', response.status, body.error?.message))
+    throwGoogleApiFailure('Google Docs documents.get', response.status, body)
   }
 
   return {
@@ -188,7 +206,7 @@ export function createDocsDocumentUrl(documentId: string): URL {
   const url = new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}`)
   url.searchParams.set(
     'fields',
-    'documentId,title,revisionId,body(content(endIndex,paragraph(elements(textRun(content)))))'
+    'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
   )
   return url
 }
@@ -339,36 +357,6 @@ function parseScopes(scope: string | undefined): string[] {
   return scope?.split(' ').filter(Boolean) ?? []
 }
 
-function toDriveApiErrorMessage(status: number, message: string | undefined): string {
-  if (status === 401) {
-    return 'Google Drive rejected the saved Google Workspace token. Reconnect Google Workspace in Settings.'
-  }
-
-  if (status === 403) {
-    return 'Google Drive access was denied. Reconnect Google Workspace in Settings and ensure Drive metadata access is granted.'
-  }
-
-  return message ? `Google Drive files.list failed: ${message}` : 'Google Drive files.list failed.'
-}
-
-function toDocsApiErrorMessage(action: 'get', status: number, message: string | undefined): string {
-  if (status === 401) {
-    return 'Google Docs rejected the saved Google Workspace token. Reconnect Google Workspace in Settings.'
-  }
-
-  if (status === 403) {
-    return 'Google Docs access was denied. Reconnect Google Workspace in Settings and ensure Google Docs access is granted.'
-  }
-
-  if (status === 404) {
-    return 'Google Docs document was not found or is not available to the connected account.'
-  }
-
-  return message
-    ? `Google Docs documents.${action} failed: ${message}`
-    : `Google Docs documents.${action} failed.`
-}
-
 function docsMissingScopeMessage(): string {
   return 'Google Docs access is not enabled. Reconnect Google Workspace in Settings to grant Google Docs read/write access.'
 }
@@ -402,13 +390,18 @@ function toSafeGoogleDocDocument(
 ): GoogleDocDocumentArtifact {
   const id =
     typeof value.documentId === 'string' && value.documentId ? value.documentId : fallbackDocumentId
+  const text = extractGoogleDocText(value)
   return {
     type: 'google.doc.document',
     id,
     title: typeof value.title === 'string' && value.title ? value.title : null,
     revision: typeof value.revisionId === 'string' && value.revisionId ? value.revisionId : null,
-    text: extractGoogleDocText(value),
-    link: createGoogleDocLink(id)
+    text,
+    markdown: text,
+    link: createGoogleDocLink(id),
+    body: {
+      blocks: extractGoogleDocBodyBlocks(value)
+    }
   }
 }
 
@@ -433,6 +426,109 @@ function extractParagraphText(value: unknown): string[] {
     const text = (textRun as Record<string, unknown>).content
     return typeof text === 'string' ? [text] : []
   })
+}
+
+function extractGoogleDocBodyBlocks(document: GoogleDocsDocumentResponse): GoogleDocBodyBlock[] {
+  const content = Array.isArray(document.body?.content) ? document.body.content : []
+  return content.flatMap((block, index) => {
+    if (!block || typeof block !== 'object') return []
+
+    const entry = block as Record<string, unknown>
+    const paragraph = entry.paragraph
+    if (!paragraph || typeof paragraph !== 'object') return []
+
+    const textRuns = extractParagraphTextRuns(paragraph)
+    const text = textRuns.map((run) => run.text).join('')
+    return [
+      {
+        id: `body-block-${index + 1}`,
+        ordinal: index + 1,
+        type: 'paragraph' as const,
+        text,
+        markdown: text
+      }
+    ]
+  })
+}
+
+function extractParagraphTextRuns(value: unknown): Array<{
+  text: string
+}> {
+  if (!value || typeof value !== 'object') return []
+
+  const elements = (value as Record<string, unknown>).elements
+  if (!Array.isArray(elements)) return []
+
+  return elements.flatMap((element) => {
+    if (!element || typeof element !== 'object') return []
+
+    const entry = element as Record<string, unknown>
+    const textRun = entry.textRun
+    if (!textRun || typeof textRun !== 'object') return []
+
+    const text = (textRun as Record<string, unknown>).content
+    if (typeof text !== 'string') return []
+
+    return [
+      {
+        text
+      }
+    ]
+  })
+}
+
+function throwGoogleApiFailure(
+  operation: string,
+  status: number,
+  body: GoogleDocsApiResponse | GoogleDriveFilesResponse
+): never {
+  const diagnostics = toGoogleApiFailureDiagnostics(operation, status, body.error)
+  console.warn('Google Workspace API request failed', diagnostics)
+  throw new Error(toGoogleApiFailureMessage(diagnostics))
+}
+
+function toGoogleApiFailureDiagnostics(
+  operation: string,
+  status: number,
+  error: GoogleApiErrorBody | undefined
+): {
+  code: string | null
+  message: string | null
+  operation: string
+  reason: string | null
+  status: number
+} {
+  const firstError = Array.isArray(error?.errors) ? error?.errors.find(Boolean) : undefined
+  return {
+    operation,
+    status,
+    code: sanitizeDiagnosticText(error?.status ?? error?.code),
+    reason: sanitizeDiagnosticText(firstError?.reason),
+    message: sanitizeDiagnosticText(error?.message ?? firstError?.message)
+  }
+}
+
+function toGoogleApiFailureMessage(input: {
+  code: string | null
+  message: string | null
+  operation: string
+  reason: string | null
+  status: number
+}): string {
+  const details = [`HTTP ${input.status}`, input.code, input.reason].filter(
+    (detail): detail is string => typeof detail === 'string' && detail.length > 0
+  )
+  const suffix = details.length ? ` (${details.join(', ')})` : ''
+  return input.message
+    ? `${input.operation} failed${suffix}: ${input.message}`
+    : `${input.operation} failed${suffix}.`
+}
+
+function sanitizeDiagnosticText(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null
+  const text = String(value).replace(/\s+/g, ' ').trim()
+  if (!text) return null
+  return text.length > 300 ? `${text.slice(0, 297)}...` : text
 }
 
 function createGoogleDocLink(documentId: string): string | null {
