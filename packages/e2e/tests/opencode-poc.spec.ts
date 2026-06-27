@@ -363,15 +363,21 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
           body: {
             content: [
               {
-                endIndex: 12,
+                startIndex: 101,
+                endIndex: 112,
                 paragraph: {
-                  elements: [{ textRun: { content: 'Hello Docs\n' } }]
+                  elements: [
+                    { startIndex: 101, endIndex: 112, textRun: { content: 'Hello Docs\n' } }
+                  ]
                 }
               },
               {
-                endIndex: 24,
+                startIndex: 212,
+                endIndex: 224,
                 paragraph: {
-                  elements: [{ textRun: { content: 'Second line\n' } }]
+                  elements: [
+                    { startIndex: 212, endIndex: 224, textRun: { content: 'Second line\n' } }
+                  ]
                 }
               }
             ]
@@ -407,7 +413,7 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     expect(docsAuthorization).toBe('Bearer new-docs-access-token')
     expect(docsUrl?.pathname).toBe('/v1/documents/doc-1')
     expect(docsUrl?.searchParams.get('fields')).toBe(
-      'documentId,title,revisionId,body(content(endIndex,paragraph(elements(textRun(content)))))'
+      'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
     )
     expect(output).toEqual({
       document: {
@@ -416,7 +422,26 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
         title: 'Docs Plan',
         revision: 'rev-1',
         text: 'Hello Docs\nSecond line',
-        link: 'https://docs.google.com/document/d/doc-1/edit'
+        markdown: 'Hello Docs\nSecond line',
+        link: 'https://docs.google.com/document/d/doc-1/edit',
+        body: {
+          blocks: [
+            {
+              id: 'body-block-1',
+              ordinal: 1,
+              type: 'paragraph',
+              text: 'Hello Docs\n',
+              markdown: 'Hello Docs\n'
+            },
+            {
+              id: 'body-block-2',
+              ordinal: 2,
+              type: 'paragraph',
+              text: 'Second line\n',
+              markdown: 'Second line\n'
+            }
+          ]
+        }
       }
     })
 
@@ -426,6 +451,14 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     expect(outputText).not.toContain('refresh-token')
     expect(outputText).not.toContain('should-not-leak')
     expect(outputText).not.toContain('owner@example.com')
+    expect(outputText).not.toContain('startIndex')
+    expect(outputText).not.toContain('endIndex')
+    expect(outputText).not.toContain('textStartIndex')
+    expect(outputText).not.toContain('textEndIndex')
+    expect(outputText).not.toContain('101')
+    expect(outputText).not.toContain('112')
+    expect(outputText).not.toContain('212')
+    expect(outputText).not.toContain('224')
 
     const persisted = JSON.parse(await readFile(configPath, 'utf8')) as OpenKhodamConfigFixture
     expect(persisted.integrations.googleWorkspace.token?.accessToken).toBe('new-docs-access-token')
@@ -440,6 +473,133 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID', originalClientId)
     restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET', originalClientSecret)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('logs sanitized Google API failures for Drive and Docs permission errors', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-api-failure-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+  let docsAuthorization: string | null = null
+  let driveAuthorization: string | null = null
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: [
+      'email',
+      googleDocsDocumentsScope,
+      googleDriveMetadataReadonlyScope,
+      'openid',
+      'profile'
+    ],
+    token: {
+      accessToken: 'valid-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://www.googleapis.com/drive/v3/files')) {
+      driveAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          accessToken: 'should-not-log',
+          error: {
+            code: 403,
+            errors: [
+              {
+                message: 'Drive raw detail should not override the safe message.',
+                reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'
+              }
+            ],
+            message: 'Drive permission denied.',
+            status: 'PERMISSION_DENIED'
+          },
+          rawRequestBody: 'request-body-should-not-log'
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-denied')) {
+      docsAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 403,
+            errors: [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }],
+            message: 'Request had insufficient authentication scopes.',
+            status: 'PERMISSION_DENIED'
+          },
+          refreshToken: 'should-not-log'
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
+    ).rejects.toThrow(
+      'Google Drive files.list failed (HTTP 403, PERMISSION_DENIED, ACCESS_TOKEN_SCOPE_INSUFFICIENT): Drive permission denied.'
+    )
+    await expect(
+      plugin.tool.google_docs_read.execute({ documentId: 'doc-denied' }, {})
+    ).rejects.toThrow(
+      'Google Docs documents.get failed (HTTP 403, PERMISSION_DENIED, ACCESS_TOKEN_SCOPE_INSUFFICIENT): Request had insufficient authentication scopes.'
+    )
+
+    expect(driveAuthorization).toBe('Bearer valid-access-token')
+    expect(docsAuthorization).toBe('Bearer valid-access-token')
+    expect(warnings).toEqual([
+      [
+        'Google Workspace API request failed',
+        {
+          code: 'PERMISSION_DENIED',
+          message: 'Drive permission denied.',
+          operation: 'Google Drive files.list',
+          reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
+          status: 403
+        }
+      ],
+      [
+        'Google Workspace API request failed',
+        {
+          code: 'PERMISSION_DENIED',
+          message: 'Request had insufficient authentication scopes.',
+          operation: 'Google Docs documents.get',
+          reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
+          status: 403
+        }
+      ]
+    ])
+
+    const warningText = JSON.stringify(warnings)
+    expect(warningText).not.toContain('valid-access-token')
+    expect(warningText).not.toContain('refresh-token')
+    expect(warningText).not.toContain('should-not-log')
+    expect(warningText).not.toContain('request-body-should-not-log')
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(userDataPath, { recursive: true, force: true })
   }
 })
