@@ -4,6 +4,9 @@ import { useOpenCodeSdk, type createOpenCodeClient } from './opencode/client'
 import { openCodeQueryKeys } from './opencode/sidecar'
 
 type OpenCodeClient = ReturnType<typeof createOpenCodeClient>
+type OpenCodeSessionListParams = NonNullable<Parameters<OpenCodeClient['session']['list']>[0]> & {
+  roots?: boolean
+}
 type OpenCodeSessionListResponse = Awaited<ReturnType<OpenCodeClient['session']['list']>>
 type OpenCodeSessionGetResponse = Awaited<ReturnType<OpenCodeClient['session']['get']>>
 type OpenCodeSessionMessagesResponse = Awaited<ReturnType<OpenCodeClient['session']['messages']>>
@@ -79,17 +82,19 @@ export function useProjectSessions(
   const sessionsQuery = useQuery({
     queryKey: projectSessionsQueryKey(status, directory, limit),
     queryFn: async (): Promise<OpenCodeSession[]> => {
-      const response = await client!.session.list({
+      const listOptions: OpenCodeSessionListParams = {
         directory: directory!,
-        limit
-      })
+        limit,
+        roots: true
+      }
+      const response = await client!.session.list(listOptions)
 
       if (response.error) {
         logOpenCodeError('Session list failed', response.error, { directory, limit })
         throw response.error
       }
 
-      return response.data ?? []
+      return (response.data ?? []).filter(isRenderableSession)
     },
     enabled: client !== null && Boolean(directory)
   })
@@ -176,6 +181,10 @@ async function fetchSessionMessages(
   }
 
   return (response.data ?? []).filter(isRenderableMessage).sort(compareMessages)
+}
+
+export function isRenderableSession(session: OpenCodeSession | OpenCodeSessionDetails): boolean {
+  return getString(session, 'parentID') === null
 }
 
 function isRenderableMessage(message: OpenCodeSessionMessage): boolean {

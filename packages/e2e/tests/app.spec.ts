@@ -9,6 +9,9 @@ const desktopOutDirectory = join(repositoryDirectory, 'desktop', 'out')
 const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
+const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
+const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
+const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
 const projectSettingsLink = (page: Page): Locator =>
@@ -300,6 +303,37 @@ test('renders seeded stable chat messages', async ({ appWindow }) => {
   await openSeededDeterministicChat(appWindow)
   await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
   await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
+})
+
+test('filters parented subagent sessions from normal chat rendering', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expectOpenedProjectRouteResolved(appWindow)
+
+  await expect(
+    sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' })
+  ).toBeVisible()
+  await expect(
+    selectedProjectSessions(appWindow).getByText(hiddenSubagentSessionTitle)
+  ).toHaveCount(0)
+
+  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+  await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+  await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
+  await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
+
+  await appWindow.evaluate(() => {
+    window.location.hash = '#/projects/fake-project/sessions/child-subagent-session'
+  })
+  await expect
+    .poll(() => appWindow.evaluate(() => window.location.hash))
+    .toMatch(/\/projects\/fake-project\/sessions\/child-subagent-session$/)
+  await expect(appWindow.getByText('Session not found.')).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
+  await expect(appWindow.getByRole('button', { name: 'Send' })).toBeDisabled()
+  await expect(appWindow.getByText(hiddenSubagentSessionTitle)).toHaveCount(0)
+  await expect(appWindow.getByText(hiddenSubagentUserPrompt)).toHaveCount(0)
+  await expect(appWindow.getByText(hiddenSubagentAssistantResponse)).toHaveCount(0)
 })
 
 test('renders structured v1 and v2 message parts', async ({ appWindow }) => {

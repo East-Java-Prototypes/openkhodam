@@ -52,6 +52,7 @@ const providers = {
 type FakeSession = {
   id: string
   title: string
+  parentID?: string
   directory: string
   time: { created: number; updated: number }
   location: { directory: string }
@@ -147,6 +148,9 @@ function resetState(): void {
   nativeOpenCodeTime = BigInt(Date.now() - 60_000) * BigInt(0x1000)
   const seeded = createSession('seeded-session', 'Seeded deterministic chat', directory)
   const structured = createSession('structured-session', 'Structured fixture chat', directory)
+  const child = createSession('child-subagent-session', 'Hidden subagent child chat', directory, {
+    parentID: seeded.id
+  })
   sessions.set(seeded.id, seeded)
   messages.set(seeded.id, [
     userMessage(stableMessageID(), 'Seeded user prompt'),
@@ -157,6 +161,11 @@ function resetState(): void {
     structuredV1AssistantMessage(stableMessageID()),
     longCollapsedToolMessage(stableMessageID()),
     structuredV2AssistantMessage(stableMessageID())
+  ])
+  sessions.set(child.id, child)
+  messages.set(child.id, [
+    userMessage(stableMessageID(), 'Hidden subagent user prompt'),
+    assistantMessage(stableMessageID(), 'Hidden subagent assistant response')
   ])
 }
 
@@ -216,12 +225,18 @@ function isOpenCodeID(id: string, prefix: 'msg' | 'prt'): boolean {
   return new RegExp(`^${prefix}_[0-9a-f]{12}[0-9A-Za-z]{14}$`).test(id)
 }
 
-function createSession(id: string, title: string, sessionDirectory: string): FakeSession {
+function createSession(
+  id: string,
+  title: string,
+  sessionDirectory: string,
+  options: { parentID?: string } = {}
+): FakeSession {
   return {
     id,
     slug: id,
     projectID: 'fake-project',
     title,
+    ...options,
     directory: sessionDirectory,
     location: { directory: sessionDirectory },
     version: 'fake-stable',
