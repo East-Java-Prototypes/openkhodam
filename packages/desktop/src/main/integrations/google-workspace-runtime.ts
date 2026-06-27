@@ -47,6 +47,14 @@ type GoogleDocsDocumentResponse = GoogleDocsApiResponse & {
   title?: string
 }
 
+type GoogleDocsBatchUpdateResponse = GoogleDocsApiResponse & {
+  documentId?: string
+  writeControl?: {
+    requiredRevisionId?: string
+    targetRevisionId?: string
+  }
+}
+
 export type GoogleDriveFileMetadata = {
   id: string
   mimeType: string
@@ -85,6 +93,31 @@ export type GoogleDocsReadDocumentInput = {
   documentId: string
   fetch?: Fetch
   signal?: AbortSignal
+}
+
+export type GoogleDocsAppendTextInput = {
+  approve: (input: GoogleDocsAppendApprovalInput) => Promise<void>
+  configPath?: string
+  documentId: string
+  fetch?: Fetch
+  signal?: AbortSignal
+  text: string
+}
+
+export type GoogleDocsAppendApprovalInput = {
+  document: GoogleDocDocumentArtifact
+  insertionIndex: number
+  text: string
+}
+
+export type GoogleDocsAppendTextResult = {
+  ok: true
+  documentId: string
+  insertedTextLength: number
+  insertionIndex: number
+  link: string | null
+  revision: string | null
+  title: string | null
 }
 
 type GoogleWorkspaceAccessInput = {
@@ -169,6 +202,88 @@ export async function readGoogleDocDocument({
   }
 }
 
+export async function appendTextToGoogleDocDocument({
+  approve,
+  configPath = process.env.OPENKHODAM_CONFIG_PATH,
+  documentId,
+  fetch: fetchImpl = fetch,
+  signal,
+  text
+}: GoogleDocsAppendTextInput): Promise<GoogleDocsAppendTextResult> {
+  if (typeof approve !== 'function') {
+    throw new Error('Google Docs append requires approval before writing to Google Docs.')
+  }
+
+  const resolvedDocumentId = normalizeDocumentId(documentId)
+  const textToAppend = normalizeAppendText(text)
+  const { token } = await getGoogleWorkspaceAccessToken({
+    configPath,
+    disconnectedToolName: 'google_docs_append_text',
+    expiredMessage:
+      'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Google Docs access.',
+    fetch: fetchImpl,
+    missingScopeMessage: docsMissingScopeMessage(),
+    requiredScope: GOOGLE_DOCS_DOCUMENTS_SCOPE,
+    signal
+  })
+
+  const documentResponse = await fetchImpl(createDocsDocumentUrl(resolvedDocumentId), {
+    headers: {
+      authorization: `Bearer ${token.accessToken}`
+    },
+    signal
+  })
+  const documentBody = (await documentResponse
+    .json()
+    .catch(() => ({}))) as GoogleDocsDocumentResponse
+  if (!documentResponse.ok) {
+    throw new Error(
+      toDocsApiErrorMessage('get', documentResponse.status, documentBody.error?.message)
+    )
+  }
+
+  const document = toSafeGoogleDocDocument(documentBody, resolvedDocumentId)
+  const insertionIndex = getBodyEndInsertionIndex(documentBody)
+  await approve({ document, insertionIndex, text: textToAppend })
+
+  const response = await fetchImpl(createDocsBatchUpdateUrl(resolvedDocumentId), {
+    body: JSON.stringify({
+      requests: [
+        {
+          insertText: {
+            location: { index: insertionIndex },
+            text: textToAppend
+          }
+        }
+      ]
+    }),
+    headers: {
+      authorization: `Bearer ${token.accessToken}`,
+      'content-type': 'application/json'
+    },
+    method: 'POST',
+    signal
+  })
+
+  const body = (await response.json().catch(() => ({}))) as GoogleDocsBatchUpdateResponse
+  if (!response.ok) {
+    throw new Error(toDocsApiErrorMessage('batchUpdate', response.status, body.error?.message))
+  }
+
+  return {
+    ok: true,
+    documentId: body.documentId || document.id,
+    insertedTextLength: textToAppend.length,
+    insertionIndex,
+    link: document.link,
+    revision:
+      body.writeControl?.requiredRevisionId ??
+      body.writeControl?.targetRevisionId ??
+      document.revision,
+    title: document.title
+  }
+}
+
 export function clampDriveSearchLimit(limit: number | undefined): number {
   if (typeof limit !== 'number' || !Number.isFinite(limit)) return DEFAULT_DRIVE_SEARCH_LIMIT
   return Math.min(MAX_DRIVE_SEARCH_LIMIT, Math.max(1, Math.trunc(limit)))
@@ -193,10 +308,21 @@ export function createDocsDocumentUrl(documentId: string): URL {
   return url
 }
 
+export function createDocsBatchUpdateUrl(documentId: string): URL {
+  return new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}:batchUpdate`)
+}
+
 function normalizeDocumentId(documentId: string): string {
   const trimmed = documentId.trim()
   if (!trimmed) throw new Error('Google Docs document ID is required.')
   return trimmed
+}
+
+function normalizeAppendText(text: string): string {
+  if (typeof text !== 'string' || text.length === 0) {
+    throw new Error('Text to append to the Google Doc is required.')
+  }
+  return text
 }
 
 function createDriveQuery(query: string): string {
@@ -351,7 +477,11 @@ function toDriveApiErrorMessage(status: number, message: string | undefined): st
   return message ? `Google Drive files.list failed: ${message}` : 'Google Drive files.list failed.'
 }
 
-function toDocsApiErrorMessage(action: 'get', status: number, message: string | undefined): string {
+function toDocsApiErrorMessage(
+  action: 'batchUpdate' | 'get',
+  status: number,
+  message: string | undefined
+): string {
   if (status === 401) {
     return 'Google Docs rejected the saved Google Workspace token. Reconnect Google Workspace in Settings.'
   }
@@ -433,6 +563,17 @@ function extractParagraphText(value: unknown): string[] {
     const text = (textRun as Record<string, unknown>).content
     return typeof text === 'string' ? [text] : []
   })
+}
+
+function getBodyEndInsertionIndex(document: GoogleDocsDocumentResponse): number {
+  const content = Array.isArray(document.body?.content) ? document.body.content : []
+  const endIndexes = content
+    .map((block) =>
+      block && typeof block === 'object' ? (block as Record<string, unknown>).endIndex : null
+    )
+    .filter((index): index is number => typeof index === 'number' && Number.isFinite(index))
+  const maxEndIndex = endIndexes.length ? Math.max(...endIndexes) : 2
+  return Math.max(1, maxEndIndex - 1)
 }
 
 function createGoogleDocLink(documentId: string): string | null {
