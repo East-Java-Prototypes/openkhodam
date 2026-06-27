@@ -157,6 +157,9 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
         </span>
         <span className="text-xs text-muted-foreground">Details</span>
       </CollapsibleTrigger>
+      {part.artifact?.type === 'google.doc.document' ? (
+        <GoogleDocArtifactCard artifact={part.artifact} />
+      ) : null}
       <CollapsibleContent className="pt-3">
         <div className="flex flex-col gap-3">
           {part.input ? <PartBlock label="Input" text={part.input} /> : null}
@@ -166,6 +169,52 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
       </CollapsibleContent>
     </Collapsible>
   )
+}
+
+function GoogleDocArtifactCard({
+  artifact
+}: {
+  artifact: NonNullable<Extract<ChatMessagePart, { type: 'tool' }>['artifact']>
+}): JSX.Element {
+  const title = artifact.title ?? 'Untitled Google Doc'
+  const preview = artifact.text.trim() || 'No document text returned.'
+  return (
+    <section
+      className="mt-3 rounded-lg border border-border bg-muted/30 p-3"
+      aria-label={`Google Doc ${title}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Google Doc
+          </div>
+          {artifact.link ? (
+            <a
+              className="font-semibold underline-offset-4 hover:underline"
+              href={artifact.link}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {title}
+            </a>
+          ) : (
+            <div className="font-semibold">{title}</div>
+          )}
+        </div>
+        <div className="text-right text-xs text-muted-foreground">
+          <div>{artifact.id}</div>
+          {artifact.revision ? <div>Revision {artifact.revision}</div> : null}
+        </div>
+      </div>
+      <p className="mt-3 max-h-40 overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
+        {truncateArtifactPreview(preview)}
+      </p>
+    </section>
+  )
+}
+
+function truncateArtifactPreview(text: string): string {
+  return text.length > 1200 ? `${text.slice(0, 1197)}...` : text
 }
 
 function UnknownPart({
