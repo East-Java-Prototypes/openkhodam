@@ -1,5 +1,6 @@
 # Agent Development Notes
 
+- Before finalizing implementation plans in this repo, load and apply the repo-local `openkhodam-scope` skill. Use it for repo-specific planning, scoping, feature work, refactors, and behavior matching; it complements the global `develop` skill and should not force reference lookups for unrelated trivial changes.
 - This repository uses `flake.nix` to provide the expected Node.js and pnpm tooling.
 - Run project commands through the Nix development shell unless you are already inside `nix develop`.
 - Examples:
