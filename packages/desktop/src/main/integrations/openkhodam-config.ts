@@ -1,7 +1,8 @@
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 
 import type { GoogleWorkspaceIntegrationStatus } from '@openkhodam/ui/types'
+
+import { JsonConfigFile } from '../config/json-config-file'
 
 export type GoogleWorkspaceAccountConfig = {
   email: string | null
@@ -32,42 +33,22 @@ export const OPENKHODAM_CONFIG_FILE_NAME = 'openkhodam-config.json'
 
 export class OpenKhodamConfigFileStore {
   readonly filePath: string
+  private readonly configFile: JsonConfigFile<OpenKhodamConfig>
 
   constructor(filePath: string) {
     this.filePath = filePath
+    this.configFile = new JsonConfigFile(filePath, {
+      defaultValue: createDefaultConfig,
+      normalize: normalizeConfig
+    })
   }
 
   async read(): Promise<OpenKhodamConfig> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8')
-      return normalizeConfig(JSON.parse(raw) as Partial<OpenKhodamConfig>)
-    } catch (error) {
-      if (isNodeError(error) && error.code === 'ENOENT') {
-        return createDefaultConfig()
-      }
-
-      throw error
-    }
+    return this.configFile.read()
   }
 
   async write(config: OpenKhodamConfig): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true })
-    const temporaryPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
-    const handle = await open(temporaryPath, 'w', 0o600)
-
-    try {
-      await handle.writeFile(`${JSON.stringify(normalizeConfig(config), null, 2)}\n`, 'utf8')
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
-
-    try {
-      await rename(temporaryPath, this.filePath)
-    } catch (error) {
-      await rm(temporaryPath, { force: true })
-      throw error
-    }
+    await this.configFile.write(config)
   }
 
   async getGoogleWorkspaceStatus(configured: boolean): Promise<GoogleWorkspaceIntegrationStatus> {
@@ -164,7 +145,8 @@ export function toGoogleWorkspaceStatus(
   }
 }
 
-function normalizeConfig(config: Partial<OpenKhodamConfig>): OpenKhodamConfig {
+function normalizeConfig(value: unknown): OpenKhodamConfig {
+  const config = (value ?? {}) as Partial<OpenKhodamConfig>
   const google = config.integrations?.googleWorkspace
   return {
     version: 1,
@@ -192,8 +174,4 @@ function normalizeConfig(config: Partial<OpenKhodamConfig>): OpenKhodamConfig {
       }
     }
   }
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error
 }

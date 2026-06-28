@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -7,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { expect, test } from '@playwright/test'
 
 const testsDirectory = dirname(fileURLToPath(import.meta.url))
+const requireDesktopModule = createRequire(import.meta.url)
 const desktopDirectory = join(testsDirectory, '..', '..', 'desktop')
 const desktopOutDirectory = join(desktopDirectory, 'out')
 const builtPluginPath = join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs')
@@ -77,6 +79,113 @@ type OpenKhodamConfigFixture = {
       updatedAt: number | null
     }
   }
+}
+
+type JsonConfigFileModule = typeof import('../../desktop/src/main/config/json-config-file')
+type OpenKhodamConfigModule = typeof import('../../desktop/src/main/integrations/openkhodam-config')
+type RuntimeConfigModule = typeof import('../../desktop/src/main/opencode-runtime-config')
+
+test('reads defaults and writes normalized JSON config files atomically', async () => {
+  const { JsonConfigFile } = loadDesktopModule<JsonConfigFileModule>(
+    '../../desktop/src/main/config/json-config-file'
+  )
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-json-config-'))
+  const configPath = join(userDataPath, 'nested', 'config.json')
+  const configFile = new JsonConfigFile(configPath, {
+    defaultValue: () => ({ enabled: false, items: [] as string[] }),
+    normalize: (value) => {
+      const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+      return {
+        enabled: record.enabled === true,
+        items: Array.isArray(record.items)
+          ? record.items.filter((item): item is string => typeof item === 'string')
+          : []
+      }
+    }
+  })
+
+  try {
+    await expect(configFile.read()).resolves.toEqual({ enabled: false, items: [] })
+
+    await configFile.write({ enabled: true, items: ['one', 'two'] })
+
+    await expect(configFile.read()).resolves.toEqual({ enabled: true, items: ['one', 'two'] })
+    expect(await readFile(configPath, 'utf8')).toBe(
+      '{\n  "enabled": true,\n  "items": [\n    "one",\n    "two"\n  ]\n}\n'
+    )
+    expect((await stat(configPath)).mode & 0o777).toBe(0o600)
+  } finally {
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('keeps app-owned and generated runtime config paths and payloads stable', async () => {
+  const { OpenKhodamConfigFileStore } = loadDesktopModule<OpenKhodamConfigModule>(
+    '../../desktop/src/main/integrations/openkhodam-config'
+  )
+  const { createRuntimeOpenCodeConfig, writeRuntimeOpenCodeConfig } =
+    loadDesktopModule<RuntimeConfigModule>('../../desktop/src/main/opencode-runtime-config')
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-config-stores-'))
+  const appConfigPath = join(userDataPath, 'openkhodam-config.json')
+  const configStore = new OpenKhodamConfigFileStore(appConfigPath)
+  const pluginPaths = ['/tmp/openkhodam-poc.mjs', '/tmp/google-workspace.mjs']
+
+  try {
+    await expect(configStore.read()).resolves.toEqual({
+      version: 1,
+      integrations: {
+        googleWorkspace: {
+          account: null,
+          scopes: [],
+          token: null,
+          updatedAt: null
+        }
+      }
+    })
+
+    await configStore.setGoogleWorkspaceConnection(
+      { email: 'fake@example.com', name: 'Fake User' },
+      ['profile', 'email', 'email'],
+      {
+        accessToken: 'access-token',
+        expiresAt: 123,
+        idToken: null,
+        refreshToken: 'refresh-token',
+        tokenType: 'Bearer'
+      }
+    )
+
+    const appConfig = JSON.parse(await readFile(appConfigPath, 'utf8')) as OpenKhodamConfigFixture
+    expect(appConfig.integrations.googleWorkspace.account).toEqual({
+      email: 'fake@example.com',
+      name: 'Fake User'
+    })
+    expect(appConfig.integrations.googleWorkspace.scopes).toEqual(['email', 'profile'])
+    expect(appConfig.integrations.googleWorkspace.token).toEqual({
+      accessToken: 'access-token',
+      expiresAt: 123,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    })
+    expect(typeof appConfig.integrations.googleWorkspace.updatedAt).toBe('number')
+    expect((await stat(appConfigPath)).mode & 0o777).toBe(0o600)
+
+    const runtimeConfigPath = await writeRuntimeOpenCodeConfig(userDataPath, pluginPaths)
+    expect(runtimeConfigPath).toBe(
+      join(userDataPath, 'opencode-sidecar', 'runtime-opencode-config.json')
+    )
+    expect(JSON.parse(await readFile(runtimeConfigPath, 'utf8'))).toEqual(
+      createRuntimeOpenCodeConfig(pluginPaths)
+    )
+    expect((await stat(runtimeConfigPath)).mode & 0o777).toBe(0o600)
+  } finally {
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+function loadDesktopModule<TModule>(path: string): TModule {
+  return requireDesktopModule(path) as TModule
 }
 
 test('resolves the bundled and packaged OpenKhodam plugin paths', () => {
