@@ -1,5 +1,6 @@
-import { mkdir, open, rename, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
+
+import { writeJsonConfigFile } from './config/json-config-file'
 
 export type RuntimeOpenCodeConfig = {
   $schema: string
@@ -24,28 +25,7 @@ export async function writeRuntimeOpenCodeConfig(
   pluginPaths: string | string[]
 ): Promise<string> {
   const filePath = runtimeOpenCodeConfigPath(userDataPath)
-  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
-
-  await mkdir(dirname(filePath), { recursive: true })
-
-  const handle = await open(temporaryPath, 'w', 0o600)
-
-  try {
-    await handle.writeFile(
-      `${JSON.stringify(createRuntimeOpenCodeConfig(pluginPaths), null, 2)}\n`,
-      'utf8'
-    )
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-
-  try {
-    await rename(temporaryPath, filePath)
-  } catch (error) {
-    await rm(temporaryPath, { force: true })
-    throw error
-  }
+  await writeJsonConfigFile(filePath, createRuntimeOpenCodeConfig(pluginPaths))
 
   return filePath
 }
