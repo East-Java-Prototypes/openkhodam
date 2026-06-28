@@ -1,4 +1,4 @@
-import type { ChatMessagePart } from '../useChatInterfaceData'
+import type { ChatMessagePart, GoogleDocDocumentArtifact } from '../useChatInterfaceData'
 
 export type NormalizedOpenCodeMessage = {
   id: string | null
@@ -123,6 +123,7 @@ function normalizeTool(value: Record<string, unknown>, id: string): ChatMessageP
     valueToText(getProperty(state, 'output')) ??
     contentItemsText(getArrayProperty(state, 'content'))
   const error = valueToText(getProperty(value, 'error')) ?? valueToText(getProperty(state, 'error'))
+  const artifact = extractGoogleDocDocumentArtifact(output)
   return {
     id: getStringFromRecord(value, 'id') ?? id,
     type: 'tool',
@@ -136,8 +137,58 @@ function normalizeTool(value: Record<string, unknown>, id: string): ChatMessageP
     title: getStringFromRecord(value, 'title') ?? undefined,
     input: valueToText(input) ?? undefined,
     output: output ?? undefined,
-    error: error ?? undefined
+    error: error ?? undefined,
+    artifact
   }
+}
+
+function extractGoogleDocDocumentArtifact(
+  output: string | null
+): GoogleDocDocumentArtifact | undefined {
+  if (!output) return undefined
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(output)
+  } catch {
+    return undefined
+  }
+
+  const candidate = findGoogleDocDocumentArtifactRecord(parsed)
+  if (!candidate) return undefined
+  const id = getStringFromRecord(candidate, 'id') ?? getStringFromRecord(candidate, 'documentId')
+  if (!id) return undefined
+
+  return {
+    type: 'google.doc.document',
+    id,
+    title: getStringFromRecord(candidate, 'title'),
+    revision:
+      getStringFromRecord(candidate, 'revision') ?? getStringFromRecord(candidate, 'revisionId'),
+    text: getStringFromRecord(candidate, 'text') ?? '',
+    link: getStringFromRecord(candidate, 'link') ?? getStringFromRecord(candidate, 'url')
+  }
+}
+
+function findGoogleDocDocumentArtifactRecord(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null
+  if (isGoogleDocDocumentArtifactRecord(value)) return value
+
+  const nestedRecordKeys = ['artifact', 'data', 'document', 'result']
+  for (const key of nestedRecordKeys) {
+    const nested = findGoogleDocDocumentArtifactRecord(getProperty(value, key))
+    if (nested) return nested
+  }
+
+  const artifacts = getArrayProperty(value, 'artifacts')
+  return artifacts?.map(findGoogleDocDocumentArtifactRecord).find(Boolean) ?? null
+}
+
+function isGoogleDocDocumentArtifactRecord(value: Record<string, unknown>): boolean {
+  return (
+    getStringFromRecord(value, 'type') === 'google.doc.document' ||
+    getStringFromRecord(value, 'kind') === 'google.doc.document'
+  )
 }
 
 function textParts(text: string | null, id: string): ChatMessagePart[] {

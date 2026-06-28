@@ -6,6 +6,15 @@ export type ChatMessage = {
   parts: ChatMessagePart[]
 }
 
+export type GoogleDocDocumentArtifact = {
+  type: 'google.doc.document'
+  id: string
+  title: string | null
+  revision: string | null
+  text: string
+  link: string | null
+}
+
 export type ChatMessagePart =
   | { id: string; type: 'text'; text: string }
   | { id: string; type: 'reasoning'; text: string }
@@ -18,6 +27,7 @@ export type ChatMessagePart =
       output?: string
       error?: string
       title?: string
+      artifact?: GoogleDocDocumentArtifact
     }
   | { id: string; type: 'status'; title: string; text?: string }
   | { id: string; type: 'unknown'; label: string; text: string }
