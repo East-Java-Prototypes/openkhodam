@@ -2,13 +2,19 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   GoogleWorkspaceIntegrationStatus,
   OpenCodeConnection,
-  OpenCodeSidecarStatus
+  OpenCodeSidecarStatus,
+  WorkspaceResourceAttachGoogleDocInput,
+  WorkspaceResourcesConfig,
+  WorkspaceSessionActiveResourceInput
 } from '@openkhodam/ui/types'
 
 export type {
   GoogleWorkspaceIntegrationStatus,
   OpenCodeConnection,
-  OpenCodeSidecarStatus
+  OpenCodeSidecarStatus,
+  WorkspaceResourceAttachGoogleDocInput,
+  WorkspaceResourcesConfig,
+  WorkspaceSessionActiveResourceInput
 } from '@openkhodam/ui/types'
 
 export type OpenKhodamAPI = {
@@ -19,6 +25,13 @@ export type OpenKhodamAPI = {
   connectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
   cancelGoogleWorkspaceConnect: () => Promise<GoogleWorkspaceIntegrationStatus>
   disconnectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
+  getWorkspaceResources: (projectDirectory: string) => Promise<WorkspaceResourcesConfig>
+  attachWorkspaceGoogleDoc: (
+    input: WorkspaceResourceAttachGoogleDocInput
+  ) => Promise<WorkspaceResourcesConfig>
+  setWorkspaceSessionActiveResource: (
+    input: WorkspaceSessionActiveResourceInput
+  ) => Promise<WorkspaceResourcesConfig>
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void) => () => void
 }
 

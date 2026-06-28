@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import type { ElectronApplication } from '@playwright/test'
@@ -6,6 +6,7 @@ import { expect, test, type Locator, type Page } from '../fixtures/electron'
 
 const repositoryDirectory = dirname(process.cwd())
 const desktopOutDirectory = join(repositoryDirectory, 'desktop', 'out')
+const workspaceResourcesPath = join(process.cwd(), '.openkhodam', 'resources.json')
 const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
@@ -107,6 +108,27 @@ async function articleTexts(page: Page): Promise<string[]> {
     .evaluateAll((articles) =>
       articles.map((article) => article.textContent?.replace(/\s+/g, ' ').trim() ?? '')
     )
+}
+
+async function readWorkspaceResourcesConfig(): Promise<any> {
+  return JSON.parse(await readFile(workspaceResourcesPath, 'utf8'))
+}
+
+async function backupWorkspaceResourcesConfig(): Promise<string | null> {
+  return readFile(workspaceResourcesPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null
+    throw error
+  })
+}
+
+async function restoreWorkspaceResourcesConfig(backup: string | null): Promise<void> {
+  if (backup === null) {
+    await rm(workspaceResourcesPath, { force: true })
+    return
+  }
+
+  await mkdir(dirname(workspaceResourcesPath), { recursive: true })
+  await writeFile(workspaceResourcesPath, backup, 'utf8')
 }
 
 async function waitForMainProcessValue(
@@ -472,6 +494,97 @@ test('shows only connected OpenCode models in the composer picker', async ({ app
   await modelPicker.click()
   await expect(appWindow.getByText('Connected Alternate Model')).toBeVisible()
   await expect(appWindow.getByText('Disconnected Hidden Model')).toHaveCount(0)
+})
+
+test('attaches Google Docs resources and restores a session active Doc after reload', async ({
+  appWindow
+}) => {
+  const backup = await backupWorkspaceResourcesConfig()
+  await rm(workspaceResourcesPath, { force: true })
+
+  try {
+    await openSeededDeterministicChat(appWindow)
+
+    const attachForm = appWindow.getByRole('form', { name: 'Attach Google Doc' })
+    await expect(attachForm).toBeVisible()
+    await attachForm.getByLabel('Google Docs alias').fill('Sheet Draft')
+    await attachForm
+      .getByLabel('Google Docs URL')
+      .fill('https://docs.google.com/spreadsheets/d/sheet-id-123/edit')
+    await attachForm.getByRole('button', { name: 'Attach Doc' }).click()
+    await expect(
+      appWindow.getByRole('alert').filter({ hasText: 'Google Sheets URLs are not supported yet' })
+    ).toBeVisible()
+
+    await attachForm.getByLabel('Google Docs alias').fill('Spec Doc')
+    await attachForm.getByLabel('Title (optional)').fill('Project spec')
+    await attachForm
+      .getByLabel('Google Docs URL')
+      .fill('https://docs.google.com/document/d/doc_123-ABC/edit?usp=sharing')
+    await attachForm.getByRole('button', { name: 'Attach Doc' }).click()
+    await expect(appWindow.getByText('Spec Doc', { exact: true }).first()).toBeVisible()
+
+    await attachForm.getByLabel('Google Docs alias').fill('Roadmap Doc')
+    await attachForm.getByLabel('Title (optional)').fill('Roadmap')
+    await attachForm
+      .getByLabel('Google Docs URL')
+      .fill('https://docs.google.com/document/u/0/d/roadmap-456_DEF/edit#heading=h.1')
+    await attachForm.getByRole('button', { name: 'Attach Doc' }).click()
+    await expect(appWindow.getByText('Roadmap Doc', { exact: true }).first()).toBeVisible()
+
+    const activeDoc = appWindow.getByLabel('Active Google Doc')
+    await expect(activeDoc).toHaveValue('')
+    await activeDoc.selectOption('Roadmap Doc')
+    await expect(activeDoc).toHaveValue('Roadmap Doc')
+
+    await expect
+      .poll(async () => {
+        const config = await readWorkspaceResourcesConfig()
+        return config.sessions?.['seeded-session']?.activeResource ?? null
+      })
+      .toBe('Roadmap Doc')
+
+    const persisted = await readWorkspaceResourcesConfig()
+    expect(persisted).toMatchObject({
+      version: 1,
+      defaultResource: 'Spec Doc',
+      resources: [
+        {
+          alias: 'Spec Doc',
+          provider: 'google',
+          kind: 'doc',
+          id: 'doc_123-ABC',
+          title: 'Project spec',
+          url: 'https://docs.google.com/document/d/doc_123-ABC/edit'
+        },
+        {
+          alias: 'Roadmap Doc',
+          provider: 'google',
+          kind: 'doc',
+          id: 'roadmap-456_DEF',
+          title: 'Roadmap',
+          url: 'https://docs.google.com/document/d/roadmap-456_DEF/edit'
+        }
+      ],
+      sessions: {
+        'seeded-session': {
+          activeResource: 'Roadmap Doc',
+          resources: ['Roadmap Doc']
+        }
+      }
+    })
+    const persistedText = JSON.stringify(persisted)
+    expect(persistedText).not.toMatch(/access[_-]?token|refresh[_-]?token|client[_-]?secret/i)
+    expect(persistedText).not.toContain('usp=sharing')
+
+    await appWindow.reload()
+    await expect(appWindow.getByRole('form', { name: 'Attach Google Doc' })).toBeVisible()
+    await expect(appWindow.getByText('Spec Doc', { exact: true }).first()).toBeVisible()
+    await expect(appWindow.getByText('Roadmap Doc', { exact: true }).first()).toBeVisible()
+    await expect(appWindow.getByLabel('Active Google Doc')).toHaveValue('Roadmap Doc')
+  } finally {
+    await restoreWorkspaceResourcesConfig(backup)
+  }
 })
 
 test('starts a new stable chat from the project route', async ({ appWindow }) => {

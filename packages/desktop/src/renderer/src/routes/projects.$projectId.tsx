@@ -5,6 +5,7 @@ import { useCallback } from 'react'
 import { ChatHomePage } from '../components/chat/ChatHomePage'
 import { useOpenCodeChatShell, useOpenCodeProjectRoute } from '../hooks/useOpenCodeChatInterface'
 import { OpenCodeProjectRouteProvider } from '../hooks/useOpenCodeProjectRouteContext'
+import { useWorkspaceResources } from '../hooks/useWorkspaceResources'
 
 export const Route = createFileRoute('/projects/$projectId')({ component: ProjectRoute })
 
@@ -21,9 +22,15 @@ function ProjectRoute(): JSX.Element {
   )
   const shell = useOpenCodeChatShell(navigateToOpenedProject)
   const project = useOpenCodeProjectRoute(projectId)
+  const workspaceResources = useWorkspaceResources(project.selectedDirectory)
   return (
     <OpenCodeProjectRouteProvider project={project}>
-      <ChatHomePage shell={shell} project={project} activePane={<Outlet />} />
+      <ChatHomePage
+        shell={shell}
+        project={project}
+        workspaceResources={workspaceResources}
+        activePane={<Outlet />}
+      />
     </OpenCodeProjectRouteProvider>
   )
 }

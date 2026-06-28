@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import { createOpenCodeSidecar } from './opencode-sidecar'
 import { OpenKhodamConfigStore } from './integrations/openkhodam-config'
 import { createGoogleWorkspaceIntegration } from './integrations/google-workspace'
+import { createWorkspaceResourcesIntegration } from './integrations/workspace-resources'
 
 const opencodeSidecar = createOpenCodeSidecar()
 const isE2e = process.env['OPENKHODAM_E2E'] === '1'
@@ -47,6 +48,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   const openKhodamConfig = new OpenKhodamConfigStore(app.getPath('userData'))
   const googleWorkspace = createGoogleWorkspaceIntegration(openKhodamConfig)
+  const workspaceResources = createWorkspaceResourcesIntegration()
 
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
@@ -65,6 +67,15 @@ app.whenReady().then(() => {
   ipcMain.handle('google-workspace:connect', () => googleWorkspace.connect())
   ipcMain.handle('google-workspace:cancel-connect', () => googleWorkspace.cancelConnect())
   ipcMain.handle('google-workspace:disconnect', () => googleWorkspace.disconnect())
+  ipcMain.handle('workspace-resources:get', (_event, projectDirectory: string) =>
+    workspaceResources.getResources(projectDirectory)
+  )
+  ipcMain.handle('workspace-resources:attach-google-doc', (_event, input) =>
+    workspaceResources.attachGoogleDoc(input)
+  )
+  ipcMain.handle('workspace-resources:set-session-active', (_event, input) =>
+    workspaceResources.setSessionActiveResource(input)
+  )
 
   opencodeSidecar.onStatusChange((status) => {
     BrowserWindow.getAllWindows().forEach((window) => {

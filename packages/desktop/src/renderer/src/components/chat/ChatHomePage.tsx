@@ -57,6 +57,7 @@ import { cn } from '@/lib/utils'
 
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
 import { ChatMessageParts } from './ChatMessageParts'
+import type { WorkspaceResourcesState } from '../../hooks/useWorkspaceResources'
 import type {
   OpenCodeChatShellState,
   OpenCodeModelOption,
@@ -69,6 +70,7 @@ type ChatHomePageProps = {
   shell: OpenCodeChatShellState
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  workspaceResources?: WorkspaceResourcesState
   activePane?: ReactNode
 }
 
@@ -76,6 +78,7 @@ export function ChatHomePage({
   shell,
   project,
   session,
+  workspaceResources,
   activePane
 }: ChatHomePageProps): JSX.Element {
   const projectSidebarPanelRef = useRef<PanelImperativeHandle | null>(null)
@@ -142,6 +145,7 @@ export function ChatHomePage({
               shell={shell}
               project={project}
               session={session}
+              workspaceResources={workspaceResources}
               onCollapse={() => handleProjectSidebarOpenChange(false)}
             />
           ) : (
@@ -151,7 +155,13 @@ export function ChatHomePage({
         <ResizableHandle withHandle aria-label="Resize project sidebar" />
         <ResizablePanel id="active-pane-panel" defaultSize="75%" minSize="20rem">
           <main className="grid h-full min-h-0 min-w-0 grid-cols-1 overflow-hidden bg-background text-foreground">
-            {activePane ?? <ActiveChatPanel project={project} session={session} />}
+            {activePane ?? (
+              <ActiveChatPanel
+                project={project}
+                session={session}
+                workspaceResources={workspaceResources}
+              />
+            )}
           </main>
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -163,11 +173,13 @@ function ProjectChatSidebar({
   shell,
   project,
   session,
+  workspaceResources,
   onCollapse
 }: {
   shell: OpenCodeChatShellState
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  workspaceResources?: WorkspaceResourcesState
   onCollapse: () => void
 }): JSX.Element {
   return (
@@ -233,6 +245,7 @@ function ProjectChatSidebar({
                     project={chatProject}
                     routeProject={project}
                     session={session}
+                    workspaceResources={workspaceResources}
                   />
                 ))}
               </SidebarMenu>
@@ -386,18 +399,162 @@ function ProjectButton({
 function ProjectWithSessions({
   project,
   routeProject,
-  session
+  session,
+  workspaceResources
 }: {
   project: ChatProject
   routeProject?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  workspaceResources?: WorkspaceResourcesState
 }): JSX.Element {
   const isActive = project.subtitle === routeProject?.selectedDirectory
   return (
     <SidebarMenuItem>
       <ProjectButton project={project} isActive={isActive} />
-      {isActive ? <SelectedProjectSessions project={routeProject} session={session} /> : null}
+      {isActive ? (
+        <>
+          <SelectedProjectSessions project={routeProject} session={session} />
+          <ProjectWorkspaceResourcesPanel workspaceResources={workspaceResources} />
+        </>
+      ) : null}
     </SidebarMenuItem>
+  )
+}
+
+function ProjectWorkspaceResourcesPanel({
+  workspaceResources
+}: {
+  workspaceResources?: WorkspaceResourcesState
+}): JSX.Element | null {
+  const [alias, setAlias] = useState('')
+  const [title, setTitle] = useState('')
+  const [url, setUrl] = useState('')
+
+  if (!workspaceResources) return null
+
+  const canAttach =
+    alias.trim().length > 0 &&
+    url.trim().length > 0 &&
+    !workspaceResources.isAttaching &&
+    !workspaceResources.isLoading
+
+  return (
+    <section
+      className="mt-3 rounded-none border bg-card p-3"
+      aria-labelledby="workspace-resources-heading"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 id="workspace-resources-heading" className="text-sm font-semibold">
+            Project Google Docs
+          </h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Saved to .openkhodam/resources.json with Doc and session IDs only; OAuth tokens stay in
+            Settings.
+          </p>
+        </div>
+        {workspaceResources.defaultResource ? (
+          <Badge variant="outline" className="shrink-0">
+            Default
+          </Badge>
+        ) : null}
+      </div>
+      <form
+        className="mt-3 flex flex-col gap-2"
+        aria-label="Attach Google Doc"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!canAttach) return
+          void workspaceResources
+            .attachGoogleDoc({ alias, title: title.trim() || null, url })
+            .then(() => {
+              setAlias('')
+              setTitle('')
+              setUrl('')
+            })
+            .catch(() => undefined)
+        }}
+      >
+        <label className="text-xs font-medium text-muted-foreground" htmlFor="google-doc-alias">
+          Google Docs alias
+        </label>
+        <input
+          id="google-doc-alias"
+          className="rounded-none border bg-background px-2 py-1 text-sm"
+          value={alias}
+          onChange={(event) => setAlias(event.currentTarget.value)}
+          placeholder="Spec Doc"
+        />
+        <label className="text-xs font-medium text-muted-foreground" htmlFor="google-doc-title">
+          Title (optional)
+        </label>
+        <input
+          id="google-doc-title"
+          className="rounded-none border bg-background px-2 py-1 text-sm"
+          value={title}
+          onChange={(event) => setTitle(event.currentTarget.value)}
+          placeholder="Project specification"
+        />
+        <label className="text-xs font-medium text-muted-foreground" htmlFor="google-doc-url">
+          Google Docs URL
+        </label>
+        <input
+          id="google-doc-url"
+          className="rounded-none border bg-background px-2 py-1 text-sm"
+          value={url}
+          onChange={(event) => setUrl(event.currentTarget.value)}
+          placeholder="https://docs.google.com/document/d/.../edit"
+        />
+        <Button type="submit" size="sm" disabled={!canAttach}>
+          {workspaceResources.isAttaching ? 'Attaching…' : 'Attach Doc'}
+        </Button>
+      </form>
+      {workspaceResources.errorMessage ? (
+        <p className="mt-2 text-xs text-destructive" role="alert">
+          {workspaceResources.errorMessage}
+        </p>
+      ) : null}
+      {workspaceResources.attachErrorMessage ? (
+        <p className="mt-2 text-xs text-destructive" role="alert">
+          {workspaceResources.attachErrorMessage}
+        </p>
+      ) : null}
+      <AttachedGoogleDocsList workspaceResources={workspaceResources} />
+    </section>
+  )
+}
+
+function AttachedGoogleDocsList({
+  workspaceResources
+}: {
+  workspaceResources: WorkspaceResourcesState
+}): JSX.Element {
+  if (workspaceResources.isLoading) {
+    return <p className="mt-3 text-xs text-muted-foreground">Loading saved Google Docs…</p>
+  }
+
+  if (workspaceResources.resources.length === 0) {
+    return <p className="mt-3 text-xs text-muted-foreground">No Google Docs attached yet.</p>
+  }
+
+  return (
+    <ul className="mt-3 flex flex-col gap-2" aria-label="Attached Google Docs">
+      {workspaceResources.resources.map((resource) => (
+        <li key={resource.alias} className="min-w-0 text-xs">
+          <span className="flex min-w-0 items-center justify-between gap-2">
+            <span className="min-w-0">
+              <span className="block truncate font-medium text-foreground">{resource.alias}</span>
+              <span className="block truncate text-muted-foreground">{resource.title}</span>
+            </span>
+            {workspaceResources.config.defaultResource === resource.alias ? (
+              <Badge variant="secondary" className="shrink-0">
+                Project default
+              </Badge>
+            ) : null}
+          </span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -501,12 +658,14 @@ function ProjectChatListItem({
 export function ActiveChatPanel({
   project,
   session,
+  workspaceResources,
   emptyMessage,
   composer,
   composerErrorMessage
 }: {
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  workspaceResources?: WorkspaceResourcesState
   emptyMessage?: string
   composer?: ReactNode
   composerErrorMessage?: string | null
@@ -526,7 +685,15 @@ export function ActiveChatPanel({
             <p className="text-muted-foreground text-sm">{project.selectedProject.name}</p>
           ) : null}
         </div>
-        <Badge variant="secondary">OpenCode</Badge>
+        <div className="flex flex-col items-end gap-2">
+          <Badge variant="secondary">OpenCode</Badge>
+          {session ? (
+            <SessionWorkspaceResourceSelector
+              session={session}
+              workspaceResources={workspaceResources}
+            />
+          ) : null}
+        </div>
       </header>
       <Separator />
       <ChatMessageList
@@ -560,14 +727,17 @@ export function ActiveChatPanel({
 
 export function ProjectRouteActivePane({
   project,
+  workspaceResources,
   startConversation
 }: {
   project?: OpenCodeProjectRouteState
+  workspaceResources?: WorkspaceResourcesState
   startConversation?: OpenCodeStartConversationState
 }): JSX.Element {
   return (
     <ActiveChatPanel
       project={project}
+      workspaceResources={workspaceResources}
       emptyMessage={project?.emptyMessage ?? 'Start a new conversation for this project.'}
       composer={
         startConversation ? (
@@ -593,12 +763,82 @@ export function ProjectRouteActivePane({
 
 export function SessionRouteActivePane({
   project,
-  session
+  session,
+  workspaceResources
 }: {
   project?: OpenCodeProjectRouteState
   session: OpenCodeSessionRouteState
+  workspaceResources?: WorkspaceResourcesState
 }): JSX.Element {
-  return <ActiveChatPanel project={project} session={session} />
+  return <ActiveChatPanel project={project} session={session} workspaceResources={workspaceResources} />
+}
+
+function SessionWorkspaceResourceSelector({
+  session,
+  workspaceResources
+}: {
+  session: OpenCodeSessionRouteState
+  workspaceResources?: WorkspaceResourcesState
+}): JSX.Element | null {
+  if (!workspaceResources) return null
+
+  const sessionId = session.activeChat?.id ?? null
+  const activeResource = workspaceResources.getSessionActiveResource(sessionId)
+  const selectedAlias = workspaceResources.getSessionActiveResourceAlias(sessionId)
+  const selectId = `active-google-doc-${sessionId ?? 'none'}`
+  const disabled =
+    !sessionId ||
+    workspaceResources.resources.length === 0 ||
+    workspaceResources.isSettingActiveResource ||
+    workspaceResources.isLoading
+
+  return (
+    <div className="flex max-w-72 flex-col items-end gap-1 text-right">
+      <label className="text-xs font-medium text-muted-foreground" htmlFor={selectId}>
+        Active Google Doc
+      </label>
+      <select
+        id={selectId}
+        className="max-w-full rounded-none border bg-card px-2 py-1 text-xs"
+        aria-label="Active Google Doc"
+        disabled={disabled}
+        value={selectedAlias}
+        onChange={(event) => {
+          if (!sessionId) return
+          const activeResource = event.currentTarget.value || null
+          void workspaceResources
+            .setSessionActiveResource(sessionId, activeResource)
+            .catch(() => undefined)
+        }}
+      >
+        <option value="">
+          {workspaceResources.defaultResource
+            ? `Use project default (${workspaceResources.defaultResource.alias})`
+            : 'No Google Docs attached'}
+        </option>
+        {workspaceResources.resources.map((resource) => (
+          <option key={resource.alias} value={resource.alias}>
+            {resource.alias}
+          </option>
+        ))}
+      </select>
+      {activeResource ? (
+        <a
+          className="max-w-full truncate text-xs text-muted-foreground underline-offset-4 hover:underline"
+          href={activeResource.url}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {activeResource.title}
+        </a>
+      ) : null}
+      {workspaceResources.setActiveErrorMessage ? (
+        <p className="text-xs text-destructive" role="alert">
+          {workspaceResources.setActiveErrorMessage}
+        </p>
+      ) : null}
+    </div>
+  )
 }
 
 function ChatMessageList({

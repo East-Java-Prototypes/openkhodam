@@ -3,7 +3,10 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type {
   GoogleWorkspaceIntegrationStatus,
   OpenCodeConnection,
-  OpenCodeSidecarStatus
+  OpenCodeSidecarStatus,
+  WorkspaceResourceAttachGoogleDocInput,
+  WorkspaceResourcesConfig,
+  WorkspaceSessionActiveResourceInput
 } from '@openkhodam/ui/types'
 
 // Custom APIs for renderer
@@ -21,6 +24,16 @@ const api = {
     ipcRenderer.invoke('google-workspace:cancel-connect'),
   disconnectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
     ipcRenderer.invoke('google-workspace:disconnect'),
+  getWorkspaceResources: (projectDirectory: string): Promise<WorkspaceResourcesConfig> =>
+    ipcRenderer.invoke('workspace-resources:get', projectDirectory),
+  attachWorkspaceGoogleDoc: (
+    input: WorkspaceResourceAttachGoogleDocInput
+  ): Promise<WorkspaceResourcesConfig> =>
+    ipcRenderer.invoke('workspace-resources:attach-google-doc', input),
+  setWorkspaceSessionActiveResource: (
+    input: WorkspaceSessionActiveResourceInput
+  ): Promise<WorkspaceResourcesConfig> =>
+    ipcRenderer.invoke('workspace-resources:set-session-active', input),
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, status: OpenCodeSidecarStatus): void =>
       callback(status)

@@ -7,6 +7,7 @@ import {
   type OpenCodeAdmittedPrompt
 } from '../hooks/useOpenCodeChatInterface'
 import { useOpenCodeProjectRouteContext } from '../hooks/useOpenCodeProjectRouteContext'
+import { useWorkspaceResources } from '../hooks/useWorkspaceResources'
 
 export const Route = createFileRoute('/projects/$projectId/sessions/$sessionId')({
   component: SessionRoute
@@ -24,6 +25,7 @@ function SessionRoute(): JSX.Element {
     project.sessions,
     admittedPrompt
   )
+  const workspaceResources = useWorkspaceResources(project.selectedDirectory)
 
   useEffect(() => {
     if (!admittedPrompt) return
@@ -37,7 +39,13 @@ function SessionRoute(): JSX.Element {
     }
   }, [admittedPrompt, session.messages, sessionId])
 
-  return <SessionRouteActivePane project={project} session={session} />
+  return (
+    <SessionRouteActivePane
+      project={project}
+      session={session}
+      workspaceResources={workspaceResources}
+    />
+  )
 }
 
 function readAdmittedPromptHandoff(sessionID: string): OpenCodeAdmittedPrompt | null {

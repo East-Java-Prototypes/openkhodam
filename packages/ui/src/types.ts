@@ -47,3 +47,44 @@ export type GoogleWorkspaceIntegrationStatus =
       message: string
       updatedAt: number
     }
+
+export type WorkspaceResourceProvider = 'google'
+
+export type WorkspaceResourceKind = 'doc'
+
+export type WorkspaceResourceAlias = string
+
+export type WorkspaceResource = {
+  alias: WorkspaceResourceAlias
+  provider: WorkspaceResourceProvider
+  kind: WorkspaceResourceKind
+  id: string
+  title: string
+  url: string
+}
+
+export type WorkspaceSessionResourceBinding = {
+  activeResource: WorkspaceResourceAlias | null
+  resources: WorkspaceResourceAlias[]
+  updatedAt: number
+}
+
+export type WorkspaceResourcesConfig = {
+  version: 1
+  resources: WorkspaceResource[]
+  defaultResource: WorkspaceResourceAlias | null
+  sessions: Record<string, WorkspaceSessionResourceBinding>
+}
+
+export type WorkspaceResourceAttachGoogleDocInput = {
+  projectDirectory: string
+  alias: string
+  title?: string | null
+  url: string
+}
+
+export type WorkspaceSessionActiveResourceInput = {
+  projectDirectory: string
+  sessionId: string
+  activeResource: WorkspaceResourceAlias | null
+}

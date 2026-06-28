@@ -5,10 +5,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { expect, test } from '@playwright/test'
+import * as ts from 'typescript'
 
 const testsDirectory = dirname(fileURLToPath(import.meta.url))
 const desktopDirectory = join(testsDirectory, '..', '..', 'desktop')
 const desktopOutDirectory = join(desktopDirectory, 'out')
+const sourceWorkspaceResourcesPath = join(
+  desktopDirectory,
+  'src',
+  'main',
+  'integrations',
+  'workspace-resources.ts'
+)
 const builtPluginPath = join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs')
 const builtGoogleWorkspacePluginPath = join(
   desktopOutDirectory,
@@ -356,6 +364,114 @@ test('returns a clear reconnect error when the Drive metadata scope is missing',
     await rm(userDataPath, { recursive: true, force: true })
   }
 })
+
+test('persists project Google Docs resources without credentials', async () => {
+  const projectDirectory = await mkdtemp(join(tmpdir(), 'openkhodam-workspace-resources-'))
+  const { WorkspaceResourcesFileStore } = await loadWorkspaceResourcesModule()
+
+  try {
+    const store = new WorkspaceResourcesFileStore(projectDirectory)
+    await expect(store.read()).resolves.toEqual({
+      version: 1,
+      resources: [],
+      defaultResource: null,
+      sessions: {}
+    })
+
+    await store.attachGoogleDoc({
+      alias: 'Spec Doc',
+      title: 'Project spec',
+      url: 'https://docs.google.com/document/d/doc_123-ABC/edit?usp=sharing'
+    })
+    const selected = await store
+      .attachGoogleDoc({
+        alias: 'Roadmap Doc',
+        title: 'Roadmap',
+        url: 'https://docs.google.com/document/u/0/d/roadmap-456_DEF/edit#heading=h.1'
+      })
+      .then(() => store.setSessionActiveResource('session-123', 'Roadmap Doc'))
+
+    expect(selected).toMatchObject({
+      version: 1,
+      defaultResource: 'Spec Doc',
+      resources: [
+        {
+          alias: 'Spec Doc',
+          provider: 'google',
+          kind: 'doc',
+          id: 'doc_123-ABC',
+          title: 'Project spec',
+          url: 'https://docs.google.com/document/d/doc_123-ABC/edit'
+        },
+        {
+          alias: 'Roadmap Doc',
+          provider: 'google',
+          kind: 'doc',
+          id: 'roadmap-456_DEF',
+          title: 'Roadmap',
+          url: 'https://docs.google.com/document/d/roadmap-456_DEF/edit'
+        }
+      ],
+      sessions: {
+        'session-123': {
+          activeResource: 'Roadmap Doc',
+          resources: ['Roadmap Doc']
+        }
+      }
+    })
+
+    await expect(new WorkspaceResourcesFileStore(projectDirectory).read()).resolves.toEqual(selected)
+
+    const persisted = await readFile(
+      join(projectDirectory, '.openkhodam', 'resources.json'),
+      'utf8'
+    )
+    expect(persisted).not.toMatch(/access[_-]?token|refresh[_-]?token|client[_-]?secret/i)
+    expect(persisted).not.toContain('usp=sharing')
+  } finally {
+    await rm(projectDirectory, { recursive: true, force: true })
+  }
+})
+
+test('rejects unsupported workspace resource URLs with clear errors', async () => {
+  const { parseGoogleDocsUrl } = await loadWorkspaceResourcesModule()
+
+  expect(() =>
+    parseGoogleDocsUrl('https://docs.google.com/spreadsheets/d/sheet-id-123/edit')
+  ).toThrow('Google Sheets URLs are not supported yet. Attach a Google Docs document URL.')
+  expect(() =>
+    parseGoogleDocsUrl('https://docs.google.com/presentation/d/slide-id-123/edit')
+  ).toThrow('Google Slides URLs are not supported yet. Attach a Google Docs document URL.')
+  expect(() => parseGoogleDocsUrl('https://drive.google.com/file/d/file-id-123/view')).toThrow(
+    'Only docs.google.com Google Docs URLs are supported.'
+  )
+})
+
+type WorkspaceResourcesModule = typeof import('../../desktop/src/main/integrations/workspace-resources')
+
+let workspaceResourcesModulePromise: Promise<WorkspaceResourcesModule> | null = null
+
+async function loadWorkspaceResourcesModule(): Promise<WorkspaceResourcesModule> {
+  workspaceResourcesModulePromise ??= compileWorkspaceResourcesModule()
+  return workspaceResourcesModulePromise
+}
+
+async function compileWorkspaceResourcesModule(): Promise<WorkspaceResourcesModule> {
+  const source = await readFile(sourceWorkspaceResourcesPath, 'utf8')
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022
+    }
+  })
+  const tempDirectory = await mkdtemp(join(tmpdir(), 'openkhodam-workspace-resources-module-'))
+  const modulePath = join(tempDirectory, 'workspace-resources.mjs')
+
+  await writeFile(modulePath, output.outputText, 'utf8')
+  const module = (await import(pathToFileURL(modulePath).href)) as WorkspaceResourcesModule
+  await rm(tempDirectory, { recursive: true, force: true })
+  return module
+}
 
 async function loadGoogleWorkspacePlugin(): Promise<GoogleWorkspacePlugin> {
   const pluginModule = (await import(pathToFileURL(builtGoogleWorkspacePluginPath).href)) as Record<
