@@ -446,6 +446,41 @@ test('shows optimistic prompt before delayed stable message projection', async (
   await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toHaveCount(1)
 })
 
+test('sends the chat composer with CommandOrControl+Enter while Enter stays multiline', async ({
+  appWindow
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const sendButton = appWindow.getByRole('button', { name: 'Send' })
+  await expect(sendButton).toBeDisabled()
+
+  await promptInput.press('ControlOrMeta+Enter')
+  await expect(promptInput).toHaveValue('')
+  await expect(appWindow.getByRole('article')).toHaveCount(2)
+
+  await promptInput.fill('Line one')
+  await promptInput.press('Enter')
+  await expect(promptInput).toHaveValue('Line one\n')
+  await promptInput.pressSequentially('Line two')
+  await expect(promptInput).toHaveValue('Line one\nLine two')
+  await expect(appWindow.getByRole('article')).toHaveCount(2)
+
+  const shortcutPrompt = 'Shortcut lifecycle prompt'
+  await promptInput.fill(shortcutPrompt)
+  await expect(sendButton).toBeEnabled()
+  await promptInput.press('ControlOrMeta+Enter')
+
+  await expect(appWindow.getByText(shortcutPrompt, { exact: true })).toBeVisible()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: shortcutPrompt })
+  ).toBeVisible()
+  await expect(appWindow.getByText(`Fake response for: ${shortcutPrompt}`)).toBeVisible()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: shortcutPrompt })
+  ).toHaveCount(0)
+})
+
 test('keeps a newly sent prompt at the bottom of seeded chat history', async ({ appWindow }) => {
   await openSeededDeterministicChat(appWindow)
 
