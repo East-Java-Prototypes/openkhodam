@@ -9,6 +9,8 @@ import {
 } from '@openkhodam/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import { ScrollArea } from '../components/ui/scroll-area'
+import { Separator } from '../components/ui/separator'
 import { openCodeQueryKeys, openCodeSidecarState } from '../hooks/opencode/sidecar'
 import { getOpenCodeAuthorizationHeader, useOpenCodeSdk } from '../hooks/opencode/client'
 
@@ -69,30 +71,44 @@ function SettingsPage(): JSX.Element {
   )
 
   return (
-    <main>
-      <GoogleWorkspaceCard
-        status={googleWorkspaceQuery.data}
-        isLoading={googleWorkspaceQuery.isLoading}
-        error={googleWorkspaceQuery.error}
-        isConnecting={connectGoogleWorkspace.isPending}
-        isCancelling={cancelGoogleWorkspaceConnect.isPending}
-        isDisconnecting={disconnectGoogleWorkspace.isPending}
-        connectError={connectGoogleWorkspace.error}
-        disconnectError={disconnectGoogleWorkspace.error}
-        onConnect={() => connectGoogleWorkspace.mutate()}
-        onCancel={() => cancelGoogleWorkspaceConnect.mutate()}
-        onDisconnect={() => disconnectGoogleWorkspace.mutate()}
-      />
+    <section
+      className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+      aria-labelledby="settings-heading"
+    >
+      <header className="shrink-0 px-6 py-4">
+        <p className="text-muted-foreground text-sm">Settings</p>
+        <h1 id="settings-heading" className="text-xl font-semibold tracking-tight">
+          Connections and services
+        </h1>
+      </header>
+      <Separator />
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6 lg:p-8">
+          <GoogleWorkspaceCard
+            status={googleWorkspaceQuery.data}
+            isLoading={googleWorkspaceQuery.isLoading}
+            error={googleWorkspaceQuery.error}
+            isConnecting={connectGoogleWorkspace.isPending}
+            isCancelling={cancelGoogleWorkspaceConnect.isPending}
+            isDisconnecting={disconnectGoogleWorkspace.isPending}
+            connectError={connectGoogleWorkspace.error}
+            disconnectError={disconnectGoogleWorkspace.error}
+            onConnect={() => connectGoogleWorkspace.mutate()}
+            onCancel={() => cancelGoogleWorkspaceConnect.mutate()}
+            onDisconnect={() => disconnectGoogleWorkspace.mutate()}
+          />
 
-      <OpenCodeServerView
-        status={status}
-        connection={connection}
-        rendererHttpHealth={displayedRendererHttpHealth}
-        rendererOrigin={window.location.origin}
-        isRestarting={restartOpenCode.isPending}
-        onRestart={() => restartOpenCode.mutateAsync().then(() => undefined)}
-      />
-    </main>
+          <OpenCodeServerView
+            status={status}
+            connection={connection}
+            rendererHttpHealth={displayedRendererHttpHealth}
+            rendererOrigin={window.location.origin}
+            isRestarting={restartOpenCode.isPending}
+            onRestart={() => restartOpenCode.mutateAsync().then(() => undefined)}
+          />
+        </div>
+      </ScrollArea>
+    </section>
   )
 }
 
@@ -122,23 +138,44 @@ function GoogleWorkspaceCard({
   onDisconnect: () => void
 }): JSX.Element {
   const mutationError = connectError ?? disconnectError
+  const summary = getGoogleWorkspaceSummary(status, isLoading, error)
+  const statusLabel = getGoogleWorkspaceStatusLabel(status, isLoading, error)
   const disabled =
     isLoading || isConnecting || isDisconnecting || status?.state === 'not-configured'
 
   return (
-    <section aria-labelledby="google-workspace-heading">
-      <h1 id="google-workspace-heading">Google Workspace</h1>
-      <p>{getGoogleWorkspaceSummary(status, isLoading, error)}</p>
+    <section
+      className="border bg-card p-4 text-card-foreground shadow-sm"
+      aria-labelledby="google-workspace-heading"
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1">
+          <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+            Integration
+          </p>
+          <h2 id="google-workspace-heading" className="text-lg font-semibold tracking-tight">
+            Google Workspace
+          </h2>
+          <p className="text-muted-foreground max-w-2xl text-sm">{summary}</p>
+        </div>
+        <Badge variant={status?.state === 'connected' ? 'default' : 'secondary'}>
+          {statusLabel}
+        </Badge>
+      </div>
+
+      <Separator className="my-4" />
 
       {status?.state === 'connected' ? (
-        <dl>
-          <dt>Account</dt>
-          <dd>{status.account.email ?? status.account.name ?? 'Connected'}</dd>
+        <dl className="grid gap-3 text-sm sm:grid-cols-[8rem_minmax(0,1fr)]">
+          <dt className="text-muted-foreground font-medium">Account</dt>
+          <dd className="min-w-0 break-words">
+            {status.account.email ?? status.account.name ?? 'Connected'}
+          </dd>
 
-          <dt>Scopes</dt>
-          <dd>
+          <dt className="text-muted-foreground font-medium">Scopes</dt>
+          <dd className="min-w-0">
             {status.scopes.length > 0 ? (
-              <div>
+              <div className="flex flex-wrap gap-1.5">
                 {status.scopes.map((scope) => (
                   <Badge key={scope} variant="secondary">
                     {scope}
@@ -152,38 +189,79 @@ function GoogleWorkspaceCard({
         </dl>
       ) : null}
 
-      {error ? <p role="alert">Unable to read Google Workspace status: {error.message}</p> : null}
+      {error ? (
+        <p
+          className="mt-4 border border-destructive px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
+          Unable to read Google Workspace status: {error.message}
+        </p>
+      ) : null}
       {mutationError ? (
-        <p role="alert">Google Workspace update failed: {mutationError.message}</p>
+        <p
+          className="mt-4 border border-destructive px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
+          Google Workspace update failed: {mutationError.message}
+        </p>
       ) : null}
 
       {isConnecting ? (
-        <p role="status">Waiting for the Google Workspace sign-in to finish.</p>
+        <p className="mt-4 border border-border bg-background px-3 py-2 text-sm" role="status">
+          Waiting for the Google Workspace sign-in to finish.
+        </p>
       ) : null}
 
-      {status?.state === 'connected' ? (
-        <Button type="button" onClick={() => onDisconnect()} disabled={isDisconnecting}>
-          {isDisconnecting ? 'Disconnecting' : 'Disconnect'}
-        </Button>
-      ) : (
-        <div className="flex items-center gap-2">
-          <Button type="button" onClick={() => onConnect()} disabled={disabled}>
-            {isConnecting ? 'Connecting' : 'Connect'}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {status?.state === 'connected' ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onDisconnect()}
+            disabled={isDisconnecting}
+          >
+            {isDisconnecting ? 'Disconnecting' : 'Disconnect'}
           </Button>
-          {isConnecting ? (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => onCancel()}
-              disabled={isCancelling}
-            >
-              {isCancelling ? 'Cancelling' : 'Cancel'}
+        ) : (
+          <>
+            <Button type="button" onClick={() => onConnect()} disabled={disabled}>
+              {isConnecting ? 'Connecting' : 'Connect'}
             </Button>
-          ) : null}
-        </div>
-      )}
+            {isConnecting ? (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => onCancel()}
+                disabled={isCancelling}
+              >
+                {isCancelling ? 'Cancelling' : 'Cancel'}
+              </Button>
+            ) : null}
+          </>
+        )}
+      </div>
     </section>
   )
+}
+
+function getGoogleWorkspaceStatusLabel(
+  status: GoogleWorkspaceIntegrationStatus | undefined,
+  isLoading: boolean,
+  error: Error | null
+): string {
+  if (isLoading) return 'Checking'
+  if (error) return 'Unavailable'
+
+  switch (status?.state) {
+    case 'connected':
+      return 'Connected'
+    case 'disconnected':
+      return 'Disconnected'
+    case 'not-configured':
+      return 'Not configured'
+    default:
+      return 'Unavailable'
+  }
 }
 
 function getGoogleWorkspaceSummary(
