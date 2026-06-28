@@ -1,14 +1,17 @@
 import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type JSX,
   type KeyboardEvent,
   type ReactNode
 } from 'react'
+import type { PanelImperativeHandle, PanelSize } from 'react-resizable-panels'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,6 +29,7 @@ import {
   InputGroupButton,
   InputGroupTextarea
 } from '@/components/ui/input-group'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -65,19 +69,83 @@ export function ChatHomePage({
   session,
   activePane
 }: ChatHomePageProps): JSX.Element {
+  const projectSidebarPanelRef = useRef<PanelImperativeHandle | null>(null)
+  const [isProjectSidebarOpen, setProjectSidebarOpen] = useState(true)
+
+  const syncProjectSidebarPanel = useCallback((open: boolean): void => {
+    const projectSidebarPanel = projectSidebarPanelRef.current
+    if (!projectSidebarPanel) return
+
+    if (open) {
+      projectSidebarPanel.expand()
+      return
+    }
+
+    projectSidebarPanel.collapse()
+  }, [])
+
+  const handleProjectSidebarOpenChange = useCallback(
+    (open: boolean): void => {
+      syncProjectSidebarPanel(open)
+      setProjectSidebarOpen(open)
+    },
+    [syncProjectSidebarPanel]
+  )
+
+  const handleProjectSidebarResize = useCallback((size: PanelSize): void => {
+    const isCollapsed = projectSidebarPanelRef.current?.isCollapsed() ?? size.inPixels <= 64
+
+    setProjectSidebarOpen(!isCollapsed)
+  }, [])
+
+  useEffect(() => {
+    syncProjectSidebarPanel(isProjectSidebarOpen)
+  }, [isProjectSidebarOpen, syncProjectSidebarPanel])
+
   return (
     <SidebarProvider
+      open={isProjectSidebarOpen}
+      onOpenChange={handleProjectSidebarOpenChange}
       style={
         {
-          '--sidebar-width': '20rem'
+          '--sidebar-width': '100%'
         } as CSSProperties
       }
       className="h-dvh min-h-0 overflow-hidden"
     >
-      <ProjectChatSidebar shell={shell} project={project} session={session} />
-      <main className="grid h-dvh min-h-0 min-w-0 flex-1 grid-cols-1 overflow-hidden bg-background text-foreground">
-        {activePane ?? <ActiveChatPanel project={project} session={session} />}
-      </main>
+      <ResizablePanelGroup
+        id="chat-home-layout"
+        orientation="horizontal"
+        className="min-h-0 min-w-0"
+      >
+        <ResizablePanel
+          id="project-sidebar-panel"
+          panelRef={projectSidebarPanelRef}
+          defaultSize="25%"
+          minSize="16rem"
+          maxSize="32rem"
+          collapsedSize="3rem"
+          collapsible
+          onResize={handleProjectSidebarResize}
+        >
+          {isProjectSidebarOpen ? (
+            <ProjectChatSidebar
+              shell={shell}
+              project={project}
+              session={session}
+              onCollapse={() => handleProjectSidebarOpenChange(false)}
+            />
+          ) : (
+            <CollapsedProjectSidebarRail onRestore={() => handleProjectSidebarOpenChange(true)} />
+          )}
+        </ResizablePanel>
+        <ResizableHandle withHandle aria-label="Resize project sidebar" />
+        <ResizablePanel id="active-pane-panel" defaultSize="75%" minSize="20rem">
+          <main className="grid h-full min-h-0 min-w-0 grid-cols-1 overflow-hidden bg-background text-foreground">
+            {activePane ?? <ActiveChatPanel project={project} session={session} />}
+          </main>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </SidebarProvider>
   )
 }
@@ -85,11 +153,13 @@ export function ChatHomePage({
 function ProjectChatSidebar({
   shell,
   project,
-  session
+  session,
+  onCollapse
 }: {
   shell: OpenCodeChatShellState
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  onCollapse: () => void
 }): JSX.Element {
   return (
     <Sidebar
@@ -101,11 +171,23 @@ function ProjectChatSidebar({
       <SidebarHeader className="p-4 pb-2">
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="px-2 py-1">
-              <p className="text-muted-foreground text-sm font-medium">OpenKhodam</p>
-              <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
-                Project folders
-              </h1>
+            <div className="flex items-start justify-between gap-3 px-2 py-1">
+              <div className="min-w-0">
+                <p className="text-muted-foreground text-sm font-medium">OpenKhodam</p>
+                <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
+                  Project folders
+                </h1>
+              </div>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                aria-label="Collapse project sidebar"
+                title="Collapse project sidebar"
+                onClick={onCollapse}
+              >
+                Collapse
+              </Button>
             </div>
           </SidebarMenuItem>
           <SidebarMenuItem>
@@ -165,6 +247,28 @@ function ProjectChatSidebar({
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
+  )
+}
+
+function CollapsedProjectSidebarRail({ onRestore }: { onRestore: () => void }): JSX.Element {
+  return (
+    <aside
+      className="flex h-full w-full flex-col items-center border-r bg-sidebar/70 py-3 text-sidebar-foreground"
+      role="complementary"
+      aria-label="Collapsed project sidebar"
+    >
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-auto min-h-28 w-8 px-1 py-2 [writing-mode:vertical-rl]"
+        aria-label="Restore project sidebar"
+        title="Restore project sidebar"
+        onClick={onRestore}
+      >
+        Projects
+      </Button>
+    </aside>
   )
 }
 
