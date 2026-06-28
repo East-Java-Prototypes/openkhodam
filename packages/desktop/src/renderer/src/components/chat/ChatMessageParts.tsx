@@ -20,7 +20,7 @@ const PART_COMPONENTS = {
 
 export function ChatMessageParts({ parts }: { parts: ChatMessagePart[] }): JSX.Element {
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {parts.map((part) => (
         <div key={part.id}>{renderPart(part)}</div>
       ))}
@@ -89,7 +89,9 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
   ): void => {
     if (!openRef.current || generation !== correctionGenerationRef.current) return
     if (!trigger?.isConnected) return
-    const viewport = trigger.closest('[data-slot="scroll-area-viewport"]') as HTMLDivElement | null
+    const viewport = trigger.closest(
+      '[data-slot="message-scroller-viewport"], [data-slot="scroll-area-viewport"]'
+    ) as HTMLDivElement | null
     if (!viewport?.isConnected) return
     const currentTop = trigger.getBoundingClientRect().top
     const delta = currentTop - beforeTop

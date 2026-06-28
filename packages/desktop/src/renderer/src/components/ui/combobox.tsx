@@ -37,13 +37,11 @@ function ComboboxInput({
           <InputGroupButton
             size="icon-xs"
             variant="ghost"
-            asChild
+            render={<ComboboxTrigger />}
             data-slot="input-group-button"
             className="data-pressed:bg-transparent"
             disabled={disabled}
-          >
-            <ComboboxTrigger />
-          </InputGroupButton>
+          />
         </InputGroupAddon>
       ) : null}
       {children}

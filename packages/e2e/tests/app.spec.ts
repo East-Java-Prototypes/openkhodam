@@ -26,6 +26,7 @@ const sessionChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' }).getByRole('link')
 const selectedProjectSessions = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' })
+const messageTranscript = (page: Page): Locator => page.getByRole('region', { name: 'Messages' })
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
@@ -353,6 +354,12 @@ test('shows real project/session selection in the reused chat shell', async ({ a
 
 test('renders seeded stable chat messages', async ({ appWindow }) => {
   await openSeededDeterministicChat(appWindow)
+  const transcript = messageTranscript(appWindow)
+  await expect(transcript).toBeVisible()
+  await expect(transcript.getByRole('log')).toBeVisible()
+  await expect(transcript.locator('[data-slot="message-scroller-item"]')).toHaveCount(2)
+  await expect(appWindow.getByRole('article', { name: /user message at/ })).toBeVisible()
+  await expect(appWindow.getByRole('article', { name: /assistant message at/ })).toBeVisible()
   await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
   await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
 })
@@ -423,14 +430,36 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
 test('keeps a long collapsed tool disclosure anchored when opening it', async ({ appWindow }) => {
   await openStructuredFixtureChat(appWindow)
 
+  const transcript = messageTranscript(appWindow)
   const tool = appWindow.locator('[aria-label="Tool plan"]')
   const toggle = tool.getByRole('button', { name: 'Toggle details for tool plan' })
 
+  await expect(transcript).toBeVisible()
+  await expect(transcript.getByRole('log')).toBeVisible()
   await expect(toggle).toBeVisible()
-  // TODO: add a reliable scroll-stability test for exact trigger-position anchoring.
   await toggle.click()
   await expect(tool).toContainText('Long tool output line 80')
   await expect(toggle).toBeVisible()
+  await expect
+    .poll(() => transcript.evaluate((element) => element.scrollHeight > element.clientHeight))
+    .toBe(true)
+
+  await transcript.evaluate((element) => {
+    element.scrollTop = 0
+  })
+  await expect.poll(() => transcript.evaluate((element) => Math.round(element.scrollTop))).toBe(0)
+
+  await transcript.focus()
+  await transcript.press('End')
+  await expect
+    .poll(() => transcript.evaluate((element) => Math.round(element.scrollTop)))
+    .toBeGreaterThan(0)
+  const endScrollTop = await transcript.evaluate((element) => Math.round(element.scrollTop))
+
+  await transcript.press('Home')
+  await expect
+    .poll(() => transcript.evaluate((element) => Math.round(element.scrollTop)))
+    .toBeLessThan(endScrollTop)
 })
 
 test('shows only connected OpenCode models in the composer picker', async ({ appWindow }) => {
