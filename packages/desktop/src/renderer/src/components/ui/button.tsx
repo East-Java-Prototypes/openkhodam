@@ -1,4 +1,3 @@
-import * as React from 'react'
 import { Button as ButtonPrimitive } from '@base-ui/react/button'
 import { cva, type VariantProps } from 'class-variance-authority'
 
@@ -9,11 +8,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground [a]:hover:bg-primary/80',
+        default: 'bg-primary text-primary-foreground hover:bg-primary/80',
         outline:
           'border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50',
         secondary:
-          'bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary aria-expanded:text-secondary-foreground',
+          'bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground',
         ghost:
           'hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50',
         destructive:
@@ -43,41 +42,14 @@ function Button({
   className,
   variant = 'default',
   size = 'default',
-  asChild = false,
   ...props
-}: ButtonPrimitive.Props &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean
-  }) {
-  const { children, render, ...buttonProps } = props
-  const buttonClassName = cn(buttonVariants({ variant, size, className }))
-
-  if (asChild) {
-    if (React.isValidElement<Record<string, unknown> & { className?: string }>(children)) {
-      return React.cloneElement(children, {
-        ...buttonProps,
-        ...children.props,
-        'data-slot': 'button',
-        'data-variant': variant,
-        'data-size': size,
-        className: cn(buttonClassName, children.props.className)
-      })
-    }
-
-    return null
-  }
-
+}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
   return (
     <ButtonPrimitive
-      render={render}
       data-slot="button"
-      data-variant={variant}
-      data-size={size}
-      className={buttonClassName}
-      {...buttonProps}
-    >
-      {children}
-    </ButtonPrimitive>
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+    />
   )
 }
 

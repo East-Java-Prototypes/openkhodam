@@ -29,8 +29,16 @@ import {
   InputGroupButton,
   InputGroupTextarea
 } from '@/components/ui/input-group'
+import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message'
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport
+} from '@/components/ui/message-scroller'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import {
   Sidebar,
@@ -45,6 +53,7 @@ import {
   SidebarProvider,
   SidebarRail
 } from '@/components/ui/sidebar'
+import { cn } from '@/lib/utils'
 
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
 import { ChatMessageParts } from './ChatMessageParts'
@@ -235,11 +244,21 @@ function ProjectChatSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-wrap gap-2 px-2 py-1">
-              <Button asChild size="xs" variant="outline">
-                <Link to="/">Home</Link>
+              <Button
+                nativeButton={false}
+                render={<Link to="/" role="link" />}
+                size="xs"
+                variant="outline"
+              >
+                Home
               </Button>
-              <Button asChild size="xs" variant="outline">
-                <Link to="/settings">Settings</Link>
+              <Button
+                nativeButton={false}
+                render={<Link to="/settings" role="link" />}
+                size="xs"
+                variant="outline"
+              >
+                Settings
               </Button>
             </div>
           </SidebarMenuItem>
@@ -449,24 +468,32 @@ function ProjectChatListItem({
   )
   return (
     <li>
-      <Button
-        asChild={Boolean(projectId)}
-        type="button"
-        disabled={chat.disabled || !projectId}
-        variant={isActive ? 'outline' : 'ghost'}
-        className="h-auto w-full justify-start px-3 py-2"
-      >
-        {projectId ? (
-          <Link
-            to="/projects/$projectId/sessions/$sessionId"
-            params={{ projectId, sessionId: chat.id }}
-          >
-            {content}
-          </Link>
-        ) : (
-          content
-        )}
-      </Button>
+      {projectId ? (
+        <Button
+          nativeButton={false}
+          render={
+            <Link
+              to="/projects/$projectId/sessions/$sessionId"
+              params={{ projectId, sessionId: chat.id }}
+              role="link"
+            />
+          }
+          disabled={chat.disabled}
+          variant={isActive ? 'outline' : 'ghost'}
+          className="h-auto w-full justify-start px-3 py-2"
+        >
+          {content}
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          disabled
+          variant={isActive ? 'outline' : 'ghost'}
+          className="h-auto w-full justify-start px-3 py-2"
+        >
+          {content}
+        </Button>
+      )}
     </li>
   )
 }
@@ -619,34 +646,43 @@ function ChatMessageList({
   }, [initialScrollKey, messages.length, virtualizer])
 
   return (
-    <ScrollArea className="min-h-0 flex-1" viewportRef={viewportRef}>
-      <div className="flex min-w-0 flex-col gap-4 p-6">
-        {statusCards.map((status) =>
-          status ? (
-            <StatusCard key={status.key} tone={status.tone}>
-              {status.content}
-            </StatusCard>
-          ) : null
-        )}
-        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-          {virtualizer.getVirtualItems().map((virtualRow) => {
-            const message = messages[virtualRow.index]
-            if (!message) return null
-            return (
-              <div
-                key={virtualRow.key}
-                data-index={virtualRow.index}
-                ref={virtualizer.measureElement}
-                className="absolute left-0 top-0 w-full pb-4"
-                style={{ transform: `translateY(${virtualRow.start}px)` }}
-              >
-                <ChatMessageBubble message={message} />
+    <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+      <MessageScroller className="min-h-0 flex-1">
+        <MessageScrollerViewport ref={viewportRef}>
+          <MessageScrollerContent aria-busy={isLoading} className="block min-h-full p-6">
+            <div className="flex min-w-0 flex-col gap-4">
+              {statusCards.map((status) =>
+                status ? (
+                  <StatusCard key={status.key} tone={status.tone}>
+                    {status.content}
+                  </StatusCard>
+                ) : null
+              )}
+              <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const message = messages[virtualRow.index]
+                  if (!message) return null
+                  return (
+                    <MessageScrollerItem
+                      key={message.id}
+                      messageId={message.id}
+                      scrollAnchor={message.author === 'user'}
+                      data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
+                      className="absolute start-0 top-0 w-full pb-4"
+                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                    >
+                      <ChatMessageBubble message={message} />
+                    </MessageScrollerItem>
+                  )
+                })}
               </div>
-            )
-          })}
-        </div>
-      </div>
-    </ScrollArea>
+            </div>
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton />
+      </MessageScroller>
+    </MessageScrollerProvider>
   )
 }
 
@@ -668,21 +704,32 @@ function StatusCard({
 
 function ChatMessageBubble({ message }: { message: ChatMessage }): JSX.Element {
   const isUser = message.author === 'user'
+  const isPending = message.createdAt === 'Pending'
   return (
     <article
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+      data-pending={isPending ? 'true' : undefined}
+      className="min-w-0"
       aria-label={`${message.author} message at ${message.createdAt}`}
     >
-      <div
-        data-pending={message.createdAt === 'Pending' ? 'true' : undefined}
-        className={`max-w-2xl min-w-0 border px-4 py-3 shadow-sm ${isUser ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-card-foreground'}`}
-      >
-        <div className="mb-2 flex items-center justify-between gap-4 text-xs opacity-80">
-          <span className="font-medium capitalize">{message.author}</span>
-          <time>{message.createdAt}</time>
-        </div>
-        <ChatMessageParts parts={message.parts} />
-      </div>
+      <Message align={isUser ? 'end' : 'start'}>
+        <MessageContent className={cn(isUser ? 'items-end' : 'items-start')}>
+          <MessageHeader className="px-0 capitalize">{message.author}</MessageHeader>
+          <div
+            data-slot="message-surface"
+            className={cn(
+              'max-w-2xl min-w-0 border px-4 py-3 text-sm shadow-sm',
+              isUser
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-border bg-card text-card-foreground'
+            )}
+          >
+            <ChatMessageParts parts={message.parts} />
+          </div>
+          <MessageFooter className="px-0">
+            <time>{message.createdAt}</time>
+          </MessageFooter>
+        </MessageContent>
+      </Message>
     </article>
   )
 }
