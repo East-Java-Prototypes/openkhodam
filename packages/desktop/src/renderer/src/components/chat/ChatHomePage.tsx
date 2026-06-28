@@ -1,6 +1,14 @@
 import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useEffect, useMemo, useRef, type CSSProperties, type JSX, type ReactNode } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  type CSSProperties,
+  type JSX,
+  type KeyboardEvent,
+  type ReactNode
+} from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -601,13 +609,27 @@ function ChatPromptComposer({
   modelHelperText?: string
 }): JSX.Element {
   const modelText = modelHelperText ?? 'Select a connected OpenCode model before sending.'
+  const submitPrompt = (): void => {
+    if (!canSendPrompt) return
+    sendPrompt()
+  }
+
+  const handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key !== 'Enter') return
+    if (!event.metaKey && !event.ctrlKey) return
+    if (event.nativeEvent.isComposing) return
+
+    event.preventDefault()
+    submitPrompt()
+  }
+
   return (
     <form
       className="shrink-0 bg-background p-4"
       aria-label="Chat prompt"
       onSubmit={(event) => {
         event.preventDefault()
-        if (canSendPrompt) sendPrompt()
+        submitPrompt()
       }}
     >
       <Separator className="mb-4" />
@@ -628,9 +650,10 @@ function ChatPromptComposer({
             placeholder="Ask about this project..."
             value={promptText}
             onChange={(event) => setPromptText(event.currentTarget.value)}
+            onKeyDown={handlePromptKeyDown}
             disabled={isSending}
           />
-          <InputGroupAddon align="inline-end">
+          <InputGroupAddon align="block-end" className="justify-end border-t">
             <InputGroupButton type="submit" disabled={!canSendPrompt}>
               {isSending ? 'Sending…' : 'Send'}
             </InputGroupButton>
