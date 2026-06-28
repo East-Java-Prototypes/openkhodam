@@ -107,7 +107,9 @@ export class WorkspaceResourcesFileStore {
     const normalizedActiveResource = activeResource === null ? null : normalizeAlias(activeResource)
 
     if (normalizedActiveResource !== null && !aliases.has(normalizedActiveResource)) {
-      throw new Error(`Google Doc resource "${normalizedActiveResource}" is not attached to this project.`)
+      throw new Error(
+        `Google Doc resource "${normalizedActiveResource}" is not attached to this project.`
+      )
     }
 
     const current = config.sessions[normalizedSessionId]
@@ -218,10 +220,12 @@ export function normalizeWorkspaceResourcesConfig(
 ): WorkspaceResourcesConfig {
   const resources = normalizeResourceList(config.resources)
   const aliases = new Set(resources.map((resource) => resource.alias))
-  const requestedDefault = typeof config.defaultResource === 'string' ? config.defaultResource : null
-  const defaultResource = requestedDefault && aliases.has(requestedDefault)
-    ? requestedDefault
-    : resources[0]?.alias ?? null
+  const requestedDefault =
+    typeof config.defaultResource === 'string' ? config.defaultResource : null
+  const defaultResource =
+    requestedDefault && aliases.has(requestedDefault)
+      ? requestedDefault
+      : (resources[0]?.alias ?? null)
 
   return {
     version: 1,
@@ -299,7 +303,10 @@ function normalizeSessionBinding(
     typeof binding.activeResource === 'string' && aliases.has(binding.activeResource)
       ? binding.activeResource
       : null
-  const resources = uniqueAliases(Array.isArray(binding.resources) ? binding.resources : [], aliases)
+  const resources = uniqueAliases(
+    Array.isArray(binding.resources) ? binding.resources : [],
+    aliases
+  )
   if (activeResource && !resources.includes(activeResource)) resources.unshift(activeResource)
   if (!activeResource && resources.length === 0) return null
 

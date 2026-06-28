@@ -86,7 +86,7 @@ export function useWorkspaceResources(
     [config.resources]
   )
   const defaultResource = config.defaultResource
-    ? resourceByAlias.get(config.defaultResource) ?? null
+    ? (resourceByAlias.get(config.defaultResource) ?? null)
     : null
   const getSessionActiveResourceAlias = useCallback(
     (sessionId: string | null | undefined): string => {
@@ -98,7 +98,7 @@ export function useWorkspaceResources(
   const getSessionActiveResource = useCallback(
     (sessionId: string | null | undefined): WorkspaceResource | null => {
       const alias = getSessionActiveResourceAlias(sessionId) || config.defaultResource || ''
-      return alias ? resourceByAlias.get(alias) ?? null : null
+      return alias ? (resourceByAlias.get(alias) ?? null) : null
     },
     [config.defaultResource, getSessionActiveResourceAlias, resourceByAlias]
   )

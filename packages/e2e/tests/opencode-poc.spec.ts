@@ -420,7 +420,9 @@ test('persists project Google Docs resources without credentials', async () => {
       }
     })
 
-    await expect(new WorkspaceResourcesFileStore(projectDirectory).read()).resolves.toEqual(selected)
+    await expect(new WorkspaceResourcesFileStore(projectDirectory).read()).resolves.toEqual(
+      selected
+    )
 
     const persisted = await readFile(
       join(projectDirectory, '.openkhodam', 'resources.json'),
@@ -447,7 +449,8 @@ test('rejects unsupported workspace resource URLs with clear errors', async () =
   )
 })
 
-type WorkspaceResourcesModule = typeof import('../../desktop/src/main/integrations/workspace-resources')
+type WorkspaceResourcesModule =
+  typeof import('../../desktop/src/main/integrations/workspace-resources')
 
 let workspaceResourcesModulePromise: Promise<WorkspaceResourcesModule> | null = null
 

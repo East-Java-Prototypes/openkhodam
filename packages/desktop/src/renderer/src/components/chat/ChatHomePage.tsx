@@ -770,7 +770,9 @@ export function SessionRouteActivePane({
   session: OpenCodeSessionRouteState
   workspaceResources?: WorkspaceResourcesState
 }): JSX.Element {
-  return <ActiveChatPanel project={project} session={session} workspaceResources={workspaceResources} />
+  return (
+    <ActiveChatPanel project={project} session={session} workspaceResources={workspaceResources} />
+  )
 }
 
 function SessionWorkspaceResourceSelector({
