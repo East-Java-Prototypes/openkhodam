@@ -30,6 +30,15 @@ const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events 
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
 
+type ElementBox = NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>
+
+async function elementBox(locator: Locator, description: string): Promise<ElementBox> {
+  const box = await locator.boundingBox()
+  expect(box, `${description} should have a bounding box`).not.toBeNull()
+  if (!box) throw new Error(`${description} should have a bounding box`)
+  return box
+}
+
 async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
   await expect
     .poll(
@@ -175,6 +184,49 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
       .or(appWindow.getByText('No OpenCode projects found.'))
       .first()
   ).toBeVisible()
+})
+
+test('resizes and collapses/restores the project sidebar', async ({ appWindow }) => {
+  await waitForChatShell(appWindow)
+
+  const sidebar = appWindow.getByRole('complementary', { name: 'Project folders' })
+  const resizeHandle = appWindow.getByRole('separator', { name: 'Resize project sidebar' })
+  const initialSidebarBox = await elementBox(sidebar, 'expanded project sidebar')
+  const handleBox = await elementBox(resizeHandle, 'project sidebar resize handle')
+
+  await appWindow.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+  await appWindow.mouse.down()
+  await appWindow.mouse.move(
+    handleBox.x + handleBox.width / 2 + 120,
+    handleBox.y + handleBox.height / 2,
+    { steps: 10 }
+  )
+  await appWindow.mouse.up()
+
+  await expect
+    .poll(async () => Math.round((await sidebar.boundingBox())?.width ?? 0), {
+      message: 'project sidebar should grow after dragging resize handle'
+    })
+    .toBeGreaterThan(Math.round(initialSidebarBox.width) + 40)
+
+  await appWindow.getByRole('button', { name: 'Collapse project sidebar' }).click()
+  const collapsedRail = appWindow.getByRole('complementary', {
+    name: 'Collapsed project sidebar'
+  })
+  await expect(collapsedRail).toBeVisible()
+  await expect(sidebar).toHaveCount(0)
+  await expect(appWindow.getByRole('button', { name: 'Restore project sidebar' })).toBeVisible()
+  expect((await elementBox(collapsedRail, 'collapsed project sidebar rail')).width).toBeLessThan(
+    initialSidebarBox.width
+  )
+  await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
+
+  await appWindow.getByRole('button', { name: 'Restore project sidebar' }).click()
+  await expect(sidebar).toBeVisible()
+  await expect(projectHomeLink(appWindow)).toBeVisible()
+  await expect(projectSettingsLink(appWindow)).toBeVisible()
+  await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
+  await expect(resizeHandle).toBeVisible()
 })
 
 test('opens a project by directory from the final chat shell', async ({ appWindow }) => {
