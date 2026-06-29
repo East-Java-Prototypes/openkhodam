@@ -3,7 +3,14 @@ export { formatOpenCodeStatus, formatRendererHttpState, formatUpdatedAt } from '
 export type {
   OpenCodeConnection,
   GoogleWorkspaceIntegrationStatus,
+  LinkedGoogleDoc,
+  LinkedGoogleDocRecord,
   OpenCodeSidecarStatus,
+  ProjectArtifactsConfig,
+  ProjectArtifactsListInput,
+  ProjectSessionLinkedDocsListInput,
+  RecordLinkedGoogleDocInput,
   RendererHttpHealthSnapshot,
-  RendererHttpHealthState
+  RendererHttpHealthState,
+  UpdateLinkedGoogleDocListingInput
 } from './types'

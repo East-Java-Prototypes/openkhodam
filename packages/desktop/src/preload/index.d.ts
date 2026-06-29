@@ -1,19 +1,19 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   GoogleWorkspaceIntegrationStatus,
-  LinkedSource,
+  LinkedGoogleDoc,
   OpenCodeConnection,
   OpenCodeSidecarStatus,
-  ProjectSessionSourcesListInput,
-  ProjectSourcesConfig,
-  ProjectSourcesListInput,
-  RecordLinkedSourceInput,
-  UpdateLinkedSourceListingInput
+  ProjectArtifactsConfig,
+  ProjectArtifactsListInput,
+  ProjectSessionLinkedDocsListInput,
+  RecordLinkedGoogleDocInput,
+  UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 
 export type {
   GoogleWorkspaceIntegrationStatus,
-  LinkedSource,
+  LinkedGoogleDoc,
   OpenCodeConnection,
   OpenCodeSidecarStatus
 } from '@openkhodam/ui/types'
@@ -26,11 +26,15 @@ export type OpenKhodamAPI = {
   connectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
   cancelGoogleWorkspaceConnect: () => Promise<GoogleWorkspaceIntegrationStatus>
   disconnectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
-  listProjectSources: (input: ProjectSourcesListInput) => Promise<ProjectSourcesConfig>
-  listSessionSources: (input: ProjectSessionSourcesListInput) => Promise<LinkedSource[]>
-  recordLinkedSource: (input: RecordLinkedSourceInput) => Promise<LinkedSource>
-  delistLinkedSource: (input: UpdateLinkedSourceListingInput) => Promise<LinkedSource | null>
-  relistLinkedSource: (input: UpdateLinkedSourceListingInput) => Promise<LinkedSource | null>
+  listProjectArtifacts: (input: ProjectArtifactsListInput) => Promise<ProjectArtifactsConfig>
+  listSessionLinkedDocs: (input: ProjectSessionLinkedDocsListInput) => Promise<LinkedGoogleDoc[]>
+  recordLinkedGoogleDoc: (input: RecordLinkedGoogleDocInput) => Promise<LinkedGoogleDoc>
+  delistLinkedGoogleDoc: (
+    input: UpdateLinkedGoogleDocListingInput
+  ) => Promise<LinkedGoogleDoc | null>
+  relistLinkedGoogleDoc: (
+    input: UpdateLinkedGoogleDocListingInput
+  ) => Promise<LinkedGoogleDoc | null>
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void) => () => void
 }
 
