@@ -83,7 +83,7 @@ type OpenKhodamConfigFixture = {
 
 type JsonConfigFileModule = typeof import('../../desktop/src/main/config/json-config-file')
 type OpenKhodamConfigModule = typeof import('../../desktop/src/main/integrations/openkhodam-config')
-type ProjectSourcesModule = typeof import('../../desktop/src/main/integrations/project-sources')
+type ProjectArtifactsModule = typeof import('../../desktop/src/main/integrations/project-artifacts')
 type RuntimeConfigModule = typeof import('../../desktop/src/main/opencode-runtime-config')
 
 test('reads defaults and writes normalized JSON config files atomically', async () => {
@@ -185,53 +185,48 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
   }
 })
 
-test('stores project session linked sources with stable path and dedupe timestamps', async () => {
-  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
-    '../../desktop/src/main/integrations/project-sources'
-  )
-  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-'))
+test('stores project session linked Google Docs with stable path and dedupe timestamps', async () => {
+  const { PROJECT_ARTIFACTS_CONFIG_VERSION, ProjectArtifactsFileStore } =
+    loadDesktopModule<ProjectArtifactsModule>(
+      '../../desktop/src/main/integrations/project-artifacts'
+    )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-'))
   await mkdir(join(tempRoot, 'workspace'), { recursive: true })
   const projectPath = join(tempRoot, 'workspace', '..', 'workspace')
   const expectedProjectDirectory = await realpath(join(tempRoot, 'workspace'))
   let now = 1_000
-  const store = new ProjectSourcesFileStore(projectPath, { now: () => now })
+  const store = new ProjectArtifactsFileStore(projectPath, { now: () => now })
 
   try {
     expect(store.projectDirectory).toBe(expectedProjectDirectory)
-    expect(store.filePath).toBe(join(expectedProjectDirectory, '.openkhodam', 'sources.json'))
-    await expect(store.read()).resolves.toEqual({ version: 1, sessions: {} })
+    expect(store.filePath).toBe(join(expectedProjectDirectory, '.openkhodam', 'artifacts.json'))
+    await expect(store.read()).resolves.toEqual({
+      version: PROJECT_ARTIFACTS_CONFIG_VERSION,
+      sessions: {}
+    })
 
-    const recorded = await store.recordLinkedSource({
-      messageId: 'message-1',
-      sessionId: 'session-1',
-      source: {
-        attributes: { tabId: 'tab-1' },
+    const recorded = await store.recordLinkedGoogleDoc({
+      doc: {
         id: 'doc-1',
-        kind: 'google-doc',
-        mimeType: 'application/vnd.google-apps.document',
-        provider: 'google',
         title: 'Launch Plan',
         url: 'https://docs.google.com/document/d/doc-1/edit'
-      }
+      },
+      messageId: 'message-1',
+      sessionId: 'session-1'
     })
 
     expect(recorded).toEqual({
-      attributes: { tabId: 'tab-1' },
       firstMessageId: 'message-1',
       firstSeenAt: 1_000,
       id: 'doc-1',
-      key: 'google:google-doc:doc-1',
-      kind: 'google-doc',
       lastMessageId: 'message-1',
       lastSeenAt: 1_000,
       listed: true,
-      mimeType: 'application/vnd.google-apps.document',
-      provider: 'google',
       title: 'Launch Plan',
       url: 'https://docs.google.com/document/d/doc-1/edit'
     })
     expect(JSON.parse(await readFile(store.filePath, 'utf8'))).toEqual({
-      version: 1,
+      version: PROJECT_ARTIFACTS_CONFIG_VERSION,
       sessions: {
         'session-1': [recorded]
       }
@@ -239,30 +234,28 @@ test('stores project session linked sources with stable path and dedupe timestam
     expect((await stat(store.filePath)).mode & 0o777).toBe(0o600)
 
     now = 2_000
-    const rerecorded = await store.recordLinkedSource({
-      messageId: 'message-2',
-      sessionId: 'session-1',
-      source: {
+    const rerecorded = await store.recordLinkedGoogleDoc({
+      doc: {
         id: 'doc-1',
-        kind: 'google-doc',
-        provider: 'google',
         title: 'Updated Launch Plan',
         url: 'https://docs.google.com/document/d/doc-1/edit'
-      }
+      },
+      messageId: 'message-2',
+      sessionId: 'session-1'
     })
 
     expect(rerecorded).toMatchObject({
       firstMessageId: 'message-1',
       firstSeenAt: 1_000,
-      key: 'google:google-doc:doc-1',
+      id: 'doc-1',
       lastMessageId: 'message-2',
       lastSeenAt: 2_000,
       listed: true,
       title: 'Updated Launch Plan'
     })
-    await expect(store.listSessionSources('session-1')).resolves.toEqual([rerecorded])
-    await expect(store.listProjectSources()).resolves.toEqual({
-      version: 1,
+    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([rerecorded])
+    await expect(store.listProjectArtifacts()).resolves.toEqual({
+      version: PROJECT_ARTIFACTS_CONFIG_VERSION,
       sessions: {
         'session-1': [rerecorded]
       }
@@ -272,59 +265,57 @@ test('stores project session linked sources with stable path and dedupe timestam
   }
 })
 
-test('rejects untrusted project source paths before creating project memory', async () => {
-  const { ProjectSourcesFileStore, createProjectSourcesIntegration } =
-    loadDesktopModule<ProjectSourcesModule>('../../desktop/src/main/integrations/project-sources')
-  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-paths-'))
-  const integration = createProjectSourcesIntegration()
+test('rejects untrusted project artifact paths before creating project memory', async () => {
+  const { ProjectArtifactsFileStore, createProjectArtifactsIntegration } =
+    loadDesktopModule<ProjectArtifactsModule>(
+      '../../desktop/src/main/integrations/project-artifacts'
+    )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-paths-'))
+  const integration = createProjectArtifactsIntegration()
   const relativeProjectPath = relative(process.cwd(), join(tempRoot, 'relative-project'))
   const missingProjectPath = join(tempRoot, 'missing-project')
   const fileProjectPath = join(tempRoot, 'project-file')
   const removedProjectPath = join(tempRoot, 'removed-project')
-  const source = {
-    id: 'doc-1',
-    kind: 'google-doc',
-    provider: 'google'
-  }
+  const doc = { id: 'doc-1' }
 
   try {
     await mkdir(removedProjectPath, { recursive: true })
     await writeFile(fileProjectPath, 'not a directory', 'utf8')
-    const removedStore = new ProjectSourcesFileStore(removedProjectPath)
+    const removedStore = new ProjectArtifactsFileStore(removedProjectPath)
 
-    expect(() => new ProjectSourcesFileStore(relativeProjectPath)).toThrow(/absolute path/)
-    expect(() => new ProjectSourcesFileStore(missingProjectPath)).toThrow(/existing directory/)
-    expect(() => new ProjectSourcesFileStore(fileProjectPath)).toThrow(/existing directory/)
-    expect(() => new ProjectSourcesFileStore('')).toThrow(/non-empty string/)
-    expect(() => new ProjectSourcesFileStore(`${tempRoot}\0bad`)).toThrow(/non-empty string/)
+    expect(() => new ProjectArtifactsFileStore(relativeProjectPath)).toThrow(/absolute path/)
+    expect(() => new ProjectArtifactsFileStore(missingProjectPath)).toThrow(/existing directory/)
+    expect(() => new ProjectArtifactsFileStore(fileProjectPath)).toThrow(/existing directory/)
+    expect(() => new ProjectArtifactsFileStore('')).toThrow(/non-empty string/)
+    expect(() => new ProjectArtifactsFileStore(`${tempRoot}\0bad`)).toThrow(/non-empty string/)
 
     await expect(
-      integration.listProjectSources({ projectDirectory: relativeProjectPath })
+      integration.listProjectArtifacts({ projectDirectory: relativeProjectPath })
     ).rejects.toThrow(/absolute path/)
     await expect(
-      integration.listSessionSources({
+      integration.listSessionLinkedDocs({
         projectDirectory: missingProjectPath,
         sessionId: 'session-1'
       })
     ).rejects.toThrow(/existing directory/)
     await expect(
-      integration.recordLinkedSource({
+      integration.recordLinkedGoogleDoc({
+        doc,
         messageId: 'message-1',
         projectDirectory: fileProjectPath,
-        sessionId: 'session-1',
-        source
+        sessionId: 'session-1'
       })
     ).rejects.toThrow(/existing directory/)
     await expect(
-      integration.delistLinkedSource({
-        key: 'google:google-doc:doc-1',
+      integration.delistLinkedGoogleDoc({
+        id: 'doc-1',
         projectDirectory: relativeProjectPath,
         sessionId: 'session-1'
       })
     ).rejects.toThrow(/absolute path/)
     await expect(
-      integration.relistLinkedSource({
-        key: 'google:google-doc:doc-1',
+      integration.relistLinkedGoogleDoc({
+        id: 'doc-1',
         projectDirectory: missingProjectPath,
         sessionId: 'session-1'
       })
@@ -332,11 +323,7 @@ test('rejects untrusted project source paths before creating project memory', as
 
     await rm(removedProjectPath, { recursive: true, force: true })
     await expect(
-      removedStore.recordLinkedSource({
-        messageId: 'message-1',
-        sessionId: 'session-1',
-        source
-      })
+      removedStore.recordLinkedGoogleDoc({ messageId: 'message-1', sessionId: 'session-1', doc })
     ).rejects.toThrow(/existing directory/)
 
     await expect(stat(join(process.cwd(), relativeProjectPath, '.openkhodam'))).rejects.toThrow()
@@ -348,87 +335,78 @@ test('rejects untrusted project source paths before creating project memory', as
   }
 })
 
-test('rejects project sources symlinks before reading or writing', async () => {
-  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
-    '../../desktop/src/main/integrations/project-sources'
+test('rejects project artifact symlinks before reading or writing', async () => {
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
   )
-  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-symlink-'))
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-symlink-'))
   const projectPath = join(tempRoot, 'project')
   const outsideParentTarget = join(tempRoot, 'outside-parent-target')
-  const outsideFileTarget = join(tempRoot, 'outside-sources.json')
-  const source = {
-    id: 'doc-1',
-    kind: 'google-doc',
-    provider: 'google'
-  }
+  const outsideFileTarget = join(tempRoot, 'outside-artifacts.json')
+  const doc = { id: 'doc-1' }
 
   try {
     await mkdir(projectPath, { recursive: true })
     await mkdir(outsideParentTarget, { recursive: true })
     await symlink(outsideParentTarget, join(projectPath, '.openkhodam'), 'dir')
 
-    const parentSymlinkStore = new ProjectSourcesFileStore(projectPath)
+    const parentSymlinkStore = new ProjectArtifactsFileStore(projectPath)
     await expect(parentSymlinkStore.read()).rejects.toThrow(/must not be a symlink/)
     await expect(
-      parentSymlinkStore.recordLinkedSource({
+      parentSymlinkStore.recordLinkedGoogleDoc({
         messageId: 'message-1',
         sessionId: 'session-1',
-        source
+        doc
       })
     ).rejects.toThrow(/must not be a symlink/)
-    await expect(stat(join(outsideParentTarget, 'sources.json'))).rejects.toThrow()
+    await expect(stat(join(outsideParentTarget, 'artifacts.json'))).rejects.toThrow()
 
     await rm(join(projectPath, '.openkhodam'), { force: true })
     await mkdir(join(projectPath, '.openkhodam'), { recursive: true })
     await writeFile(outsideFileTarget, 'outside target', 'utf8')
-    await symlink(outsideFileTarget, join(projectPath, '.openkhodam', 'sources.json'), 'file')
+    await symlink(outsideFileTarget, join(projectPath, '.openkhodam', 'artifacts.json'), 'file')
 
-    const fileSymlinkStore = new ProjectSourcesFileStore(projectPath)
-    await expect(fileSymlinkStore.read()).rejects.toThrow(/sources\.json must not be a symlink/)
+    const fileSymlinkStore = new ProjectArtifactsFileStore(projectPath)
+    await expect(fileSymlinkStore.read()).rejects.toThrow(/artifacts\.json must not be a symlink/)
     await expect(
-      fileSymlinkStore.recordLinkedSource({
+      fileSymlinkStore.recordLinkedGoogleDoc({
         messageId: 'message-1',
         sessionId: 'session-1',
-        source
+        doc
       })
-    ).rejects.toThrow(/sources\.json must not be a symlink/)
+    ).rejects.toThrow(/artifacts\.json must not be a symlink/)
     await expect(readFile(outsideFileTarget, 'utf8')).resolves.toBe('outside target')
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
-test('preserves delist intent until a source is explicitly relisted', async () => {
-  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
-    '../../desktop/src/main/integrations/project-sources'
+test('preserves linked-doc delist intent until explicitly relisted', async () => {
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
   )
-  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-listing-'))
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-listing-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
   let now = 10
-  const store = new ProjectSourcesFileStore(projectPath, { now: () => now })
-  const source = {
+  const store = new ProjectArtifactsFileStore(projectPath, { now: () => now })
+  const doc = {
     id: 'doc-1',
-    kind: 'google-doc',
-    provider: 'google',
     title: 'Launch Plan',
     url: 'https://docs.google.com/document/d/doc-1/edit'
   }
 
   try {
-    await store.recordLinkedSource({ messageId: 'message-1', sessionId: 'session-1', source })
+    await store.recordLinkedGoogleDoc({ doc, messageId: 'message-1', sessionId: 'session-1' })
 
-    const delisted = await store.delistLinkedSource({
-      key: 'google:google-doc:doc-1',
-      sessionId: 'session-1'
-    })
+    const delisted = await store.delistLinkedGoogleDoc({ id: 'doc-1', sessionId: 'session-1' })
     expect(delisted?.listed).toBe(false)
 
     now = 20
-    const rerecorded = await store.recordLinkedSource({
+    const rerecorded = await store.recordLinkedGoogleDoc({
+      doc: { ...doc, title: 'Updated Launch Plan' },
       messageId: 'message-2',
-      sessionId: 'session-1',
-      source: { ...source, title: 'Updated Launch Plan' }
+      sessionId: 'session-1'
     })
     expect(rerecorded).toMatchObject({
       firstMessageId: 'message-1',
@@ -439,25 +417,23 @@ test('preserves delist intent until a source is explicitly relisted', async () =
       title: 'Updated Launch Plan'
     })
 
-    const relisted = await store.relistLinkedSource({
-      key: 'google:google-doc:doc-1',
-      sessionId: 'session-1'
-    })
+    const relisted = await store.relistLinkedGoogleDoc({ id: 'doc-1', sessionId: 'session-1' })
     expect(relisted?.listed).toBe(true)
-    await expect(store.listSessionSources('session-1')).resolves.toEqual([relisted])
+    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([relisted])
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
-test('normalizes invalid project source records defensively', async () => {
-  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
-    '../../desktop/src/main/integrations/project-sources'
-  )
-  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-normalize-'))
+test('normalizes invalid linked-doc artifact records defensively', async () => {
+  const { PROJECT_ARTIFACTS_CONFIG_VERSION, ProjectArtifactsFileStore } =
+    loadDesktopModule<ProjectArtifactsModule>(
+      '../../desktop/src/main/integrations/project-artifacts'
+    )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-normalize-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
-  const store = new ProjectSourcesFileStore(projectPath)
+  const store = new ProjectArtifactsFileStore(projectPath)
 
   try {
     await mkdir(dirname(store.filePath), { recursive: true })
@@ -469,48 +445,33 @@ test('normalizes invalid project source records defensively', async () => {
             ' session-a ': [
               null,
               {
-                accessToken: 'drop-me',
-                attributes: {
-                  accessToken: 'drop-me-too',
-                  count: 2,
-                  nested: { unsafe: true },
-                  safe: 'yes'
-                },
                 firstMessageId: ' message-1 ',
                 firstSeenAt: 50.9,
                 id: 'doc-1',
-                kind: 'google-doc',
                 lastMessageId: ' message-2 ',
                 lastSeenAt: 75.2,
                 listed: false,
-                provider: 'google',
                 title: ' Original title ',
                 url: 'https://docs.google.com/document/d/doc-1/edit?access_token=drop-me'
               },
               {
                 firstSeenAt: 60,
                 id: 'doc-1',
-                kind: 'google-doc',
                 lastMessageId: 'message-3',
                 lastSeenAt: 100,
                 listed: true,
-                provider: 'google',
                 title: 'Newer title'
               },
-              { id: 'missing-provider', kind: 'google-doc', provider: '' }
+              { id: '', title: 'ignored' }
             ],
-            ' session-b ': {
-              linkedSources: [
-                {
-                  id: 'doc-2',
-                  kind: 'google-doc',
-                  lastSeenAt: 12,
-                  provider: 'google'
-                }
-              ]
-            },
-            ' ': [{ id: 'ignored', kind: 'google-doc', provider: 'google' }],
-            'session-c': 'not-a-source-list'
+            ' session-b ': [
+              {
+                id: 'doc-2',
+                lastSeenAt: 12
+              }
+            ],
+            ' ': [{ id: 'ignored' }],
+            'session-c': 'not-a-doc-list'
           },
           version: 99
         },
@@ -521,38 +482,28 @@ test('normalizes invalid project source records defensively', async () => {
     )
 
     await expect(store.read()).resolves.toEqual({
-      version: 1,
+      version: PROJECT_ARTIFACTS_CONFIG_VERSION,
       sessions: {
         'session-a': [
           {
-            attributes: { count: 2, safe: 'yes' },
             firstMessageId: 'message-1',
             firstSeenAt: 50,
             id: 'doc-1',
-            key: 'google:google-doc:doc-1',
-            kind: 'google-doc',
             lastMessageId: 'message-3',
             lastSeenAt: 100,
             listed: false,
-            mimeType: null,
-            provider: 'google',
             title: 'Newer title',
             url: null
           }
         ],
         'session-b': [
           {
-            attributes: {},
             firstMessageId: null,
             firstSeenAt: 12,
             id: 'doc-2',
-            key: 'google:google-doc:doc-2',
-            kind: 'google-doc',
             lastMessageId: null,
             lastSeenAt: 12,
             listed: true,
-            mimeType: null,
-            provider: 'google',
             title: null,
             url: null
           }
@@ -564,76 +515,16 @@ test('normalizes invalid project source records defensively', async () => {
   }
 })
 
-test('rejects secret-bearing linked source payloads without persisting them', async () => {
-  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
-    '../../desktop/src/main/integrations/project-sources'
+test('rejects secret-bearing linked-doc URLs without persisting them', async () => {
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
   )
-  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-secrets-'))
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-secrets-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
-  const store = new ProjectSourcesFileStore(projectPath)
-  const sourceWithToken = {
-    accessToken: 'should-not-persist',
-    id: 'doc-1',
-    kind: 'google-doc',
-    provider: 'google'
-  }
+  const store = new ProjectArtifactsFileStore(projectPath)
 
   try {
-    await expect(
-      store.recordLinkedSource({
-        messageId: 'message-1',
-        sessionId: 'session-1',
-        source: sourceWithToken
-      })
-    ).rejects.toThrow(/secret-like field/i)
-    await expect(
-      store.recordLinkedSource({
-        sessionId: 'session-1',
-        source: {
-          attributes: { refreshToken: 'should-not-persist' },
-          id: 'doc-1',
-          kind: 'google-doc',
-          provider: 'google'
-        }
-      })
-    ).rejects.toThrow(/secret-like field/i)
-    await expect(
-      store.recordLinkedSource({
-        sessionId: 'session-1',
-        source: {
-          id: 'doc-1',
-          kind: 'google-doc',
-          provider: 'google',
-          url: 'https://docs.google.com/document/d/doc-1/edit?access_token=should-not-persist'
-        }
-      })
-    ).rejects.toThrow(/secret-like value/i)
-
-    for (const attributes of [
-      { 'x-api-key': 'should-not-persist' },
-      { accessKeyId: 'should-not-persist' },
-      { authorizationHeader: 'Bearer should-not-persist' },
-      { cookieHeader: 'session=should-not-persist' },
-      { key: 'should-not-persist' },
-      { privateKey: 'should-not-persist' },
-      { secretAccessKey: 'should-not-persist' },
-      { sig: 'should-not-persist' },
-      { signature: 'should-not-persist' }
-    ]) {
-      await expect(
-        store.recordLinkedSource({
-          sessionId: 'session-1',
-          source: {
-            attributes,
-            id: 'doc-1',
-            kind: 'google-doc',
-            provider: 'google'
-          }
-        })
-      ).rejects.toThrow(/secret-like field/i)
-    }
-
     for (const url of [
       '/doc?key=should-not-persist',
       '/doc?sig=should-not-persist',
@@ -651,48 +542,15 @@ test('rejects secret-bearing linked source payloads without persisting them', as
       'https://docs.google.com/document/d/doc-1/edit?signature=should-not-persist'
     ]) {
       await expect(
-        store.recordLinkedSource({
-          sessionId: 'session-1',
-          source: {
-            id: 'doc-1',
-            kind: 'google-doc',
-            provider: 'google',
-            url
-          }
+        store.recordLinkedGoogleDoc({
+          doc: { id: 'doc-1', url },
+          sessionId: 'session-1'
         })
       ).rejects.toThrow(/secret-like value/i)
     }
 
     await expect(store.read()).resolves.toEqual({ version: 1, sessions: {} })
     await expect(stat(store.filePath)).rejects.toThrow(/ENOENT|no such file/i)
-  } finally {
-    await rm(tempRoot, { recursive: true, force: true })
-  }
-})
-
-test('allows source identity key while rejecting secret-like metadata keys', async () => {
-  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
-    '../../desktop/src/main/integrations/project-sources'
-  )
-  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-source-key-'))
-  const projectPath = join(tempRoot, 'project')
-  await mkdir(projectPath, { recursive: true })
-  const store = new ProjectSourcesFileStore(projectPath)
-
-  try {
-    const recorded = await store.recordLinkedSource({
-      messageId: 'message-1',
-      sessionId: 'session-1',
-      source: {
-        id: 'doc-1',
-        key: 'custom-source-key',
-        kind: 'google-doc',
-        provider: 'google'
-      }
-    })
-
-    expect(recorded.key).toBe('custom-source-key')
-    await expect(store.listSessionSources('session-1')).resolves.toEqual([recorded])
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }

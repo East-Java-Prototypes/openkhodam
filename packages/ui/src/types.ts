@@ -48,23 +48,10 @@ export type GoogleWorkspaceIntegrationStatus =
       updatedAt: number
     }
 
-export type LinkedSourceProvider = 'google' | (string & {})
-
-export type LinkedSourceKind = 'google-doc' | (string & {})
-
-export type LinkedSourceAttributeValue = string | number | boolean | null
-
-export type LinkedSourceAttributes = Record<string, LinkedSourceAttributeValue>
-
-export type LinkedSource = {
-  key: string
-  provider: LinkedSourceProvider
-  kind: LinkedSourceKind
+export type LinkedGoogleDoc = {
   id: string
   title: string | null
   url: string | null
-  mimeType: string | null
-  attributes: LinkedSourceAttributes
   listed: boolean
   firstSeenAt: number
   lastSeenAt: number
@@ -72,35 +59,30 @@ export type LinkedSource = {
   lastMessageId: string | null
 }
 
-export type LinkedSourceRecord = {
-  key?: string
-  provider: LinkedSourceProvider
-  kind: LinkedSourceKind
+export type LinkedGoogleDocRecord = {
   id: string
   title?: string | null
   url?: string | null
-  mimeType?: string | null
-  attributes?: LinkedSourceAttributes
 }
 
-export type ProjectSourcesConfig = {
+export type ProjectArtifactsConfig = {
   version: 1
-  sessions: Record<string, LinkedSource[]>
+  sessions: Record<string, LinkedGoogleDoc[]>
 }
 
-export type ProjectSourcesListInput = {
+export type ProjectArtifactsListInput = {
   projectDirectory: string
 }
 
-export type ProjectSessionSourcesListInput = ProjectSourcesListInput & {
+export type ProjectSessionLinkedDocsListInput = ProjectArtifactsListInput & {
   sessionId: string
 }
 
-export type RecordLinkedSourceInput = ProjectSessionSourcesListInput & {
+export type RecordLinkedGoogleDocInput = ProjectSessionLinkedDocsListInput & {
   messageId?: string | null
-  source: LinkedSourceRecord
+  doc: LinkedGoogleDocRecord
 }
 
-export type UpdateLinkedSourceListingInput = ProjectSessionSourcesListInput & {
-  key: string
+export type UpdateLinkedGoogleDocListingInput = ProjectSessionLinkedDocsListInput & {
+  id: string
 }
