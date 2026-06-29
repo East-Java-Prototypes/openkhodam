@@ -6,22 +6,25 @@ OpenKhodam owns a small number of JSON files in the Electron main process. Keep 
 
 - `userData/openkhodam-config.json` is the app/user config. It is owned by `OpenKhodamConfigFileStore` and currently stores the Google Workspace connection status, granted scopes, account metadata, and OAuth tokens.
 - `userData/opencode-sidecar/runtime-opencode-config.json` is generated runtime config. It is written before the OpenCode sidecar starts and passed to OpenCode through `OPENCODE_CONFIG`. It should contain only the managed runtime payload OpenCode needs, such as bundled plugin paths.
+- `<project>/.openkhodam/sources.json` is project-local session source memory. It is owned by `ProjectSourcesFileStore` and stores `sessionId -> linkedSources[]` records for artifacts/resources that OpenKhodam tools or UI explicitly record through the OpenKhodam IPC/integration APIs. It is not user-authored setup.
 
-Both files are written through `packages/desktop/src/main/config/json-config-file.ts`, which centralizes default-on-missing reads, normalization, JSON formatting, atomic writes, temporary-file cleanup, and file mode handling.
+All JSON config files are written through `packages/desktop/src/main/config/json-config-file.ts`, which centralizes default-on-missing reads, normalization, JSON formatting, atomic writes, temporary-file cleanup, and file mode handling.
 
 ## Secrets and non-secrets
 
 - Treat OAuth tokens, refresh tokens, and credentials as secrets. Keep them in local app-owned storage with restrictive file permissions, and never place them in project/workspace files or checked-in docs/fixtures.
 - Generated runtime config should stay non-secret. Plugin paths and OpenCode loader metadata are acceptable; credentials and user content are not.
+- Project source memory is non-secret but may be sensitive: source IDs, titles, URLs, and session/message IDs can reveal private project context and may be committed if the project includes `.openkhodam`. Never persist OAuth tokens, refresh tokens, credentials, authorization headers, cookie headers, or API keys in `.openkhodam/sources.json`.
 - Future project/session config should avoid secrets by default. If a secret is required, use a secret-specific local store or OS-backed credential mechanism instead of extending project JSON.
 
 ## Adding or extending config
 
-1. Decide ownership first: app/user config, generated runtime config, or a future project/session config. Do not mix these responsibilities in one file.
-2. Keep the path stable and documented. App/user config belongs under Electron `userData`; generated OpenCode runtime config belongs under `userData/opencode-sidecar`.
+1. Decide ownership first: app/user config, generated runtime config, or project/session source memory. Do not mix these responsibilities in one file.
+2. Keep the path stable and documented. App/user config belongs under Electron `userData`; generated OpenCode runtime config belongs under `userData/opencode-sidecar`; session source memory belongs under the active project at `.openkhodam/sources.json`. Project source callers must provide a non-empty absolute path to an existing directory, which OpenKhodam canonicalizes before appending `.openkhodam/sources.json`; OpenKhodam rejects symlinked `.openkhodam` directories and symlinked `sources.json` files.
 3. Define a typed store API for callers and keep low-level file IO inside `JsonConfigFile`/`writeJsonConfigFile`.
 4. Provide a default value for missing app-owned config files and a normalizer that accepts older or partial payloads.
 5. Preserve atomic writes and restrictive modes for files that may contain user or auth data.
 6. Add focused tests around path, payload shape, missing-file defaults, normalization, and mode-sensitive behavior when feasible.
+7. Mutate project source memory only through the OpenKhodam APIs (`listProjectSources`, `listSessionSources`, `recordLinkedSource`, `delistLinkedSource`, and `relistLinkedSource`) so delist/relist intent and secret filtering stay centralized.
 
-Google Docs resource bindings, prompt context injection, preview panes, and durable workspace/session config are separate features and should not be added to these files without a new ownership decision.
+Google Docs tool integration, prompt context injection, preview panes, manual attach forms, and durable workspace/session aggregation are separate features and should not be added to these files without a new ownership decision.
