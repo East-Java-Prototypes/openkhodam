@@ -2,8 +2,14 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
   GoogleWorkspaceIntegrationStatus,
+  LinkedSource,
   OpenCodeConnection,
-  OpenCodeSidecarStatus
+  OpenCodeSidecarStatus,
+  ProjectSessionSourcesListInput,
+  ProjectSourcesConfig,
+  ProjectSourcesListInput,
+  RecordLinkedSourceInput,
+  UpdateLinkedSourceListingInput
 } from '@openkhodam/ui/types'
 
 // Custom APIs for renderer
@@ -21,6 +27,16 @@ const api = {
     ipcRenderer.invoke('google-workspace:cancel-connect'),
   disconnectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
     ipcRenderer.invoke('google-workspace:disconnect'),
+  listProjectSources: (input: ProjectSourcesListInput): Promise<ProjectSourcesConfig> =>
+    ipcRenderer.invoke('project-sources:list-project', input),
+  listSessionSources: (input: ProjectSessionSourcesListInput): Promise<LinkedSource[]> =>
+    ipcRenderer.invoke('project-sources:list-session', input),
+  recordLinkedSource: (input: RecordLinkedSourceInput): Promise<LinkedSource> =>
+    ipcRenderer.invoke('project-sources:record', input),
+  delistLinkedSource: (input: UpdateLinkedSourceListingInput): Promise<LinkedSource | null> =>
+    ipcRenderer.invoke('project-sources:delist', input),
+  relistLinkedSource: (input: UpdateLinkedSourceListingInput): Promise<LinkedSource | null> =>
+    ipcRenderer.invoke('project-sources:relist', input),
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, status: OpenCodeSidecarStatus): void =>
       callback(status)

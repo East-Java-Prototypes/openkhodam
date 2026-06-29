@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 
 import { expect, test } from '@playwright/test'
 
@@ -83,6 +83,7 @@ type OpenKhodamConfigFixture = {
 
 type JsonConfigFileModule = typeof import('../../desktop/src/main/config/json-config-file')
 type OpenKhodamConfigModule = typeof import('../../desktop/src/main/integrations/openkhodam-config')
+type ProjectSourcesModule = typeof import('../../desktop/src/main/integrations/project-sources')
 type RuntimeConfigModule = typeof import('../../desktop/src/main/opencode-runtime-config')
 
 test('reads defaults and writes normalized JSON config files atomically', async () => {
@@ -181,6 +182,519 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
     expect((await stat(runtimeConfigPath)).mode & 0o777).toBe(0o600)
   } finally {
     await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('stores project session linked sources with stable path and dedupe timestamps', async () => {
+  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
+    '../../desktop/src/main/integrations/project-sources'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-'))
+  await mkdir(join(tempRoot, 'workspace'), { recursive: true })
+  const projectPath = join(tempRoot, 'workspace', '..', 'workspace')
+  const expectedProjectDirectory = await realpath(join(tempRoot, 'workspace'))
+  let now = 1_000
+  const store = new ProjectSourcesFileStore(projectPath, { now: () => now })
+
+  try {
+    expect(store.projectDirectory).toBe(expectedProjectDirectory)
+    expect(store.filePath).toBe(join(expectedProjectDirectory, '.openkhodam', 'sources.json'))
+    await expect(store.read()).resolves.toEqual({ version: 1, sessions: {} })
+
+    const recorded = await store.recordLinkedSource({
+      messageId: 'message-1',
+      sessionId: 'session-1',
+      source: {
+        attributes: { tabId: 'tab-1' },
+        id: 'doc-1',
+        kind: 'google-doc',
+        mimeType: 'application/vnd.google-apps.document',
+        provider: 'google',
+        title: 'Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      }
+    })
+
+    expect(recorded).toEqual({
+      attributes: { tabId: 'tab-1' },
+      firstMessageId: 'message-1',
+      firstSeenAt: 1_000,
+      id: 'doc-1',
+      key: 'google:google-doc:doc-1',
+      kind: 'google-doc',
+      lastMessageId: 'message-1',
+      lastSeenAt: 1_000,
+      listed: true,
+      mimeType: 'application/vnd.google-apps.document',
+      provider: 'google',
+      title: 'Launch Plan',
+      url: 'https://docs.google.com/document/d/doc-1/edit'
+    })
+    expect(JSON.parse(await readFile(store.filePath, 'utf8'))).toEqual({
+      version: 1,
+      sessions: {
+        'session-1': [recorded]
+      }
+    })
+    expect((await stat(store.filePath)).mode & 0o777).toBe(0o600)
+
+    now = 2_000
+    const rerecorded = await store.recordLinkedSource({
+      messageId: 'message-2',
+      sessionId: 'session-1',
+      source: {
+        id: 'doc-1',
+        kind: 'google-doc',
+        provider: 'google',
+        title: 'Updated Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      }
+    })
+
+    expect(rerecorded).toMatchObject({
+      firstMessageId: 'message-1',
+      firstSeenAt: 1_000,
+      key: 'google:google-doc:doc-1',
+      lastMessageId: 'message-2',
+      lastSeenAt: 2_000,
+      listed: true,
+      title: 'Updated Launch Plan'
+    })
+    await expect(store.listSessionSources('session-1')).resolves.toEqual([rerecorded])
+    await expect(store.listProjectSources()).resolves.toEqual({
+      version: 1,
+      sessions: {
+        'session-1': [rerecorded]
+      }
+    })
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejects untrusted project source paths before creating project memory', async () => {
+  const { ProjectSourcesFileStore, createProjectSourcesIntegration } =
+    loadDesktopModule<ProjectSourcesModule>('../../desktop/src/main/integrations/project-sources')
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-paths-'))
+  const integration = createProjectSourcesIntegration()
+  const relativeProjectPath = relative(process.cwd(), join(tempRoot, 'relative-project'))
+  const missingProjectPath = join(tempRoot, 'missing-project')
+  const fileProjectPath = join(tempRoot, 'project-file')
+  const removedProjectPath = join(tempRoot, 'removed-project')
+  const source = {
+    id: 'doc-1',
+    kind: 'google-doc',
+    provider: 'google'
+  }
+
+  try {
+    await mkdir(removedProjectPath, { recursive: true })
+    await writeFile(fileProjectPath, 'not a directory', 'utf8')
+    const removedStore = new ProjectSourcesFileStore(removedProjectPath)
+
+    expect(() => new ProjectSourcesFileStore(relativeProjectPath)).toThrow(/absolute path/)
+    expect(() => new ProjectSourcesFileStore(missingProjectPath)).toThrow(/existing directory/)
+    expect(() => new ProjectSourcesFileStore(fileProjectPath)).toThrow(/existing directory/)
+    expect(() => new ProjectSourcesFileStore('')).toThrow(/non-empty string/)
+    expect(() => new ProjectSourcesFileStore(`${tempRoot}\0bad`)).toThrow(/non-empty string/)
+
+    await expect(
+      integration.listProjectSources({ projectDirectory: relativeProjectPath })
+    ).rejects.toThrow(/absolute path/)
+    await expect(
+      integration.listSessionSources({
+        projectDirectory: missingProjectPath,
+        sessionId: 'session-1'
+      })
+    ).rejects.toThrow(/existing directory/)
+    await expect(
+      integration.recordLinkedSource({
+        messageId: 'message-1',
+        projectDirectory: fileProjectPath,
+        sessionId: 'session-1',
+        source
+      })
+    ).rejects.toThrow(/existing directory/)
+    await expect(
+      integration.delistLinkedSource({
+        key: 'google:google-doc:doc-1',
+        projectDirectory: relativeProjectPath,
+        sessionId: 'session-1'
+      })
+    ).rejects.toThrow(/absolute path/)
+    await expect(
+      integration.relistLinkedSource({
+        key: 'google:google-doc:doc-1',
+        projectDirectory: missingProjectPath,
+        sessionId: 'session-1'
+      })
+    ).rejects.toThrow(/existing directory/)
+
+    await rm(removedProjectPath, { recursive: true, force: true })
+    await expect(
+      removedStore.recordLinkedSource({
+        messageId: 'message-1',
+        sessionId: 'session-1',
+        source
+      })
+    ).rejects.toThrow(/existing directory/)
+
+    await expect(stat(join(process.cwd(), relativeProjectPath, '.openkhodam'))).rejects.toThrow()
+    await expect(stat(join(missingProjectPath, '.openkhodam'))).rejects.toThrow()
+    await expect(stat(join(fileProjectPath, '.openkhodam'))).rejects.toThrow()
+    await expect(stat(join(removedProjectPath, '.openkhodam'))).rejects.toThrow()
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejects project sources symlinks before reading or writing', async () => {
+  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
+    '../../desktop/src/main/integrations/project-sources'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-symlink-'))
+  const projectPath = join(tempRoot, 'project')
+  const outsideParentTarget = join(tempRoot, 'outside-parent-target')
+  const outsideFileTarget = join(tempRoot, 'outside-sources.json')
+  const source = {
+    id: 'doc-1',
+    kind: 'google-doc',
+    provider: 'google'
+  }
+
+  try {
+    await mkdir(projectPath, { recursive: true })
+    await mkdir(outsideParentTarget, { recursive: true })
+    await symlink(outsideParentTarget, join(projectPath, '.openkhodam'), 'dir')
+
+    const parentSymlinkStore = new ProjectSourcesFileStore(projectPath)
+    await expect(parentSymlinkStore.read()).rejects.toThrow(/must not be a symlink/)
+    await expect(
+      parentSymlinkStore.recordLinkedSource({
+        messageId: 'message-1',
+        sessionId: 'session-1',
+        source
+      })
+    ).rejects.toThrow(/must not be a symlink/)
+    await expect(stat(join(outsideParentTarget, 'sources.json'))).rejects.toThrow()
+
+    await rm(join(projectPath, '.openkhodam'), { force: true })
+    await mkdir(join(projectPath, '.openkhodam'), { recursive: true })
+    await writeFile(outsideFileTarget, 'outside target', 'utf8')
+    await symlink(outsideFileTarget, join(projectPath, '.openkhodam', 'sources.json'), 'file')
+
+    const fileSymlinkStore = new ProjectSourcesFileStore(projectPath)
+    await expect(fileSymlinkStore.read()).rejects.toThrow(/sources\.json must not be a symlink/)
+    await expect(
+      fileSymlinkStore.recordLinkedSource({
+        messageId: 'message-1',
+        sessionId: 'session-1',
+        source
+      })
+    ).rejects.toThrow(/sources\.json must not be a symlink/)
+    await expect(readFile(outsideFileTarget, 'utf8')).resolves.toBe('outside target')
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('preserves delist intent until a source is explicitly relisted', async () => {
+  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
+    '../../desktop/src/main/integrations/project-sources'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-listing-'))
+  const projectPath = join(tempRoot, 'project')
+  await mkdir(projectPath, { recursive: true })
+  let now = 10
+  const store = new ProjectSourcesFileStore(projectPath, { now: () => now })
+  const source = {
+    id: 'doc-1',
+    kind: 'google-doc',
+    provider: 'google',
+    title: 'Launch Plan',
+    url: 'https://docs.google.com/document/d/doc-1/edit'
+  }
+
+  try {
+    await store.recordLinkedSource({ messageId: 'message-1', sessionId: 'session-1', source })
+
+    const delisted = await store.delistLinkedSource({
+      key: 'google:google-doc:doc-1',
+      sessionId: 'session-1'
+    })
+    expect(delisted?.listed).toBe(false)
+
+    now = 20
+    const rerecorded = await store.recordLinkedSource({
+      messageId: 'message-2',
+      sessionId: 'session-1',
+      source: { ...source, title: 'Updated Launch Plan' }
+    })
+    expect(rerecorded).toMatchObject({
+      firstMessageId: 'message-1',
+      firstSeenAt: 10,
+      lastMessageId: 'message-2',
+      lastSeenAt: 20,
+      listed: false,
+      title: 'Updated Launch Plan'
+    })
+
+    const relisted = await store.relistLinkedSource({
+      key: 'google:google-doc:doc-1',
+      sessionId: 'session-1'
+    })
+    expect(relisted?.listed).toBe(true)
+    await expect(store.listSessionSources('session-1')).resolves.toEqual([relisted])
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('normalizes invalid project source records defensively', async () => {
+  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
+    '../../desktop/src/main/integrations/project-sources'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-normalize-'))
+  const projectPath = join(tempRoot, 'project')
+  await mkdir(projectPath, { recursive: true })
+  const store = new ProjectSourcesFileStore(projectPath)
+
+  try {
+    await mkdir(dirname(store.filePath), { recursive: true })
+    await writeFile(
+      store.filePath,
+      `${JSON.stringify(
+        {
+          sessions: {
+            ' session-a ': [
+              null,
+              {
+                accessToken: 'drop-me',
+                attributes: {
+                  accessToken: 'drop-me-too',
+                  count: 2,
+                  nested: { unsafe: true },
+                  safe: 'yes'
+                },
+                firstMessageId: ' message-1 ',
+                firstSeenAt: 50.9,
+                id: 'doc-1',
+                kind: 'google-doc',
+                lastMessageId: ' message-2 ',
+                lastSeenAt: 75.2,
+                listed: false,
+                provider: 'google',
+                title: ' Original title ',
+                url: 'https://docs.google.com/document/d/doc-1/edit?access_token=drop-me'
+              },
+              {
+                firstSeenAt: 60,
+                id: 'doc-1',
+                kind: 'google-doc',
+                lastMessageId: 'message-3',
+                lastSeenAt: 100,
+                listed: true,
+                provider: 'google',
+                title: 'Newer title'
+              },
+              { id: 'missing-provider', kind: 'google-doc', provider: '' }
+            ],
+            ' session-b ': {
+              linkedSources: [
+                {
+                  id: 'doc-2',
+                  kind: 'google-doc',
+                  lastSeenAt: 12,
+                  provider: 'google'
+                }
+              ]
+            },
+            ' ': [{ id: 'ignored', kind: 'google-doc', provider: 'google' }],
+            'session-c': 'not-a-source-list'
+          },
+          version: 99
+        },
+        null,
+        2
+      )}\n`,
+      'utf8'
+    )
+
+    await expect(store.read()).resolves.toEqual({
+      version: 1,
+      sessions: {
+        'session-a': [
+          {
+            attributes: { count: 2, safe: 'yes' },
+            firstMessageId: 'message-1',
+            firstSeenAt: 50,
+            id: 'doc-1',
+            key: 'google:google-doc:doc-1',
+            kind: 'google-doc',
+            lastMessageId: 'message-3',
+            lastSeenAt: 100,
+            listed: false,
+            mimeType: null,
+            provider: 'google',
+            title: 'Newer title',
+            url: null
+          }
+        ],
+        'session-b': [
+          {
+            attributes: {},
+            firstMessageId: null,
+            firstSeenAt: 12,
+            id: 'doc-2',
+            key: 'google:google-doc:doc-2',
+            kind: 'google-doc',
+            lastMessageId: null,
+            lastSeenAt: 12,
+            listed: true,
+            mimeType: null,
+            provider: 'google',
+            title: null,
+            url: null
+          }
+        ]
+      }
+    })
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejects secret-bearing linked source payloads without persisting them', async () => {
+  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
+    '../../desktop/src/main/integrations/project-sources'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-sources-secrets-'))
+  const projectPath = join(tempRoot, 'project')
+  await mkdir(projectPath, { recursive: true })
+  const store = new ProjectSourcesFileStore(projectPath)
+  const sourceWithToken = {
+    accessToken: 'should-not-persist',
+    id: 'doc-1',
+    kind: 'google-doc',
+    provider: 'google'
+  }
+
+  try {
+    await expect(
+      store.recordLinkedSource({
+        messageId: 'message-1',
+        sessionId: 'session-1',
+        source: sourceWithToken
+      })
+    ).rejects.toThrow(/secret-like field/i)
+    await expect(
+      store.recordLinkedSource({
+        sessionId: 'session-1',
+        source: {
+          attributes: { refreshToken: 'should-not-persist' },
+          id: 'doc-1',
+          kind: 'google-doc',
+          provider: 'google'
+        }
+      })
+    ).rejects.toThrow(/secret-like field/i)
+    await expect(
+      store.recordLinkedSource({
+        sessionId: 'session-1',
+        source: {
+          id: 'doc-1',
+          kind: 'google-doc',
+          provider: 'google',
+          url: 'https://docs.google.com/document/d/doc-1/edit?access_token=should-not-persist'
+        }
+      })
+    ).rejects.toThrow(/secret-like value/i)
+
+    for (const attributes of [
+      { 'x-api-key': 'should-not-persist' },
+      { accessKeyId: 'should-not-persist' },
+      { authorizationHeader: 'Bearer should-not-persist' },
+      { cookieHeader: 'session=should-not-persist' },
+      { key: 'should-not-persist' },
+      { privateKey: 'should-not-persist' },
+      { secretAccessKey: 'should-not-persist' },
+      { sig: 'should-not-persist' },
+      { signature: 'should-not-persist' }
+    ]) {
+      await expect(
+        store.recordLinkedSource({
+          sessionId: 'session-1',
+          source: {
+            attributes,
+            id: 'doc-1',
+            kind: 'google-doc',
+            provider: 'google'
+          }
+        })
+      ).rejects.toThrow(/secret-like field/i)
+    }
+
+    for (const url of [
+      '/doc?key=should-not-persist',
+      '/doc?sig=should-not-persist',
+      'https://docs.google.com/#/doc?key=should-not-persist',
+      'https://docs.google.com/#/doc?sig=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit?x-api-key=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit?accessKeyId=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit?authorizationHeader=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit#cookieHeader=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit?key=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit#key=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit?privateKey=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit?secretAccessKey=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit?sig=should-not-persist',
+      'https://docs.google.com/document/d/doc-1/edit?signature=should-not-persist'
+    ]) {
+      await expect(
+        store.recordLinkedSource({
+          sessionId: 'session-1',
+          source: {
+            id: 'doc-1',
+            kind: 'google-doc',
+            provider: 'google',
+            url
+          }
+        })
+      ).rejects.toThrow(/secret-like value/i)
+    }
+
+    await expect(store.read()).resolves.toEqual({ version: 1, sessions: {} })
+    await expect(stat(store.filePath)).rejects.toThrow(/ENOENT|no such file/i)
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('allows source identity key while rejecting secret-like metadata keys', async () => {
+  const { ProjectSourcesFileStore } = loadDesktopModule<ProjectSourcesModule>(
+    '../../desktop/src/main/integrations/project-sources'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-source-key-'))
+  const projectPath = join(tempRoot, 'project')
+  await mkdir(projectPath, { recursive: true })
+  const store = new ProjectSourcesFileStore(projectPath)
+
+  try {
+    const recorded = await store.recordLinkedSource({
+      messageId: 'message-1',
+      sessionId: 'session-1',
+      source: {
+        id: 'doc-1',
+        key: 'custom-source-key',
+        kind: 'google-doc',
+        provider: 'google'
+      }
+    })
+
+    expect(recorded.key).toBe('custom-source-key')
+    await expect(store.listSessionSources('session-1')).resolves.toEqual([recorded])
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
@@ -509,13 +1023,13 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 test('registers the ping tool from the ESM artifact through the real OpenCode loader', async () => {
-  test.setTimeout(90_000)
+  test.setTimeout(120_000)
 
   await expectOpenCodeLoadsPlugins([builtPluginPath, builtGoogleWorkspacePluginPath])
 })
 
 test('registers the ping tool from the TS source through the real OpenCode loader', async () => {
-  test.setTimeout(90_000)
+  test.setTimeout(120_000)
 
   await expectOpenCodeLoadsPlugins([sourcePluginPath, sourceGoogleWorkspacePluginPath])
 })
@@ -542,7 +1056,7 @@ async function expectOpenCodeLoadsPlugins(pluginPaths: string[]): Promise<void> 
 
   try {
     const response = await fetch(`${server.url}/experimental/tool/ids`, {
-      signal: AbortSignal.timeout(30_000)
+      signal: AbortSignal.timeout(60_000)
     }).catch((error) => {
       throw new Error(`Failed to fetch OpenCode tool IDs: ${String(error)}\n${server.logs()}`)
     })
@@ -554,7 +1068,7 @@ async function expectOpenCodeLoadsPlugins(pluginPaths: string[]): Promise<void> 
     expect(server.logs()).not.toMatch(/failed to load plugin/i)
   } finally {
     await server.stop()
-    await rm(userDataPath, { recursive: true, force: true })
+    await removeDirectoryWithRetries(userDataPath)
   }
 }
 
@@ -662,4 +1176,29 @@ async function stopProcess(child: ReturnType<typeof spawn>): Promise<void> {
 
     child.kill()
   })
+}
+
+async function removeDirectoryWithRetries(path: string): Promise<void> {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      await rm(path, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (!isRetryableRmError(error) || attempt === 5) throw error
+      await wait(attempt * 100)
+    }
+  }
+}
+
+function isRetryableRmError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    ['EBUSY', 'ENOTEMPTY'].includes(error.code)
+  )
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
 }

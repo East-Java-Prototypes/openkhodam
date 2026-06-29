@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import { createOpenCodeSidecar } from './opencode-sidecar'
 import { OpenKhodamConfigStore } from './integrations/openkhodam-config'
 import { createGoogleWorkspaceIntegration } from './integrations/google-workspace'
+import { createProjectSourcesIntegration } from './integrations/project-sources'
 
 const opencodeSidecar = createOpenCodeSidecar()
 const isE2e = process.env['OPENKHODAM_E2E'] === '1'
@@ -47,6 +48,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   const openKhodamConfig = new OpenKhodamConfigStore(app.getPath('userData'))
   const googleWorkspace = createGoogleWorkspaceIntegration(openKhodamConfig)
+  const projectSources = createProjectSourcesIntegration()
 
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
@@ -65,6 +67,21 @@ app.whenReady().then(() => {
   ipcMain.handle('google-workspace:connect', () => googleWorkspace.connect())
   ipcMain.handle('google-workspace:cancel-connect', () => googleWorkspace.cancelConnect())
   ipcMain.handle('google-workspace:disconnect', () => googleWorkspace.disconnect())
+  ipcMain.handle('project-sources:list-project', (_event, input) =>
+    projectSources.listProjectSources(input)
+  )
+  ipcMain.handle('project-sources:list-session', (_event, input) =>
+    projectSources.listSessionSources(input)
+  )
+  ipcMain.handle('project-sources:record', (_event, input) =>
+    projectSources.recordLinkedSource(input)
+  )
+  ipcMain.handle('project-sources:delist', (_event, input) =>
+    projectSources.delistLinkedSource(input)
+  )
+  ipcMain.handle('project-sources:relist', (_event, input) =>
+    projectSources.relistLinkedSource(input)
+  )
 
   opencodeSidecar.onStatusChange((status) => {
     BrowserWindow.getAllWindows().forEach((window) => {
