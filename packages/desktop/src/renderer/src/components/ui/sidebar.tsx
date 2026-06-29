@@ -21,8 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PanelLeftIcon } from 'lucide-react'
 
-const SIDEBAR_COOKIE_NAME = 'sidebar_state'
-const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
+const SIDEBAR_LOCAL_STORAGE_KEY = 'sidebar_state'
 const SIDEBAR_WIDTH = '16rem'
 const SIDEBAR_WIDTH_MOBILE = '18rem'
 const SIDEBAR_WIDTH_ICON = '3rem'
@@ -31,39 +30,20 @@ const SIDEBAR_KEYBOARD_SHORTCUT = 'b'
 function readSidebarOpenState(defaultOpen = true): boolean {
   const storedState = readSidebarStorageState()
   if (storedState !== null) return storedState
-
-  const cookieState = readSidebarCookieState()
-  if (cookieState !== null) return cookieState
-
   return defaultOpen
 }
 
 function readSidebarStorageState(): boolean | null {
   if (typeof localStorage === 'undefined') return null
 
-  const storedState = localStorage.getItem(SIDEBAR_COOKIE_NAME)
+  const storedState = localStorage.getItem(SIDEBAR_LOCAL_STORAGE_KEY)
   if (storedState === null) return null
   return storedState !== 'false'
 }
 
-function readSidebarCookieState(): boolean | null {
-  if (typeof document === 'undefined') return null
-
-  const sidebarStateCookie = document.cookie
-    .split(';')
-    .map((cookie) => cookie.trim())
-    .find((cookie) => cookie.startsWith(`${SIDEBAR_COOKIE_NAME}=`))
-
-  if (!sidebarStateCookie) return null
-  return sidebarStateCookie.slice(SIDEBAR_COOKIE_NAME.length + 1) !== 'false'
-}
-
 function writeSidebarOpenState(openState: boolean): void {
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(SIDEBAR_COOKIE_NAME, String(openState))
-  }
-  if (typeof document !== 'undefined') {
-    document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+    localStorage.setItem(SIDEBAR_LOCAL_STORAGE_KEY, String(openState))
   }
 }
 
@@ -117,7 +97,7 @@ function SidebarProvider({
         _setOpen(openState)
       }
 
-      // This sets the cookie to keep the sidebar state.
+      // This keeps the sidebar state persisted across routes and reloads.
       writeSidebarOpenState(openState)
     },
     [setOpenProp, open]
