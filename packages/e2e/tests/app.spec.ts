@@ -806,7 +806,7 @@ test('cancels queued live-edge follow after immediate scroll away from growth', 
     .toBe(false)
 })
 
-test('does not follow same-count assistant growth after scrollbar-like scroll away', async ({
+test('does not follow same-count assistant growth after scrollbar-like scroll away just past threshold', async ({
   appWindow,
   fakeOpenCodeServer
 }) => {
@@ -839,8 +839,8 @@ test('does not follow same-count assistant growth after scrollbar-like scroll aw
   await scrollTranscriptToDistanceFromEnd(
     appWindow,
     transcript,
-    transcriptEndTolerance + 160,
-    'scrollbar-like scroll should leave the transcript outside the live edge threshold'
+    transcriptEndTolerance + 16,
+    'scrollbar-like scroll should leave the transcript just outside the live edge threshold'
   )
   fakeOpenCodeServer.releaseStreamingGrowth()
   await expect(appWindow.getByText(/Streaming growth line 90/)).toBeVisible()

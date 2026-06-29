@@ -691,7 +691,7 @@ function ChatMessageList({
 
   const forceFollowLiveEdge = useCallback((): void => {
     userScrollAwayLockUntilRef.current = 0
-    ignoreScrollAwayUntilRef.current = performance.now() + 100
+    ignoreScrollAwayUntilRef.current = performance.now() + 1500
     shouldFollowLiveEdgeRef.current = true
   }, [])
 
@@ -712,9 +712,17 @@ function ChatMessageList({
       previousState !== null &&
       Math.round(nextState.scrollTop) < Math.round(previousState.scrollTop) &&
       nextState.distanceFromEnd > CHAT_MESSAGE_SCROLL_END_THRESHOLD
+    const contentSizeChanged =
+      previousState !== null &&
+      (Math.round(nextState.scrollHeight) !== Math.round(previousState.scrollHeight) ||
+        Math.round(nextState.clientHeight) !== Math.round(previousState.clientHeight))
 
     if (nextState.atLiveEdge) followLiveEdge()
-    else if (scrolledAwayFromEnd && performance.now() > ignoreScrollAwayUntilRef.current) {
+    else if (
+      scrolledAwayFromEnd &&
+      !contentSizeChanged &&
+      performance.now() > ignoreScrollAwayUntilRef.current
+    ) {
       cancelLiveEdgeFollow()
     }
   }, [cancelLiveEdgeFollow, followLiveEdge])
@@ -752,12 +760,6 @@ function ChatMessageList({
     )
   }, [])
 
-  const shouldRecoverNearLiveEdge = useCallback((): boolean => {
-    const viewport = viewportRef.current
-    if (!viewport) return false
-    return readViewportScrollState(viewport).distanceFromEnd <= CHAT_MESSAGE_SCROLL_END_THRESHOLD + 64
-  }, [])
-
   const scrollToEnd = useCallback((): void => {
     const followGeneration = followLiveEdgeGenerationRef.current + 1
     followLiveEdgeGenerationRef.current = followGeneration
@@ -782,7 +784,7 @@ function ChatMessageList({
     scroll()
     rememberViewportScrollState()
     window.requestAnimationFrame(deferredScroll)
-    for (const delay of [50, 150, 300, 600]) window.setTimeout(deferredScroll, delay)
+    for (const delay of [50, 150, 300, 600, 1000, 1500]) window.setTimeout(deferredScroll, delay)
   }, [
     forceFollowLiveEdge,
     messages.length,
@@ -831,14 +833,14 @@ function ChatMessageList({
     if (!content || typeof ResizeObserver === 'undefined') return
 
     const observer = new ResizeObserver(() => {
-      if (shouldFollowContentChange() || shouldRecoverNearLiveEdge()) {
+      if (shouldFollowContentChange()) {
         followLiveEdge()
         scrollToEnd()
       }
     })
     observer.observe(content)
     return () => observer.disconnect()
-  }, [followLiveEdge, scrollToEnd, shouldFollowContentChange, shouldRecoverNearLiveEdge])
+  }, [followLiveEdge, scrollToEnd, shouldFollowContentChange])
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
@@ -853,7 +855,6 @@ function ChatMessageList({
     if (previousMessageCount === null || messages.length <= previousMessageCount) return
     if (
       !shouldFollowContentChange() &&
-      !shouldRecoverNearLiveEdge() &&
       !virtualizer.isAtEnd(CHAT_MESSAGE_SCROLL_END_THRESHOLD)
     ) {
       return
@@ -867,7 +868,6 @@ function ChatMessageList({
     messages.length,
     scrollToEnd,
     shouldFollowContentChange,
-    shouldRecoverNearLiveEdge,
     virtualizer
   ])
 
@@ -876,7 +876,7 @@ function ChatMessageList({
     lastMessageContentKeyRef.current = messageContentKey
     if (previousMessageContentKey === null || previousMessageContentKey === messageContentKey)
       return
-    if (!shouldFollowContentChange() && !shouldRecoverNearLiveEdge()) return
+    if (!shouldFollowContentChange()) return
 
     followLiveEdge()
     virtualizer.measure()
@@ -886,7 +886,6 @@ function ChatMessageList({
     messageContentKey,
     scrollToEnd,
     shouldFollowContentChange,
-    shouldRecoverNearLiveEdge,
     virtualizer
   ])
 
