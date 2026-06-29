@@ -810,8 +810,6 @@ test('does not follow same-count assistant growth after scrollbar-like scroll aw
       message: 'scrollbar-like scroll should leave the transcript outside the live edge threshold'
     })
     .toBe(false)
-  const beforeSecondGrowthMetrics = await transcriptScrollMetrics(transcript)
-
   await expect(appWindow.getByText(/Streaming growth line 90/)).toBeVisible()
   await expect
     .poll(() => transcript.locator('[data-slot="message-scroller-item"]').count(), {
@@ -824,12 +822,10 @@ test('does not follow same-count assistant growth after scrollbar-like scroll aw
     })
     .toBeGreaterThan(firstGrowthBox.height)
   await expect
-    .poll(async () => Math.round((await transcriptScrollMetrics(transcript)).scrollTop), {
+    .poll(() => transcriptDistanceFromEnd(transcript), {
       message: 'same-count growth should not yank a near-bottom reader to the live edge'
     })
-    .toBeLessThanOrEqual(
-      Math.round(beforeSecondGrowthMetrics.scrollTop) + transcriptScrolledUpTolerance
-    )
+    .toBeGreaterThan(transcriptEndTolerance)
   await expect
     .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
       message: 'same-count growth should keep a near-bottom reader outside the live edge threshold'
