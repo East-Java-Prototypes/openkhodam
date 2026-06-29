@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 
 export type FakeOpenCodeServer = {
   url: string
+  releaseStreamingGrowth: () => void
   close: () => Promise<void>
 }
 
@@ -14,8 +15,9 @@ let promptIdSequence = 0
 let newSessionSequence = 1
 let stableMessageSequence = 0
 let nativeOpenCodeTime = BigInt(Date.now() - 60_000) * BigInt(0x1000)
+let streamingGrowthSecondChunkReleased = false
 const streamingGrowthPrompt = 'Stream same-count growth'
-const streamingGrowthSecondChunkFetches = 15
+const streamingGrowthSecondChunkFetches = 50
 const streamingGrowthReadyFetches = 500
 const project = {
   id: 'fake-project',
@@ -137,6 +139,9 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     throw new Error('Fake OpenCode server did not start.')
   return {
     url: `http://127.0.0.1:${address.port}`,
+    releaseStreamingGrowth: () => {
+      streamingGrowthSecondChunkReleased = true
+    },
     close: () => new Promise((resolve) => server.close(() => resolve()))
   }
 }
@@ -149,6 +154,7 @@ function resetState(): void {
   newSessionSequence = 1
   stableMessageSequence = 0
   nativeOpenCodeTime = BigInt(Date.now() - 60_000) * BigInt(0x1000)
+  streamingGrowthSecondChunkReleased = false
   const seeded = createSession('seeded-session', 'Seeded deterministic chat', directory)
   const structured = createSession('structured-session', 'Structured fixture chat', directory)
   const child = createSession('child-subagent-session', 'Hidden subagent child chat', directory, {
@@ -186,7 +192,11 @@ function projectPendingMessages(sessionID: string): void {
       existing,
       assistantMessage(
         assistantMessageIDAfterPrompt(prompt.id),
-        streamingGrowthResponse(prompt.fetches >= streamingGrowthSecondChunkFetches ? 3 : 1)
+        streamingGrowthResponse(
+          streamingGrowthSecondChunkReleased || prompt.fetches >= streamingGrowthSecondChunkFetches
+            ? 3
+            : 1
+        )
       )
     )
   }

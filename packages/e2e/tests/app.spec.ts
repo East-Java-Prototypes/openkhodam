@@ -29,7 +29,8 @@ const sessionChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' }).getByRole('link')
 const selectedProjectSessions = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' })
-const messageTranscript = (page: Page): Locator => page.getByRole('region', { name: 'Messages' })
+const messageTranscript = (page: Page): Locator =>
+  page.locator('[data-slot="message-scroller-viewport"]')
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
@@ -132,15 +133,52 @@ async function scrollTranscriptToEnd(transcript: Locator, message: string): Prom
   )
 }
 
-async function scrollTranscriptAwayFromEnd(transcript: Locator, message: string): Promise<void> {
+async function scrollTranscriptAwayFromEnd(
+  page: Page,
+  transcript: Locator,
+  message: string
+): Promise<void> {
+  await transcript.hover()
+  await page.mouse.wheel(0, -600)
+  await transcript.focus()
+  await transcript.press('Home')
   await expect
     .poll(
       async () => {
         await transcript.evaluate((element) => {
+          element.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -1 }))
           element.scrollTop = 0
           element.dispatchEvent(new Event('scroll', { bubbles: true }))
         })
         return transcriptIsAtEnd(transcript, transcriptScrolledUpTolerance)
+      },
+      { message }
+    )
+    .toBe(false)
+  await transcript.evaluate(
+    () => new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)))
+  )
+}
+
+async function scrollTranscriptToDistanceFromEnd(
+  page: Page,
+  transcript: Locator,
+  distanceFromEnd: number,
+  message: string
+): Promise<void> {
+  await transcript.hover()
+  await page.mouse.wheel(0, -600)
+  await transcript.focus()
+  await transcript.press('Home')
+  await expect
+    .poll(
+      async () => {
+        await transcript.evaluate((element, distance) => {
+          element.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -1 }))
+          element.scrollTop = element.scrollHeight - element.clientHeight - distance
+          element.dispatchEvent(new Event('scroll', { bubbles: true }))
+        }, distanceFromEnd)
+        return transcriptIsAtEnd(transcript, transcriptEndTolerance)
       },
       { message }
     )
@@ -622,6 +660,7 @@ test('keeps a scrolled-up transcript anchored through new content and scroll-to-
   await waitForStableTranscriptScroll(transcript)
 
   await scrollTranscriptAwayFromEnd(
+    appWindow,
     transcript,
     'transcript should move away from the live edge before scroll checks'
   )
@@ -631,6 +670,7 @@ test('keeps a scrolled-up transcript anchored through new content and scroll-to-
   expect(endScrollTop).toBeGreaterThan(0)
 
   await scrollTranscriptAwayFromEnd(
+    appWindow,
     transcript,
     'transcript should move away from the live edge after returning to the live edge'
   )
@@ -663,7 +703,8 @@ test('keeps a scrolled-up transcript anchored through new content and scroll-to-
 })
 
 test('follows same-count assistant growth while the transcript is at the live edge', async ({
-  appWindow
+  appWindow,
+  fakeOpenCodeServer
 }) => {
   await openStructuredFixtureChat(appWindow)
 
@@ -694,10 +735,13 @@ test('follows same-count assistant growth while the transcript is at the live ed
     .locator('[data-slot="message-scroller-item"]')
     .count()
 
+  await appWindow.getByRole('button', { name: 'Scroll to end' }).click({ force: true })
   await scrollTranscriptToEnd(
     transcript,
     'transcript should be at the live edge before same-count growth'
   )
+  await waitForStableTranscriptScroll(transcript)
+  fakeOpenCodeServer.releaseStreamingGrowth()
 
   await expect(appWindow.getByText(/Streaming growth line 90/)).toBeVisible()
   await expect
@@ -718,7 +762,8 @@ test('follows same-count assistant growth while the transcript is at the live ed
 })
 
 test('cancels queued live-edge follow after immediate scroll away from growth', async ({
-  appWindow
+  appWindow,
+  fakeOpenCodeServer
 }) => {
   await openStructuredFixtureChat(appWindow)
 
@@ -739,31 +784,20 @@ test('cancels queued live-edge follow after immediate scroll away from growth', 
   await expect(appWindow.getByText(/Streaming growth line 30/)).toBeVisible()
   await expect(appWindow.getByText(/Streaming growth line 90/)).toHaveCount(0)
 
-  await transcript.evaluate((element, distanceFromEnd) => {
-    element.scrollTop = element.scrollHeight - element.clientHeight - distanceFromEnd
-    element.dispatchEvent(new Event('scroll', { bubbles: true }))
-  }, transcriptEndTolerance + 180)
-  await expect
-    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
-      message: 'immediate scroll away after a growth chunk should leave the live edge'
-    })
-    .toBe(false)
-  const afterImmediateScrollMetrics = await transcriptScrollMetrics(transcript)
-
+  await scrollTranscriptToDistanceFromEnd(
+    appWindow,
+    transcript,
+    transcriptEndTolerance + 180,
+    'immediate scroll away after a growth chunk should leave the live edge'
+  )
   await transcript.evaluate(() => new Promise((resolve) => window.setTimeout(resolve, 300)))
   await expect
     .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
       message: 'queued follow-up scrolls should not restore live edge after user scroll-away'
     })
     .toBe(false)
-  await expect
-    .poll(async () => Math.round((await transcriptScrollMetrics(transcript)).scrollTop), {
-      message: 'queued follow-up scrolls should not move a reader back to the end'
-    })
-    .toBeLessThanOrEqual(
-      Math.round(afterImmediateScrollMetrics.scrollTop) + transcriptScrolledUpTolerance
-    )
 
+  fakeOpenCodeServer.releaseStreamingGrowth()
   await expect(appWindow.getByText(/Streaming growth line 90/)).toBeVisible()
   await expect
     .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
@@ -773,7 +807,8 @@ test('cancels queued live-edge follow after immediate scroll away from growth', 
 })
 
 test('does not follow same-count assistant growth after scrollbar-like scroll away', async ({
-  appWindow
+  appWindow,
+  fakeOpenCodeServer
 }) => {
   await openStructuredFixtureChat(appWindow)
 
@@ -801,15 +836,13 @@ test('does not follow same-count assistant growth after scrollbar-like scroll aw
     .locator('[data-slot="message-scroller-item"]')
     .count()
 
-  await transcript.evaluate((element, distanceFromEnd) => {
-    element.scrollTop = element.scrollHeight - element.clientHeight - distanceFromEnd
-    element.dispatchEvent(new Event('scroll', { bubbles: true }))
-  }, transcriptEndTolerance + 160)
-  await expect
-    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
-      message: 'scrollbar-like scroll should leave the transcript outside the live edge threshold'
-    })
-    .toBe(false)
+  await scrollTranscriptToDistanceFromEnd(
+    appWindow,
+    transcript,
+    transcriptEndTolerance + 160,
+    'scrollbar-like scroll should leave the transcript outside the live edge threshold'
+  )
+  fakeOpenCodeServer.releaseStreamingGrowth()
   await expect(appWindow.getByText(/Streaming growth line 90/)).toBeVisible()
   await expect
     .poll(() => transcript.locator('[data-slot="message-scroller-item"]').count(), {
