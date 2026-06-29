@@ -56,6 +56,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
+import { ChatActionPane } from './ChatActionPane'
 import { ChatMessageParts } from './ChatMessageParts'
 import type {
   OpenCodeChatShellState,
@@ -71,6 +72,8 @@ type ChatHomePageProps = {
   session?: OpenCodeSessionRouteState
   activePane?: ReactNode
 }
+
+const emptyChatMessages: ChatMessage[] = []
 
 export function ChatHomePage({
   shell,
@@ -511,50 +514,136 @@ export function ActiveChatPanel({
   composer?: ReactNode
   composerErrorMessage?: string | null
 }): JSX.Element {
+  const actionPanePanelRef = useRef<PanelImperativeHandle | null>(null)
+  const [isActionPaneOpen, setActionPaneOpen] = useState(true)
+  const messages = session?.messages ?? emptyChatMessages
+
+  const syncActionPanePanel = useCallback((open: boolean): void => {
+    const actionPanePanel = actionPanePanelRef.current
+    if (!actionPanePanel) return
+
+    if (open) {
+      actionPanePanel.expand()
+      return
+    }
+
+    actionPanePanel.collapse()
+  }, [])
+
+  const handleActionPaneOpenChange = useCallback(
+    (open: boolean): void => {
+      syncActionPanePanel(open)
+      setActionPaneOpen(open)
+    },
+    [syncActionPanePanel]
+  )
+
+  const handleActionPaneResize = useCallback((size: PanelSize): void => {
+    const isCollapsed = actionPanePanelRef.current?.isCollapsed() ?? size.inPixels <= 64
+
+    setActionPaneOpen(!isCollapsed)
+  }, [])
+
+  useEffect(() => {
+    syncActionPanePanel(isActionPaneOpen)
+  }, [isActionPaneOpen, syncActionPanePanel])
+
   return (
-    <section
-      className="flex min-h-0 min-w-0 flex-col overflow-hidden"
-      aria-labelledby="active-chat-heading"
+    <ResizablePanelGroup
+      id="active-chat-layout"
+      orientation="horizontal"
+      className="min-h-0 min-w-0"
     >
-      <header className="shrink-0 flex items-center justify-between gap-4 px-6 py-4">
-        <div>
-          <p className="text-muted-foreground text-sm">Active chat</p>
-          <h2 id="active-chat-heading" className="text-xl font-semibold tracking-tight">
-            {session?.activeChat?.title ?? 'No chat selected'}
-          </h2>
-          {project?.selectedProject ? (
-            <p className="text-muted-foreground text-sm">{project.selectedProject.name}</p>
-          ) : null}
-        </div>
-        <Badge variant="secondary">OpenCode</Badge>
-      </header>
-      <Separator />
-      <ChatMessageList
-        messages={session?.messages ?? []}
-        emptyMessage={
-          session?.emptyMessage ??
-          emptyMessage ??
-          (!project ? 'Select a project to view sessions.' : 'Select a session to view messages.')
-        }
-        isLoading={session?.isLoading ?? false}
-        errorMessage={session?.errorMessage ?? composerErrorMessage ?? null}
-        successMessage={session?.successMessage ?? null}
-      />
-      {composer ??
-        (session ? (
-          <ChatPromptComposer
-            promptText={session.promptText}
-            setPromptText={session.setPromptText}
-            sendPrompt={session.sendPrompt}
-            canSendPrompt={session.canSendPrompt}
-            isSending={session.isSending}
-            modelOptions={session.modelOptions}
-            selectedModelID={session.selectedModelID}
-            setSelectedModelID={session.setSelectedModelID}
-            isLoadingModels={session.isLoadingModels}
+      <ResizablePanel id="chat-center-panel" defaultSize="70%" minSize="20rem">
+        <section
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+          aria-labelledby="active-chat-heading"
+        >
+          <header className="shrink-0 flex items-center justify-between gap-4 px-6 py-4">
+            <div>
+              <p className="text-muted-foreground text-sm">Active chat</p>
+              <h2 id="active-chat-heading" className="text-xl font-semibold tracking-tight">
+                {session?.activeChat?.title ?? 'No chat selected'}
+              </h2>
+              {project?.selectedProject ? (
+                <p className="text-muted-foreground text-sm">{project.selectedProject.name}</p>
+              ) : null}
+            </div>
+            <Badge variant="secondary">OpenCode</Badge>
+          </header>
+          <Separator />
+          <ChatMessageList
+            messages={messages}
+            emptyMessage={
+              session?.emptyMessage ??
+              emptyMessage ??
+              (!project
+                ? 'Select a project to view sessions.'
+                : 'Select a session to view messages.')
+            }
+            isLoading={session?.isLoading ?? false}
+            errorMessage={session?.errorMessage ?? composerErrorMessage ?? null}
+            successMessage={session?.successMessage ?? null}
           />
-        ) : null)}
-    </section>
+          {composer ??
+            (session ? (
+              <ChatPromptComposer
+                promptText={session.promptText}
+                setPromptText={session.setPromptText}
+                sendPrompt={session.sendPrompt}
+                canSendPrompt={session.canSendPrompt}
+                isSending={session.isSending}
+                modelOptions={session.modelOptions}
+                selectedModelID={session.selectedModelID}
+                setSelectedModelID={session.setSelectedModelID}
+                isLoadingModels={session.isLoadingModels}
+              />
+            ) : null)}
+        </section>
+      </ResizablePanel>
+      <ResizableHandle withHandle aria-label="Resize action pane" />
+      <ResizablePanel
+        id="action-pane-panel"
+        panelRef={actionPanePanelRef}
+        defaultSize="30%"
+        minSize="16rem"
+        maxSize="30rem"
+        collapsedSize="3rem"
+        collapsible
+        onResize={handleActionPaneResize}
+      >
+        {isActionPaneOpen ? (
+          <ChatActionPane
+            messages={messages}
+            onCollapse={() => handleActionPaneOpenChange(false)}
+          />
+        ) : (
+          <CollapsedActionPaneRail onRestore={() => handleActionPaneOpenChange(true)} />
+        )}
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  )
+}
+
+function CollapsedActionPaneRail({ onRestore }: { onRestore: () => void }): JSX.Element {
+  return (
+    <aside
+      className="flex h-full w-full flex-col items-center border-l bg-sidebar/40 py-3 text-sidebar-foreground"
+      role="complementary"
+      aria-label="Collapsed action pane"
+    >
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-auto min-h-28 w-8 px-1 py-2 [writing-mode:vertical-rl]"
+        aria-label="Restore action pane"
+        title="Restore action pane"
+        onClick={onRestore}
+      >
+        Actions
+      </Button>
+    </aside>
   )
 }
 

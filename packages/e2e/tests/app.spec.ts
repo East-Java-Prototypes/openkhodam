@@ -27,6 +27,8 @@ const sessionChatLink = (page: Page): Locator =>
 const selectedProjectSessions = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' })
 const messageTranscript = (page: Page): Locator => page.getByRole('region', { name: 'Messages' })
+const chatActionPane = (page: Page): Locator =>
+  page.getByRole('complementary', { name: 'Action pane', exact: true })
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
@@ -124,6 +126,20 @@ async function waitForMainProcessValue(
   throw new Error('Timed out waiting for the Electron main process capture.')
 }
 
+async function waitForScrollTopToSettle(locator: Locator): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const before = await locator.evaluate((element) => Math.round(element.scrollTop))
+        await new Promise((resolve) => setTimeout(resolve, 900))
+        const after = await locator.evaluate((element) => Math.round(element.scrollTop))
+        return Math.abs(after - before)
+      },
+      { message: 'scroll position should settle after disclosure anchoring' }
+    )
+    .toBe(0)
+}
+
 async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplication): Promise<void> {
   await electronApp.evaluate(({ shell }, driveScope) => {
     const globalObject = globalThis as any
@@ -177,6 +193,8 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
   await expect(appWindow.getByText(/^(connected|starting|stopped|error)$/).first()).toBeVisible()
   await expect(eventStatusBadge(appWindow)).toBeVisible()
+  await expect(chatActionPane(appWindow)).toBeVisible()
+  await expect(chatActionPane(appWindow).getByText('No artifacts yet.')).toBeVisible()
   await expect(appWindow.getByText('Select a project to view sessions.').first()).toBeVisible()
   await expect(
     appWindow
@@ -228,6 +246,53 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow })
   await expect(projectSettingsLink(appWindow)).toBeVisible()
   await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
   await expect(resizeHandle).toBeVisible()
+})
+
+test('resizes and collapses/restores the chat action pane', async ({ appWindow }) => {
+  await openStructuredFixtureChat(appWindow)
+
+  const actionPane = chatActionPane(appWindow)
+  const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
+  const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
+  const handleBox = await elementBox(resizeHandle, 'action pane resize handle')
+
+  await expect(actionPane.getByRole('heading', { name: 'Artifacts' })).toBeVisible()
+  await expect(actionPane.getByRole('button', { name: 'Select artifact read' })).toBeVisible()
+  await expect(actionPane.getByRole('button', { name: 'Select artifact plan' })).toBeVisible()
+  await expect(actionPane.getByRole('button', { name: 'Select artifact bash' })).toBeVisible()
+  await expect(actionPane.getByText('V1 fixture tool output', { exact: true })).toBeVisible()
+
+  await appWindow.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+  await appWindow.mouse.down()
+  await appWindow.mouse.move(
+    handleBox.x + handleBox.width / 2 - 120,
+    handleBox.y + handleBox.height / 2,
+    { steps: 10 }
+  )
+  await appWindow.mouse.up()
+
+  await expect
+    .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0), {
+      message: 'action pane should grow after dragging resize handle'
+    })
+    .toBeGreaterThan(Math.round(initialActionPaneBox.width) + 40)
+
+  await appWindow.getByRole('button', { name: 'Collapse action pane' }).click()
+  const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
+  await expect(collapsedRail).toBeVisible()
+  await expect(actionPane).toHaveCount(0)
+  await expect(appWindow.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
+  expect((await elementBox(collapsedRail, 'collapsed action pane rail')).width).toBeLessThan(
+    initialActionPaneBox.width
+  )
+  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+
+  await appWindow.getByRole('button', { name: 'Restore action pane' }).click()
+  await expect(actionPane).toBeVisible()
+  await expect(resizeHandle).toBeVisible()
+  await actionPane.getByRole('button', { name: 'Select artifact bash' }).click()
+  await expect(actionPane.getByText('V2 fixture tool output', { exact: true })).toBeVisible()
+  await expect(actionPane.getByText('V2 fixture tool error', { exact: true })).toBeVisible()
 })
 
 test('opens a project by directory from the final chat shell', async ({ appWindow }) => {
@@ -443,6 +508,7 @@ test('keeps a long collapsed tool disclosure anchored when opening it', async ({
   await expect
     .poll(() => transcript.evaluate((element) => element.scrollHeight > element.clientHeight))
     .toBe(true)
+  await waitForScrollTopToSettle(transcript)
 
   await transcript.evaluate((element) => {
     element.scrollTop = 0
@@ -672,6 +738,7 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
   await expect(appWindow.getByRole('navigation', { name: 'Project folders' })).toBeVisible()
   await expect(appWindow.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
+  await expect(chatActionPane(appWindow)).toHaveCount(0)
   await expect(appWindow.getByRole('heading', { name: 'OpenCode Server' })).toBeVisible()
   await expect(appWindow.getByText(/^Status:/)).toBeVisible()
   await expect(appWindow.getByText(/^Message:/)).toBeVisible()
