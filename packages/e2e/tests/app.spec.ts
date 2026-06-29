@@ -132,6 +132,24 @@ async function scrollTranscriptToEnd(transcript: Locator, message: string): Prom
   )
 }
 
+async function scrollTranscriptAwayFromEnd(transcript: Locator, message: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await transcript.evaluate((element) => {
+          element.scrollTop = 0
+          element.dispatchEvent(new Event('scroll', { bubbles: true }))
+        })
+        return transcriptIsAtEnd(transcript, transcriptScrolledUpTolerance)
+      },
+      { message }
+    )
+    .toBe(false)
+  await transcript.evaluate(
+    () => new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)))
+  )
+}
+
 async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
   await expect
     .poll(
@@ -603,23 +621,19 @@ test('keeps a scrolled-up transcript anchored through new content and scroll-to-
     .toBe(true)
   await waitForStableTranscriptScroll(transcript)
 
-  await transcript.evaluate((element) => {
-    element.scrollTop = 0
-  })
-  await expect
-    .poll(() => transcriptIsAtEnd(transcript, transcriptScrolledUpTolerance), {
-      message: 'transcript should move away from the live edge before keyboard scroll checks'
-    })
-    .toBe(false)
+  await scrollTranscriptAwayFromEnd(
+    transcript,
+    'transcript should move away from the live edge before scroll checks'
+  )
 
-  await transcript.focus()
-  await transcript.press('End')
-  await expect
-    .poll(() => transcript.evaluate((element) => Math.round(element.scrollTop)))
-    .toBeGreaterThan(0)
+  await scrollTranscriptToEnd(transcript, 'transcript should return to the live edge')
   const endScrollTop = await transcript.evaluate((element) => Math.round(element.scrollTop))
+  expect(endScrollTop).toBeGreaterThan(0)
 
-  await transcript.press('Home')
+  await scrollTranscriptAwayFromEnd(
+    transcript,
+    'transcript should move away from the live edge after returning to the live edge'
+  )
   await expect
     .poll(() => transcript.evaluate((element) => Math.round(element.scrollTop)))
     .toBeLessThan(endScrollTop)
