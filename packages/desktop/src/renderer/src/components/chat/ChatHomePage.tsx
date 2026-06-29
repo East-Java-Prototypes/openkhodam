@@ -853,23 +853,14 @@ function ChatMessageList({
     const previousMessageCount = lastMessageCountRef.current
     lastMessageCountRef.current = messages.length
     if (previousMessageCount === null || messages.length <= previousMessageCount) return
-    if (
-      !shouldFollowContentChange() &&
-      !virtualizer.isAtEnd(CHAT_MESSAGE_SCROLL_END_THRESHOLD)
-    ) {
+    if (!shouldFollowContentChange() && !virtualizer.isAtEnd(CHAT_MESSAGE_SCROLL_END_THRESHOLD)) {
       return
     }
 
     followLiveEdge()
     virtualizer.measure()
     scrollToEnd()
-  }, [
-    followLiveEdge,
-    messages.length,
-    scrollToEnd,
-    shouldFollowContentChange,
-    virtualizer
-  ])
+  }, [followLiveEdge, messages.length, scrollToEnd, shouldFollowContentChange, virtualizer])
 
   useLayoutEffect(() => {
     const previousMessageContentKey = lastMessageContentKeyRef.current
@@ -881,13 +872,7 @@ function ChatMessageList({
     followLiveEdge()
     virtualizer.measure()
     scrollToEnd()
-  }, [
-    followLiveEdge,
-    messageContentKey,
-    scrollToEnd,
-    shouldFollowContentChange,
-    virtualizer
-  ])
+  }, [followLiveEdge, messageContentKey, scrollToEnd, shouldFollowContentChange, virtualizer])
 
   useLayoutEffect(() => {
     rememberViewportScrollState()
@@ -896,10 +881,7 @@ function ChatMessageList({
   return (
     <MessageScrollerProvider autoScroll={false}>
       <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport
-          ref={viewportRef}
-          onScroll={rememberLiveEdgeIntent}
-        >
+        <MessageScrollerViewport ref={viewportRef} onScroll={rememberLiveEdgeIntent}>
           <MessageScrollerContent aria-busy={isLoading} className="block min-h-full p-6">
             <div ref={contentRef} className="flex min-w-0 flex-col gap-4">
               {statusCards.map((status) =>
