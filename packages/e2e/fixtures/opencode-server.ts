@@ -14,6 +14,9 @@ let promptIdSequence = 0
 let newSessionSequence = 1
 let stableMessageSequence = 0
 let nativeOpenCodeTime = BigInt(Date.now() - 60_000) * BigInt(0x1000)
+const streamingGrowthPrompt = 'Stream same-count growth'
+const streamingGrowthSecondChunkFetches = 15
+const streamingGrowthReadyFetches = 500
 const project = {
   id: 'fake-project',
   name: 'Fake Project',
@@ -173,16 +176,39 @@ function projectPendingMessages(sessionID: string): void {
   const pending = pendingPrompts.get(sessionID) ?? []
   if (pending.length === 0) return
   for (const prompt of pending) prompt.fetches += 1
-  const ready = pending.filter((prompt) => prompt.fetches >= 5)
-  if (ready.length === 0) return
-
   const existing = messages.get(sessionID) ?? []
-  for (const prompt of ready) {
-    existing.push(
-      userMessage(prompt.id, prompt.text),
+
+  for (const prompt of pending) {
+    if (prompt.text !== streamingGrowthPrompt) continue
+    if (prompt.fetches < 2 || prompt.fetches >= streamingGrowthReadyFetches) continue
+
+    upsertMessage(
+      existing,
       assistantMessage(
         assistantMessageIDAfterPrompt(prompt.id),
-        `Fake response for: ${prompt.text}`
+        streamingGrowthResponse(prompt.fetches >= streamingGrowthSecondChunkFetches ? 3 : 1)
+      )
+    )
+  }
+
+  messages.set(sessionID, existing)
+
+  const ready = pending.filter((prompt) =>
+    prompt.text === streamingGrowthPrompt
+      ? prompt.fetches >= streamingGrowthReadyFetches
+      : prompt.fetches >= 5
+  )
+  if (ready.length === 0) return
+
+  for (const prompt of ready) {
+    upsertMessage(existing, userMessage(prompt.id, prompt.text))
+    upsertMessage(
+      existing,
+      assistantMessage(
+        assistantMessageIDAfterPrompt(prompt.id),
+        prompt.text === streamingGrowthPrompt
+          ? streamingGrowthResponse(streamingGrowthReadyFetches)
+          : `Fake response for: ${prompt.text}`
       )
     )
   }
@@ -191,6 +217,39 @@ function projectPendingMessages(sessionID: string): void {
   const remaining = pending.filter((prompt) => !readyIds.has(prompt.id))
   if (remaining.length) pendingPrompts.set(sessionID, remaining)
   else pendingPrompts.delete(sessionID)
+}
+
+function upsertMessage(existing: unknown[], message: unknown): void {
+  const messageID = getMessageID(message)
+  if (!messageID) {
+    existing.push(message)
+    return
+  }
+
+  const existingIndex = existing.findIndex((candidate) => getMessageID(candidate) === messageID)
+  if (existingIndex >= 0) {
+    existing[existingIndex] = message
+    return
+  }
+
+  existing.push(message)
+}
+
+function getMessageID(message: unknown): string | null {
+  if (!message || typeof message !== 'object') return null
+  const record = message as Record<string, unknown>
+  if (typeof record.id === 'string') return record.id
+  const info = record.info
+  if (!info || typeof info !== 'object') return null
+  const id = (info as Record<string, unknown>).id
+  return typeof id === 'string' ? id : null
+}
+
+function streamingGrowthResponse(chunk: number): string {
+  const lineCount = chunk * 30
+  return Array.from({ length: lineCount }, (_, index) => `Streaming growth line ${index + 1}`).join(
+    '\n'
+  )
 }
 
 function stableMessageID(): string {

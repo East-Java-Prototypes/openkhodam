@@ -28,6 +28,45 @@ const SIDEBAR_WIDTH_MOBILE = '18rem'
 const SIDEBAR_WIDTH_ICON = '3rem'
 const SIDEBAR_KEYBOARD_SHORTCUT = 'b'
 
+function readSidebarOpenState(defaultOpen = true): boolean {
+  const storedState = readSidebarStorageState()
+  if (storedState !== null) return storedState
+
+  const cookieState = readSidebarCookieState()
+  if (cookieState !== null) return cookieState
+
+  return defaultOpen
+}
+
+function readSidebarStorageState(): boolean | null {
+  if (typeof localStorage === 'undefined') return null
+
+  const storedState = localStorage.getItem(SIDEBAR_COOKIE_NAME)
+  if (storedState === null) return null
+  return storedState !== 'false'
+}
+
+function readSidebarCookieState(): boolean | null {
+  if (typeof document === 'undefined') return null
+
+  const sidebarStateCookie = document.cookie
+    .split(';')
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith(`${SIDEBAR_COOKIE_NAME}=`))
+
+  if (!sidebarStateCookie) return null
+  return sidebarStateCookie.slice(SIDEBAR_COOKIE_NAME.length + 1) !== 'false'
+}
+
+function writeSidebarOpenState(openState: boolean): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(SIDEBAR_COOKIE_NAME, String(openState))
+  }
+  if (typeof document !== 'undefined') {
+    document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+  }
+}
+
 type SidebarContextProps = {
   state: 'expanded' | 'collapsed'
   open: boolean
@@ -67,7 +106,7 @@ function SidebarProvider({
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
-  const [_open, _setOpen] = React.useState(defaultOpen)
+  const [_open, _setOpen] = React.useState(() => readSidebarOpenState(defaultOpen))
   const open = openProp ?? _open
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
@@ -79,10 +118,14 @@ function SidebarProvider({
       }
 
       // This sets the cookie to keep the sidebar state.
-      document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+      writeSidebarOpenState(openState)
     },
     [setOpenProp, open]
   )
+
+  React.useEffect(() => {
+    writeSidebarOpenState(open)
+  }, [open])
 
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
@@ -687,5 +730,6 @@ export {
   SidebarRail,
   SidebarSeparator,
   SidebarTrigger,
+  readSidebarOpenState,
   useSidebar
 }

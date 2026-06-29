@@ -12,6 +12,9 @@ const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.
 const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
 const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
+const streamingGrowthPrompt = 'Stream same-count growth'
+const transcriptEndTolerance = 120
+const transcriptScrolledUpTolerance = 200
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
 const projectSettingsLink = (page: Page): Locator =>
@@ -32,12 +35,101 @@ const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
 
 type ElementBox = NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>
+type ScrollMetrics = {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+}
 
 async function elementBox(locator: Locator, description: string): Promise<ElementBox> {
   const box = await locator.boundingBox()
   expect(box, `${description} should have a bounding box`).not.toBeNull()
   if (!box) throw new Error(`${description} should have a bounding box`)
   return box
+}
+
+async function projectSidebarWidth(page: Page): Promise<number> {
+  return (
+    (await page.getByRole('complementary', { name: 'Project folders' }).boundingBox())?.width ?? 0
+  )
+}
+
+async function resizeProjectSidebarBy(page: Page, deltaX: number): Promise<void> {
+  const resizeHandle = page.getByRole('separator', { name: 'Resize project sidebar' })
+  const handleBox = await elementBox(resizeHandle, 'project sidebar resize handle')
+
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(
+    handleBox.x + handleBox.width / 2 + deltaX,
+    handleBox.y + handleBox.height / 2,
+    {
+      steps: 10
+    }
+  )
+  await page.mouse.up()
+}
+
+async function expectProjectSidebarWidthNear(
+  page: Page,
+  expectedWidth: number,
+  description: string
+): Promise<void> {
+  await expect
+    .poll(async () => Math.abs((await projectSidebarWidth(page)) - expectedWidth), {
+      message: `${description} should preserve project sidebar width`
+    })
+    .toBeLessThanOrEqual(32)
+}
+
+async function transcriptScrollMetrics(transcript: Locator): Promise<ScrollMetrics> {
+  return transcript.evaluate((element) => ({
+    scrollTop: element.scrollTop,
+    scrollHeight: element.scrollHeight,
+    clientHeight: element.clientHeight
+  }))
+}
+
+async function transcriptIsAtEnd(transcript: Locator, tolerance = 32): Promise<boolean> {
+  const { scrollTop, scrollHeight, clientHeight } = await transcriptScrollMetrics(transcript)
+  return scrollTop + clientHeight >= scrollHeight - tolerance
+}
+
+async function transcriptDistanceFromEnd(transcript: Locator): Promise<number> {
+  const { scrollTop, scrollHeight, clientHeight } = await transcriptScrollMetrics(transcript)
+  return Math.round(scrollHeight - scrollTop - clientHeight)
+}
+
+async function waitForStableTranscriptScroll(transcript: Locator): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        transcript.evaluate(async (element) => {
+          const initialScrollTop = Math.round(element.scrollTop)
+          await new Promise((resolve) => window.setTimeout(resolve, 100))
+          return Math.abs(Math.round(element.scrollTop) - initialScrollTop)
+        }),
+      { message: 'transcript scroll position should settle before interaction' }
+    )
+    .toBe(0)
+}
+
+async function scrollTranscriptToEnd(transcript: Locator, message: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await transcript.evaluate((element) => {
+          element.scrollTop = element.scrollHeight
+          element.dispatchEvent(new Event('scroll', { bubbles: true }))
+        })
+        return transcriptIsAtEnd(transcript, transcriptEndTolerance)
+      },
+      { message }
+    )
+    .toBe(true)
+  await transcript.evaluate(
+    () => new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)))
+  )
 }
 
 async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
@@ -193,16 +285,7 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow })
   const sidebar = appWindow.getByRole('complementary', { name: 'Project folders' })
   const resizeHandle = appWindow.getByRole('separator', { name: 'Resize project sidebar' })
   const initialSidebarBox = await elementBox(sidebar, 'expanded project sidebar')
-  const handleBox = await elementBox(resizeHandle, 'project sidebar resize handle')
-
-  await appWindow.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
-  await appWindow.mouse.down()
-  await appWindow.mouse.move(
-    handleBox.x + handleBox.width / 2 + 120,
-    handleBox.y + handleBox.height / 2,
-    { steps: 10 }
-  )
-  await appWindow.mouse.up()
+  await resizeProjectSidebarBy(appWindow, 120)
 
   await expect
     .poll(async () => Math.round((await sidebar.boundingBox())?.width ?? 0), {
@@ -228,6 +311,79 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow })
   await expect(projectSettingsLink(appWindow)).toBeVisible()
   await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
   await expect(resizeHandle).toBeVisible()
+})
+
+test('persists project sidebar width and collapse state across routes and reloads', async ({
+  appWindow
+}) => {
+  await waitForChatShell(appWindow)
+
+  const sidebar = appWindow.getByRole('complementary', { name: 'Project folders' })
+  const collapsedRail = appWindow.getByRole('complementary', {
+    name: 'Collapsed project sidebar'
+  })
+  const initialSidebarBox = await elementBox(sidebar, 'expanded project sidebar')
+  await resizeProjectSidebarBy(appWindow, 140)
+  await expect
+    .poll(() => projectSidebarWidth(appWindow), {
+      message: 'project sidebar should grow before persistence checks'
+    })
+    .toBeGreaterThan(initialSidebarBox.width + 40)
+  const resizedWidth = await projectSidebarWidth(appWindow)
+
+  await projectSettingsLink(appWindow).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/\/settings$/)
+  await expect(appWindow.getByRole('heading', { name: 'OpenCode Server' })).toBeVisible()
+  await expect(sidebar).toBeVisible()
+  await expectProjectSidebarWidthNear(appWindow, resizedWidth, 'settings route')
+
+  await projectHomeLink(appWindow).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/#\/$/)
+  await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
+  await expectProjectSidebarWidthNear(appWindow, resizedWidth, 'home route')
+
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expectOpenedProjectRouteResolved(appWindow)
+  await expectProjectSidebarWidthNear(appWindow, resizedWidth, 'project route')
+
+  const projectUrl = appWindow.url()
+  await appWindow.reload()
+  await expect(appWindow).toHaveURL(projectUrl)
+  await expectOpenedProjectRouteResolved(appWindow)
+  await expectProjectSidebarWidthNear(appWindow, resizedWidth, 'project route reload')
+
+  await appWindow.getByRole('button', { name: 'Collapse project sidebar' }).click()
+  await expect(collapsedRail).toBeVisible()
+  await expect(sidebar).toHaveCount(0)
+  expect((await elementBox(collapsedRail, 'collapsed project sidebar rail')).width).toBeLessThan(
+    resizedWidth - 40
+  )
+  await expect
+    .poll(() => appWindow.evaluate(() => localStorage.getItem('sidebar_state')), {
+      message: 'collapsed sidebar state should be written to persisted sidebar storage'
+    })
+    .toBe('false')
+
+  await appWindow.evaluate(() => {
+    window.location.hash = '#/settings'
+  })
+  await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/settings$/)
+  await expect(appWindow.getByRole('heading', { name: 'OpenCode Server' })).toBeVisible()
+  await expect(collapsedRail).toBeVisible()
+  await expect(sidebar).toHaveCount(0)
+
+  const settingsUrl = appWindow.url()
+  await appWindow.reload()
+  await expect(appWindow).toHaveURL(settingsUrl)
+  await expect(appWindow.getByRole('heading', { name: 'OpenCode Server' })).toBeVisible()
+  await expect(collapsedRail).toBeVisible()
+  await expect(sidebar).toHaveCount(0)
+
+  await appWindow.getByRole('button', { name: 'Restore project sidebar' }).click()
+  await expect(sidebar).toBeVisible()
+  await expect(projectHomeLink(appWindow)).toBeVisible()
+  await expect(projectSettingsLink(appWindow)).toBeVisible()
+  await expectProjectSidebarWidthNear(appWindow, resizedWidth, 'restored sidebar after reload')
 })
 
 test('opens a project by directory from the final chat shell', async ({ appWindow }) => {
@@ -427,7 +583,9 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
   await expect(appWindow.getByText('Unsupported part: future-content')).toBeVisible()
 })
 
-test('keeps a long collapsed tool disclosure anchored when opening it', async ({ appWindow }) => {
+test('keeps a scrolled-up transcript anchored through new content and scroll-to-end', async ({
+  appWindow
+}) => {
   await openStructuredFixtureChat(appWindow)
 
   const transcript = messageTranscript(appWindow)
@@ -443,11 +601,16 @@ test('keeps a long collapsed tool disclosure anchored when opening it', async ({
   await expect
     .poll(() => transcript.evaluate((element) => element.scrollHeight > element.clientHeight))
     .toBe(true)
+  await waitForStableTranscriptScroll(transcript)
 
   await transcript.evaluate((element) => {
     element.scrollTop = 0
   })
-  await expect.poll(() => transcript.evaluate((element) => Math.round(element.scrollTop))).toBe(0)
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptScrolledUpTolerance), {
+      message: 'transcript should move away from the live edge before keyboard scroll checks'
+    })
+    .toBe(false)
 
   await transcript.focus()
   await transcript.press('End')
@@ -460,6 +623,204 @@ test('keeps a long collapsed tool disclosure anchored when opening it', async ({
   await expect
     .poll(() => transcript.evaluate((element) => Math.round(element.scrollTop)))
     .toBeLessThan(endScrollTop)
+  const prompt = 'Live edge stability prompt'
+  await sendPrompt(appWindow, prompt)
+  await expect(appWindow.getByText(prompt, { exact: true })).toBeVisible()
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptScrolledUpTolerance), {
+      message: 'scrolled-up transcript should remain away from the live edge after new content'
+    })
+    .toBe(false)
+
+  const scrollToEndButton = appWindow.getByRole('button', { name: 'Scroll to end' })
+  await expect(appWindow.getByText(`Fake response for: ${prompt}`)).toBeVisible()
+  await expect(scrollToEndButton).toHaveAttribute('data-active', 'true')
+  await scrollToEndButton.click()
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
+      message: 'scroll-to-end button should return the transcript to the live edge'
+    })
+    .toBe(true)
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
+      message: 'transcript should stay at the live edge after scroll-to-end settles'
+    })
+    .toBe(true)
+})
+
+test('follows same-count assistant growth while the transcript is at the live edge', async ({
+  appWindow
+}) => {
+  await openStructuredFixtureChat(appWindow)
+
+  const transcript = messageTranscript(appWindow)
+  const tool = appWindow.locator('[aria-label="Tool plan"]')
+  const toggle = tool.getByRole('button', { name: 'Toggle details for tool plan' })
+  await expect(transcript).toBeVisible()
+  await expect(toggle).toBeVisible()
+  await toggle.click()
+  await expect(tool).toContainText('Long tool output line 80')
+  await expect
+    .poll(() => transcript.evaluate((element) => element.scrollHeight > element.clientHeight))
+    .toBe(true)
+
+  await scrollTranscriptToEnd(
+    transcript,
+    'transcript should be at the live edge before streaming growth'
+  )
+
+  await sendPrompt(appWindow, streamingGrowthPrompt)
+  await expect(appWindow.getByText(/Streaming growth line 30/)).toBeVisible()
+  await expect(appWindow.getByText(/Streaming growth line 90/)).toHaveCount(0)
+  const streamingAssistant = appWindow.getByRole('article').filter({
+    hasText: /Streaming growth line/
+  })
+  const firstGrowthBox = await elementBox(streamingAssistant, 'streaming assistant message')
+  const firstGrowthItemCount = await transcript
+    .locator('[data-slot="message-scroller-item"]')
+    .count()
+
+  await scrollTranscriptToEnd(
+    transcript,
+    'transcript should be at the live edge before same-count growth'
+  )
+
+  await expect(appWindow.getByText(/Streaming growth line 90/)).toBeVisible()
+  await expect
+    .poll(() => transcript.locator('[data-slot="message-scroller-item"]').count(), {
+      message: 'same-count streaming growth should not append another message row'
+    })
+    .toBe(firstGrowthItemCount)
+  await expect
+    .poll(async () => (await streamingAssistant.boundingBox())?.height ?? 0, {
+      message: 'same-count streaming growth should increase the assistant message height'
+    })
+    .toBeGreaterThan(firstGrowthBox.height)
+  await expect
+    .poll(() => transcriptDistanceFromEnd(transcript), {
+      message: 'transcript should stay at the live edge after same-count growth'
+    })
+    .toBeLessThanOrEqual(transcriptEndTolerance)
+})
+
+test('cancels queued live-edge follow after immediate scroll away from growth', async ({
+  appWindow
+}) => {
+  await openStructuredFixtureChat(appWindow)
+
+  const transcript = messageTranscript(appWindow)
+  const tool = appWindow.locator('[aria-label="Tool plan"]')
+  const toggle = tool.getByRole('button', { name: 'Toggle details for tool plan' })
+  await expect(transcript).toBeVisible()
+  await expect(toggle).toBeVisible()
+  await toggle.click()
+  await expect(tool).toContainText('Long tool output line 80')
+
+  await scrollTranscriptToEnd(
+    transcript,
+    'transcript should start at the live edge before immediate scroll-away coverage'
+  )
+
+  await sendPrompt(appWindow, streamingGrowthPrompt)
+  await expect(appWindow.getByText(/Streaming growth line 30/)).toBeVisible()
+  await expect(appWindow.getByText(/Streaming growth line 90/)).toHaveCount(0)
+
+  await transcript.evaluate((element, distanceFromEnd) => {
+    element.scrollTop = element.scrollHeight - element.clientHeight - distanceFromEnd
+    element.dispatchEvent(new Event('scroll', { bubbles: true }))
+  }, transcriptEndTolerance + 180)
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
+      message: 'immediate scroll away after a growth chunk should leave the live edge'
+    })
+    .toBe(false)
+  const afterImmediateScrollMetrics = await transcriptScrollMetrics(transcript)
+
+  await transcript.evaluate(() => new Promise((resolve) => window.setTimeout(resolve, 300)))
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
+      message: 'queued follow-up scrolls should not restore live edge after user scroll-away'
+    })
+    .toBe(false)
+  await expect
+    .poll(async () => Math.round((await transcriptScrollMetrics(transcript)).scrollTop), {
+      message: 'queued follow-up scrolls should not move a reader back to the end'
+    })
+    .toBeLessThanOrEqual(
+      Math.round(afterImmediateScrollMetrics.scrollTop) + transcriptScrolledUpTolerance
+    )
+
+  await expect(appWindow.getByText(/Streaming growth line 90/)).toBeVisible()
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
+      message: 'later same-count growth should preserve the immediate scroll-away intent'
+    })
+    .toBe(false)
+})
+
+test('does not follow same-count assistant growth after scrollbar-like scroll away', async ({
+  appWindow
+}) => {
+  await openStructuredFixtureChat(appWindow)
+
+  const transcript = messageTranscript(appWindow)
+  const tool = appWindow.locator('[aria-label="Tool plan"]')
+  const toggle = tool.getByRole('button', { name: 'Toggle details for tool plan' })
+  await expect(transcript).toBeVisible()
+  await expect(toggle).toBeVisible()
+  await toggle.click()
+  await expect(tool).toContainText('Long tool output line 80')
+
+  await scrollTranscriptToEnd(
+    transcript,
+    'transcript should start at the live edge before scrolling away'
+  )
+
+  await sendPrompt(appWindow, streamingGrowthPrompt)
+  await expect(appWindow.getByText(/Streaming growth line 30/)).toBeVisible()
+  await expect(appWindow.getByText(/Streaming growth line 90/)).toHaveCount(0)
+  const streamingAssistant = appWindow.getByRole('article').filter({
+    hasText: /Streaming growth line/
+  })
+  const firstGrowthBox = await elementBox(streamingAssistant, 'streaming assistant message')
+  const firstGrowthItemCount = await transcript
+    .locator('[data-slot="message-scroller-item"]')
+    .count()
+
+  await transcript.evaluate((element, distanceFromEnd) => {
+    element.scrollTop = element.scrollHeight - element.clientHeight - distanceFromEnd
+    element.dispatchEvent(new Event('scroll', { bubbles: true }))
+  }, transcriptEndTolerance + 160)
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
+      message: 'scrollbar-like scroll should leave the transcript outside the live edge threshold'
+    })
+    .toBe(false)
+  const beforeSecondGrowthMetrics = await transcriptScrollMetrics(transcript)
+
+  await expect(appWindow.getByText(/Streaming growth line 90/)).toBeVisible()
+  await expect
+    .poll(() => transcript.locator('[data-slot="message-scroller-item"]').count(), {
+      message: 'same-count streaming growth should keep the same message row count'
+    })
+    .toBe(firstGrowthItemCount)
+  await expect
+    .poll(async () => (await streamingAssistant.boundingBox())?.height ?? 0, {
+      message: 'same-count streaming growth should increase the assistant message height'
+    })
+    .toBeGreaterThan(firstGrowthBox.height)
+  await expect
+    .poll(async () => Math.round((await transcriptScrollMetrics(transcript)).scrollTop), {
+      message: 'same-count growth should not yank a near-bottom reader to the live edge'
+    })
+    .toBeLessThanOrEqual(
+      Math.round(beforeSecondGrowthMetrics.scrollTop) + transcriptScrolledUpTolerance
+    )
+  await expect
+    .poll(() => transcriptIsAtEnd(transcript, transcriptEndTolerance), {
+      message: 'same-count growth should keep a near-bottom reader outside the live edge threshold'
+    })
+    .toBe(false)
 })
 
 test('shows only connected OpenCode models in the composer picker', async ({ appWindow }) => {

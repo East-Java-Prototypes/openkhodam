@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,7 +12,11 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react'
-import type { PanelImperativeHandle, PanelSize } from 'react-resizable-panels'
+import {
+  useDefaultLayout,
+  type PanelImperativeHandle,
+  type PanelSize
+} from 'react-resizable-panels'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -51,7 +56,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarRail
+  SidebarRail,
+  readSidebarOpenState
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 
@@ -72,6 +78,11 @@ type ChatHomePageProps = {
   activePane?: ReactNode
 }
 
+const CHAT_HOME_LAYOUT_STORAGE_ID = 'chat-home-layout'
+const CHAT_HOME_PROJECT_SIDEBAR_EXPANDED_SIZE_STORAGE_KEY =
+  'chat-home-project-sidebar-expanded-size'
+const CHAT_MESSAGE_SCROLL_END_THRESHOLD = 120
+
 export function ChatHomePage({
   shell,
   project,
@@ -79,7 +90,12 @@ export function ChatHomePage({
   activePane
 }: ChatHomePageProps): JSX.Element {
   const projectSidebarPanelRef = useRef<PanelImperativeHandle | null>(null)
-  const [isProjectSidebarOpen, setProjectSidebarOpen] = useState(true)
+  const hasAppliedPersistedProjectSidebarStateRef = useRef(false)
+  const persistedLayout = useDefaultLayout({
+    id: CHAT_HOME_LAYOUT_STORAGE_ID,
+    panelIds: ['project-sidebar-panel', 'active-pane-panel']
+  })
+  const [isProjectSidebarOpen, setProjectSidebarOpen] = useState(() => readSidebarOpenState(true))
 
   const syncProjectSidebarPanel = useCallback((open: boolean): void => {
     const projectSidebarPanel = projectSidebarPanelRef.current
@@ -87,6 +103,8 @@ export function ChatHomePage({
 
     if (open) {
       projectSidebarPanel.expand()
+      const restoredExpandedSize = readStoredProjectSidebarExpandedSize()
+      if (restoredExpandedSize !== null) projectSidebarPanel.resize(`${restoredExpandedSize}px`)
       return
     }
 
@@ -102,13 +120,19 @@ export function ChatHomePage({
   )
 
   const handleProjectSidebarResize = useCallback((size: PanelSize): void => {
-    const isCollapsed = projectSidebarPanelRef.current?.isCollapsed() ?? size.inPixels <= 64
+    if (!hasAppliedPersistedProjectSidebarStateRef.current) return
 
-    setProjectSidebarOpen(!isCollapsed)
+    const isCollapsed = projectSidebarPanelRef.current?.isCollapsed() ?? size.inPixels <= 64
+    if (!isCollapsed) writeStoredProjectSidebarExpandedSize(size.inPixels)
+    setProjectSidebarOpen((current) => {
+      const nextOpen = !isCollapsed
+      return current === nextOpen ? current : nextOpen
+    })
   }, [])
 
   useEffect(() => {
     syncProjectSidebarPanel(isProjectSidebarOpen)
+    hasAppliedPersistedProjectSidebarStateRef.current = true
   }, [isProjectSidebarOpen, syncProjectSidebarPanel])
 
   return (
@@ -124,6 +148,8 @@ export function ChatHomePage({
     >
       <ResizablePanelGroup
         id="chat-home-layout"
+        defaultLayout={persistedLayout.defaultLayout}
+        onLayoutChanged={persistedLayout.onLayoutChanged}
         orientation="horizontal"
         className="min-h-0 min-w-0"
       >
@@ -615,7 +641,16 @@ function ChatMessageList({
   successMessage: string | null
 }): JSX.Element {
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const liveEdgeSentinelRef = useRef<HTMLDivElement | null>(null)
   const lastInitialScrollKeyRef = useRef<string | null>(null)
+  const lastMessageCountRef = useRef<number | null>(null)
+  const lastMessageContentKeyRef = useRef<string | null>(null)
+  const lastSuccessMessageRef = useRef<string | null>(null)
+  const lastViewportScrollStateRef = useRef<ViewportScrollState | null>(null)
+  const followLiveEdgeUntilUserScrollsRef = useRef(true)
+  const followLiveEdgeGenerationRef = useRef(0)
+  const shouldFollowLiveEdgeRef = useRef(true)
   const statusCards = useMemo(
     () => [
       isLoading ? { key: 'loading', content: 'Loading OpenCode data…' } : null,
@@ -632,25 +667,195 @@ function ChatMessageList({
     getItemKey: (index) => messages[index]?.id ?? index,
     anchorTo: 'end',
     followOnAppend: true,
-    scrollEndThreshold: 120,
+    scrollEndThreshold: CHAT_MESSAGE_SCROLL_END_THRESHOLD,
     overscan: 6,
     measureElement: (element) => element.getBoundingClientRect().height
   })
 
   const initialScrollKey = messages.length > 0 ? messages[0]!.id : 'empty'
+  const messageContentKey = useMemo(
+    () => messages.map((message) => `${message.id}:${message.content.length}`).join('|'),
+    [messages]
+  )
+
+  const cancelLiveEdgeFollow = useCallback((): void => {
+    shouldFollowLiveEdgeRef.current = false
+    followLiveEdgeUntilUserScrollsRef.current = false
+    followLiveEdgeGenerationRef.current += 1
+  }, [])
+
+  const rememberLiveEdgeIntent = useCallback((): void => {
+    const viewport = viewportRef.current
+    if (!viewport) {
+      shouldFollowLiveEdgeRef.current = virtualizer.isAtEnd(CHAT_MESSAGE_SCROLL_END_THRESHOLD)
+      return
+    }
+
+    const previousState = lastViewportScrollStateRef.current
+    const nextState = readViewportScrollState(viewport)
+    lastViewportScrollStateRef.current = nextState
+
+    if (nextState.atLiveEdge) {
+      shouldFollowLiveEdgeRef.current = true
+      followLiveEdgeUntilUserScrollsRef.current = true
+      return
+    }
+
+    if (!previousState) {
+      shouldFollowLiveEdgeRef.current = virtualizer.isAtEnd(CHAT_MESSAGE_SCROLL_END_THRESHOLD)
+      return
+    }
+
+    const contentSizeChanged =
+      Math.round(nextState.scrollHeight) !== Math.round(previousState.scrollHeight) ||
+      Math.round(nextState.clientHeight) !== Math.round(previousState.clientHeight)
+    const scrolledAwayFromEnd =
+      Math.round(nextState.scrollTop) < Math.round(previousState.scrollTop) &&
+      nextState.distanceFromEnd > CHAT_MESSAGE_SCROLL_END_THRESHOLD
+
+    if (scrolledAwayFromEnd) {
+      cancelLiveEdgeFollow()
+      return
+    }
+
+    if (!shouldFollowLiveEdgeRef.current) return
+
+    if (!contentSizeChanged && virtualizer.isAtEnd(CHAT_MESSAGE_SCROLL_END_THRESHOLD)) {
+      shouldFollowLiveEdgeRef.current = true
+    }
+  }, [cancelLiveEdgeFollow, virtualizer])
+
+  const rememberViewportScrollState = useCallback((): void => {
+    const viewport = viewportRef.current
+    if (viewport) lastViewportScrollStateRef.current = readViewportScrollState(viewport)
+  }, [])
+
+  const shouldPreserveLiveEdge = useCallback((): boolean => {
+    return (
+      shouldFollowLiveEdgeRef.current ||
+      followLiveEdgeUntilUserScrollsRef.current ||
+      lastViewportScrollStateRef.current?.atLiveEdge === true
+    )
+  }, [])
+
+  const scrollToEnd = useCallback((): void => {
+    const followGeneration = followLiveEdgeGenerationRef.current + 1
+    followLiveEdgeGenerationRef.current = followGeneration
+
+    const scroll = () => {
+      if (messages.length > 0) {
+        virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'auto' })
+      } else {
+        virtualizer.scrollToEnd({ behavior: 'auto' })
+      }
+
+      const viewport = viewportRef.current
+      if (viewport) viewport.scrollTop = viewport.scrollHeight
+    }
+    const deferredScroll = () => {
+      if (followLiveEdgeGenerationRef.current !== followGeneration) return
+      if (!shouldPreserveLiveEdge()) return
+      scroll()
+      rememberViewportScrollState()
+    }
+    scroll()
+    shouldFollowLiveEdgeRef.current = true
+    followLiveEdgeUntilUserScrollsRef.current = true
+    rememberViewportScrollState()
+    window.requestAnimationFrame(deferredScroll)
+    window.setTimeout(deferredScroll, 50)
+    window.setTimeout(deferredScroll, 150)
+  }, [messages.length, rememberViewportScrollState, shouldPreserveLiveEdge, virtualizer])
 
   useEffect(() => {
     if (lastInitialScrollKeyRef.current === initialScrollKey) return
     lastInitialScrollKeyRef.current = initialScrollKey
-    if (messages.length > 0) virtualizer.scrollToEnd({ behavior: 'auto' })
-  }, [initialScrollKey, messages.length, virtualizer])
+    if (messages.length > 0) scrollToEnd()
+  }, [initialScrollKey, messages.length, scrollToEnd])
+
+  useLayoutEffect(() => {
+    const previousSuccessMessage = lastSuccessMessageRef.current
+    lastSuccessMessageRef.current = successMessage
+    if (!successMessage || previousSuccessMessage === successMessage) return
+
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const wasFollowingLiveEdge = shouldPreserveLiveEdge()
+    const scrollState = readViewportScrollState(viewport)
+    lastViewportScrollStateRef.current = scrollState
+    if (wasFollowingLiveEdge || scrollState.atLiveEdge) {
+      shouldFollowLiveEdgeRef.current = true
+      followLiveEdgeUntilUserScrollsRef.current = true
+    }
+  }, [shouldPreserveLiveEdge, successMessage])
+
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+
+    viewport.addEventListener('scroll', rememberLiveEdgeIntent, { passive: true })
+    return () => viewport.removeEventListener('scroll', rememberLiveEdgeIntent)
+  }, [rememberLiveEdgeIntent])
+
+  useEffect(() => {
+    const viewport = viewportRef.current
+    const liveEdgeSentinel = liveEdgeSentinelRef.current
+    if (!viewport || !liveEdgeSentinel || typeof IntersectionObserver === 'undefined') return
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        shouldFollowLiveEdgeRef.current = entry?.isIntersecting === true
+        if (entry?.isIntersecting === true) followLiveEdgeUntilUserScrollsRef.current = true
+        rememberViewportScrollState()
+      },
+      { root: viewport, threshold: 0 }
+    )
+    observer.observe(liveEdgeSentinel)
+    return () => observer.disconnect()
+  }, [rememberViewportScrollState])
+
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content || typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(() => {
+      if (shouldPreserveLiveEdge()) scrollToEnd()
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [scrollToEnd, shouldPreserveLiveEdge])
+
+  useLayoutEffect(() => {
+    const previousMessageCount = lastMessageCountRef.current
+    lastMessageCountRef.current = messages.length
+    if (previousMessageCount === null || messages.length <= previousMessageCount) return
+    if (!shouldPreserveLiveEdge() && !virtualizer.isAtEnd(CHAT_MESSAGE_SCROLL_END_THRESHOLD)) return
+
+    virtualizer.measure()
+    scrollToEnd()
+  }, [messages.length, scrollToEnd, shouldPreserveLiveEdge, virtualizer])
+
+  useLayoutEffect(() => {
+    const previousMessageContentKey = lastMessageContentKeyRef.current
+    lastMessageContentKeyRef.current = messageContentKey
+    if (previousMessageContentKey === null || previousMessageContentKey === messageContentKey)
+      return
+    if (!shouldPreserveLiveEdge()) return
+
+    virtualizer.measure()
+    scrollToEnd()
+  }, [messageContentKey, scrollToEnd, shouldPreserveLiveEdge, virtualizer])
+
+  useLayoutEffect(() => {
+    rememberViewportScrollState()
+  })
 
   return (
-    <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+    <MessageScrollerProvider autoScroll={false}>
       <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport ref={viewportRef}>
+        <MessageScrollerViewport ref={viewportRef} onScroll={rememberLiveEdgeIntent}>
           <MessageScrollerContent aria-busy={isLoading} className="block min-h-full p-6">
-            <div className="flex min-w-0 flex-col gap-4">
+            <div ref={contentRef} className="flex min-w-0 flex-col gap-4">
               {statusCards.map((status) =>
                 status ? (
                   <StatusCard key={status.key} tone={status.tone}>
@@ -676,14 +881,54 @@ function ChatMessageList({
                     </MessageScrollerItem>
                   )
                 })}
+                <div
+                  ref={liveEdgeSentinelRef}
+                  aria-hidden="true"
+                  className="absolute inset-x-0 bottom-0 h-px"
+                />
               </div>
             </div>
           </MessageScrollerContent>
         </MessageScrollerViewport>
-        <MessageScrollerButton />
+        <div onPointerDownCapture={scrollToEnd} onClickCapture={scrollToEnd}>
+          <MessageScrollerButton onClick={scrollToEnd} />
+        </div>
       </MessageScroller>
     </MessageScrollerProvider>
   )
+}
+
+function readStoredProjectSidebarExpandedSize(): number | null {
+  if (typeof localStorage === 'undefined') return null
+
+  const storedSize = Number(
+    localStorage.getItem(CHAT_HOME_PROJECT_SIDEBAR_EXPANDED_SIZE_STORAGE_KEY)
+  )
+  return Number.isFinite(storedSize) && storedSize > 64 ? storedSize : null
+}
+
+function writeStoredProjectSidebarExpandedSize(size: number): void {
+  if (typeof localStorage === 'undefined' || size <= 64) return
+  localStorage.setItem(CHAT_HOME_PROJECT_SIDEBAR_EXPANDED_SIZE_STORAGE_KEY, String(size))
+}
+
+type ViewportScrollState = {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+  distanceFromEnd: number
+  atLiveEdge: boolean
+}
+
+function readViewportScrollState(viewport: HTMLElement): ViewportScrollState {
+  const distanceFromEnd = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+  return {
+    scrollTop: viewport.scrollTop,
+    scrollHeight: viewport.scrollHeight,
+    clientHeight: viewport.clientHeight,
+    distanceFromEnd,
+    atLiveEdge: distanceFromEnd <= CHAT_MESSAGE_SCROLL_END_THRESHOLD
+  }
 }
 
 function StatusCard({
