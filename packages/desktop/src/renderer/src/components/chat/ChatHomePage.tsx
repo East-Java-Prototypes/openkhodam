@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import type { LinkedGoogleDoc } from '@openkhodam/ui/types'
 import {
   useCallback,
   useEffect,
@@ -74,6 +75,7 @@ type ChatHomePageProps = {
 }
 
 const emptyChatMessages: ChatMessage[] = []
+const emptyLinkedDocs: LinkedGoogleDoc[] = []
 
 export function ChatHomePage({
   shell,
@@ -504,12 +506,14 @@ function ProjectChatListItem({
 export function ActiveChatPanel({
   project,
   session,
+  linkedDocs = emptyLinkedDocs,
   emptyMessage,
   composer,
   composerErrorMessage
 }: {
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  linkedDocs?: LinkedGoogleDoc[]
   emptyMessage?: string
   composer?: ReactNode
   composerErrorMessage?: string | null
@@ -614,7 +618,7 @@ export function ActiveChatPanel({
       >
         {isActionPaneOpen ? (
           <ChatActionPane
-            messages={messages}
+            linkedDocs={linkedDocs}
             onCollapse={() => handleActionPaneOpenChange(false)}
           />
         ) : (
@@ -682,12 +686,14 @@ export function ProjectRouteActivePane({
 
 export function SessionRouteActivePane({
   project,
-  session
+  session,
+  linkedDocs
 }: {
   project?: OpenCodeProjectRouteState
   session: OpenCodeSessionRouteState
+  linkedDocs: LinkedGoogleDoc[]
 }): JSX.Element {
-  return <ActiveChatPanel project={project} session={session} />
+  return <ActiveChatPanel linkedDocs={linkedDocs} project={project} session={session} />
 }
 
 function ChatMessageList({

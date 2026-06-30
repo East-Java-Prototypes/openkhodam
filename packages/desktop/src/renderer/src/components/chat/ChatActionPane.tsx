@@ -1,53 +1,30 @@
-import { useEffect, useMemo, useState, type JSX } from 'react'
+import { useEffect, useState, type JSX } from 'react'
+import type { LinkedGoogleDoc } from '@openkhodam/ui/types'
 
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
-import type { ChatMessage, ChatMessagePart } from '../../hooks/useChatInterfaceData'
-
-type ToolPart = Extract<ChatMessagePart, { type: 'tool' }>
-
-type ChatActionArtifact = {
-  id: string
-  title: string
-  status?: string
-  messageAuthor: ChatMessage['author']
-  createdAt: string
-  text: string
-  input?: string
-  output?: string
-  error?: string
-}
-
-type PreviewBlock = {
-  label: string
-  text: string
-  tone?: 'default' | 'error'
-}
-
 export function ChatActionPane({
-  messages,
+  linkedDocs,
   onCollapse
 }: {
-  messages: ChatMessage[]
+  linkedDocs: LinkedGoogleDoc[]
   onCollapse: () => void
 }): JSX.Element {
-  const artifacts = useMemo(() => deriveActionArtifacts(messages), [messages])
-  const [selectedArtifactID, setSelectedArtifactID] = useState<string | null>(null)
-  const selectedArtifact =
-    artifacts.find((artifact) => artifact.id === selectedArtifactID) ?? artifacts[0] ?? null
+  const [selectedDocID, setSelectedDocID] = useState<string | null>(null)
+  const selectedDoc = linkedDocs.find((doc) => doc.id === selectedDocID) ?? linkedDocs[0] ?? null
 
   useEffect(() => {
-    if (artifacts.length === 0) {
-      setSelectedArtifactID(null)
+    if (linkedDocs.length === 0) {
+      setSelectedDocID(null)
       return
     }
 
-    if (!selectedArtifactID || !artifacts.some((artifact) => artifact.id === selectedArtifactID)) {
-      setSelectedArtifactID(artifacts[0]?.id ?? null)
+    if (!selectedDocID || !linkedDocs.some((doc) => doc.id === selectedDocID)) {
+      setSelectedDocID(linkedDocs[0]?.id ?? null)
     }
-  }, [artifacts, selectedArtifactID])
+  }, [linkedDocs, selectedDocID])
 
   return (
     <aside
@@ -58,7 +35,7 @@ export function ChatActionPane({
       <header className="shrink-0 px-4 py-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-muted-foreground text-sm">Chat-local</p>
+            <p className="text-muted-foreground text-sm">Linked Google Docs</p>
             <h2 id="action-pane-heading" className="text-lg font-semibold tracking-tight">
               Action pane
             </h2>
@@ -76,23 +53,22 @@ export function ChatActionPane({
         </div>
       </header>
       <Separator />
-      {artifacts.length > 0 ? (
+      {linkedDocs.length > 0 ? (
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.9fr)_auto_minmax(0,1.1fr)]">
-          <ArtifactList
-            artifacts={artifacts}
-            selectedArtifactID={selectedArtifact?.id ?? null}
-            onSelect={setSelectedArtifactID}
+          <LinkedDocList
+            linkedDocs={linkedDocs}
+            selectedDocID={selectedDoc?.id ?? null}
+            onSelect={setSelectedDocID}
           />
           <Separator />
-          <ArtifactPreview artifact={selectedArtifact} />
+          <LinkedDocPreview doc={selectedDoc} />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           <div className="border border-dashed bg-background/60 p-4 text-sm text-muted-foreground">
-            <p className="font-medium text-foreground">No artifacts yet.</p>
+            <p className="font-medium text-foreground">No linked Google Docs yet.</p>
             <p className="mt-2 leading-6">
-              Tool calls from the current chat will appear here with their input and output
-              previews.
+              Google Docs linked to this chat will appear here after OpenKhodam reads them.
             </p>
           </div>
         </div>
@@ -101,48 +77,42 @@ export function ChatActionPane({
   )
 }
 
-function ArtifactList({
-  artifacts,
-  selectedArtifactID,
+function LinkedDocList({
+  linkedDocs,
+  selectedDocID,
   onSelect
 }: {
-  artifacts: ChatActionArtifact[]
-  selectedArtifactID: string | null
-  onSelect: (artifactID: string) => void
+  linkedDocs: LinkedGoogleDoc[]
+  selectedDocID: string | null
+  onSelect: (docID: string) => void
 }): JSX.Element {
   return (
-    <section className="min-h-0 overflow-y-auto p-4" aria-labelledby="action-artifacts-heading">
+    <section className="min-h-0 overflow-y-auto p-4" aria-labelledby="linked-docs-heading">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 id="action-artifacts-heading" className="text-sm font-semibold">
-          Artifacts
+        <h3 id="linked-docs-heading" className="text-sm font-semibold">
+          Linked Google Docs
         </h3>
-        <span className="text-muted-foreground text-xs">{artifacts.length}</span>
+        <span className="text-muted-foreground text-xs">{linkedDocs.length}</span>
       </div>
       <div className="flex flex-col gap-2">
-        {artifacts.map((artifact) => (
+        {linkedDocs.map((doc) => (
           <Button
-            key={artifact.id}
+            key={doc.id}
             type="button"
-            variant={artifact.id === selectedArtifactID ? 'outline' : 'ghost'}
+            variant={doc.id === selectedDocID ? 'outline' : 'ghost'}
             className={cn(
               'h-auto w-full justify-start px-3 py-2 text-left whitespace-normal',
-              artifact.id === selectedArtifactID ? 'bg-background' : 'hover:bg-background/70'
+              doc.id === selectedDocID ? 'bg-background' : 'hover:bg-background/70'
             )}
-            aria-label={`Select artifact ${artifact.title}`}
-            aria-current={artifact.id === selectedArtifactID ? 'true' : undefined}
-            onClick={() => onSelect(artifact.id)}
+            aria-label={`Select linked Google Doc ${linkedDocTitle(doc)}`}
+            aria-current={doc.id === selectedDocID ? 'true' : undefined}
+            onClick={() => onSelect(doc.id)}
           >
             <span className="flex min-w-0 flex-1 flex-col gap-1">
-              <span className="flex min-w-0 items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium">{artifact.title}</span>
-                {artifact.status ? (
-                  <span className="text-muted-foreground shrink-0 text-[0.65rem] uppercase tracking-wide">
-                    {artifact.status}
-                  </span>
-                ) : null}
-              </span>
+              <span className="truncate text-sm font-medium">{linkedDocTitle(doc)}</span>
+              <span className="text-muted-foreground truncate text-xs">Doc ID: {doc.id}</span>
               <span className="text-muted-foreground line-clamp-2 text-xs leading-5">
-                {previewSummary(artifact)}
+                {doc.url ?? 'No Google Docs URL stored.'}
               </span>
             </span>
           </Button>
@@ -152,98 +122,67 @@ function ArtifactList({
   )
 }
 
-function ArtifactPreview({ artifact }: { artifact: ChatActionArtifact | null }): JSX.Element {
-  if (!artifact) {
+function LinkedDocPreview({ doc }: { doc: LinkedGoogleDoc | null }): JSX.Element {
+  if (!doc) {
     return (
-      <section className="min-h-0 p-4" aria-label="Artifact preview">
-        <p className="text-sm text-muted-foreground">Select an artifact to preview it.</p>
+      <section className="min-h-0 p-4" aria-label="Linked Google Doc details">
+        <p className="text-sm text-muted-foreground">Select a linked Google Doc to preview it.</p>
       </section>
     )
   }
 
-  const blocks = getPreviewBlocks(artifact)
-
   return (
-    <section className="min-h-0 overflow-y-auto p-4" aria-label="Artifact preview">
+    <section className="min-h-0 overflow-y-auto p-4" aria-label="Linked Google Doc details">
       <div className="mb-3">
-        <p className="text-muted-foreground text-xs uppercase tracking-wide">Preview</p>
-        <h3 className="truncate text-sm font-semibold">{artifact.title}</h3>
-        <p className="text-muted-foreground text-xs">
-          {artifact.messageAuthor} message · {artifact.createdAt || 'Unknown time'}
-        </p>
+        <p className="text-muted-foreground text-xs uppercase tracking-wide">Selected doc</p>
+        <h3 className="truncate text-sm font-semibold">{linkedDocTitle(doc)}</h3>
+        <p className="text-muted-foreground text-xs">Doc ID: {doc.id}</p>
       </div>
-      <div className="flex flex-col gap-3">
-        {blocks.map((block) => (
-          <PreviewBlock key={block.label} block={block} />
-        ))}
+      <dl className="grid gap-2 text-sm">
+        <LinkedDocDetail label="Title" value={linkedDocTitle(doc)} />
+        <LinkedDocDetail label="Doc ID" value={doc.id} />
+        <LinkedDocDetail label="Google Docs URL" value={doc.url ?? 'No URL stored.'} />
+        <LinkedDocDetail label="First linked" value={formatLinkedDocTime(doc.firstSeenAt)} />
+        <LinkedDocDetail label="Last linked" value={formatLinkedDocTime(doc.lastSeenAt)} />
+      </dl>
+      <div className="mt-4 flex flex-col gap-3">
+        {doc.url ? (
+          <a
+            href={doc.url}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(buttonVariants({ size: 'xs', variant: 'outline' }), 'w-fit')}
+          >
+            Open in Google Docs
+          </a>
+        ) : (
+          <p className="text-sm text-muted-foreground">No Google Docs URL was stored.</p>
+        )}
+        <div className="border border-dashed bg-background/60 p-3 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Preview placeholder</p>
+          <p className="mt-2 leading-6">
+            Remote Google Docs preview is not loaded in this pane. Use the link above to open the
+            document.
+          </p>
+        </div>
       </div>
     </section>
   )
 }
 
-function PreviewBlock({ block }: { block: PreviewBlock }): JSX.Element {
+function LinkedDocDetail({ label, value }: { label: string; value: string }): JSX.Element {
   return (
-    <div>
-      <div
-        className={cn(
-          'mb-1 text-xs font-medium uppercase tracking-wide',
-          block.tone === 'error' ? 'text-destructive' : 'text-muted-foreground'
-        )}
-      >
-        {block.label}
-      </div>
-      <pre
-        className={cn(
-          'max-h-64 overflow-auto border bg-background/70 p-3 font-mono text-xs leading-5 whitespace-pre-wrap break-words',
-          block.tone === 'error' ? 'border-destructive/60 text-destructive' : 'border-border'
-        )}
-      >
-        {block.text}
-      </pre>
+    <div className="grid gap-1 border bg-background/50 p-2">
+      <dt className="text-muted-foreground text-xs font-medium uppercase tracking-wide">{label}</dt>
+      <dd className="break-words text-xs leading-5">{value}</dd>
     </div>
   )
 }
 
-function deriveActionArtifacts(messages: ChatMessage[]): ChatActionArtifact[] {
-  return messages.flatMap((message) =>
-    message.parts.flatMap((part) =>
-      part.type === 'tool' ? [toolPartToArtifact(message, part)] : []
-    )
-  )
+function linkedDocTitle(doc: LinkedGoogleDoc): string {
+  return doc.title?.trim() || 'Untitled Google Doc'
 }
 
-function toolPartToArtifact(message: ChatMessage, part: ToolPart): ChatActionArtifact {
-  const title = part.title ?? part.name
-  return {
-    id: `${message.id}:${part.id}`,
-    title,
-    status: part.status,
-    messageAuthor: message.author,
-    createdAt: message.createdAt,
-    text: [`Tool: ${title}`, part.status ? `Status: ${part.status}` : null]
-      .filter(Boolean)
-      .join('\n'),
-    input: part.input,
-    output: part.output,
-    error: part.error
-  }
-}
-
-function getPreviewBlocks(artifact: ChatActionArtifact): PreviewBlock[] {
-  const blocks: PreviewBlock[] = [{ label: 'Text', text: artifact.text }]
-  if (artifact.input) blocks.push({ label: 'Input', text: artifact.input })
-  if (artifact.output) blocks.push({ label: 'Output', text: artifact.output })
-  if (artifact.error) blocks.push({ label: 'Error', text: artifact.error, tone: 'error' })
-  return blocks
-}
-
-function previewSummary(artifact: ChatActionArtifact): string {
-  const preview = firstText(artifact.output, artifact.error, artifact.input, artifact.text)
-  return `${artifact.messageAuthor} · ${artifact.createdAt || 'Unknown time'} · ${preview}`
-}
-
-function firstText(...values: Array<string | undefined>): string {
-  const value = values.find((item) => item && item.trim().length > 0) ?? ''
-  const compact = value.replace(/\s+/g, ' ').trim()
-  return compact.length > 96 ? `${compact.slice(0, 93)}…` : compact
+function formatLinkedDocTime(value: number): string {
+  return value > 0 ? new Date(value).toLocaleString() : 'Unknown'
 }
