@@ -84,6 +84,8 @@ type OpenKhodamConfigFixture = {
 type JsonConfigFileModule = typeof import('../../desktop/src/main/config/json-config-file')
 type OpenKhodamConfigModule = typeof import('../../desktop/src/main/integrations/openkhodam-config')
 type ProjectArtifactsModule = typeof import('../../desktop/src/main/integrations/project-artifacts')
+type GoogleDocArtifactsModule =
+  typeof import('../../desktop/src/renderer/src/hooks/opencode/google-doc-artifacts')
 type RuntimeConfigModule = typeof import('../../desktop/src/main/opencode-runtime-config')
 
 test('reads defaults and writes normalized JSON config files atomically', async () => {
@@ -554,6 +556,236 @@ test('rejects secret-bearing linked-doc URLs without persisting them', async () 
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
+})
+
+test('extracts Google Doc document artifacts from normalized tool outputs', () => {
+  const {
+    extractGoogleDocDocumentArtifactsFromMessages,
+    extractGoogleDocDocumentArtifactsFromToolOutput
+  } = loadDesktopModule<GoogleDocArtifactsModule>(
+    '../../desktop/src/renderer/src/hooks/opencode/google-doc-artifacts'
+  )
+
+  expect(
+    extractGoogleDocDocumentArtifactsFromToolOutput({
+      type: 'google.doc.document',
+      documentId: 'doc-direct',
+      title: 'Direct Doc',
+      url: 'https://docs.google.com/document/d/doc-direct/edit'
+    })
+  ).toEqual([
+    {
+      id: 'doc-direct',
+      title: 'Direct Doc',
+      url: 'https://docs.google.com/document/d/doc-direct/edit'
+    }
+  ])
+  expect(extractGoogleDocDocumentArtifactsFromToolOutput('not json')).toEqual([])
+  expect(
+    extractGoogleDocDocumentArtifactsFromToolOutput({
+      document: { type: 'google.doc.document', title: 'Missing ID' }
+    })
+  ).toEqual([])
+
+  const candidates = extractGoogleDocDocumentArtifactsFromMessages([
+    {
+      id: 'message-1',
+      parts: [
+        {
+          id: 'tool-1',
+          type: 'tool',
+          name: 'google_docs_read',
+          output: JSON.stringify({
+            document: {
+              type: 'google.doc.document',
+              id: 'doc-1',
+              title: 'Launch Plan',
+              link: 'https://docs.google.com/document/d/doc-1/edit'
+            }
+          })
+        }
+      ]
+    },
+    {
+      id: 'message-2',
+      parts: [
+        {
+          id: 'tool-2',
+          type: 'tool',
+          name: 'google_docs_edit',
+          output: JSON.stringify({
+            data: {
+              artifacts: [
+                {
+                  type: 'google.doc.document',
+                  documentId: 'doc-2',
+                  title: 'Nested Doc',
+                  url: 'https://docs.google.com/document/d/doc-2/edit'
+                },
+                {
+                  artifact: {
+                    type: 'google.doc.document',
+                    documentId: 'doc-2',
+                    title: 'Nested Doc Duplicate',
+                    url: 'https://docs.google.com/document/d/doc-2/edit'
+                  }
+                }
+              ]
+            },
+            result: {
+              artifact: {
+                type: 'google.doc.document',
+                revisionId: 'doc-3',
+                title: 'Result Doc',
+                link: 'https://docs.google.com/document/d/doc-3/edit'
+              }
+            }
+          })
+        }
+      ]
+    },
+    {
+      id: 'message-3',
+      parts: [
+        {
+          id: 'tool-3',
+          type: 'tool',
+          name: 'google_docs_read',
+          output: JSON.stringify({
+            artifacts: [{ type: 'google.doc.document', title: 'Ignored missing id' }]
+          })
+        }
+      ]
+    }
+  ])
+
+  expect(candidates).toEqual([
+    {
+      messageId: 'message-1',
+      doc: {
+        id: 'doc-1',
+        title: 'Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      }
+    },
+    {
+      messageId: 'message-2',
+      doc: {
+        id: 'doc-2',
+        title: 'Nested Doc',
+        url: 'https://docs.google.com/document/d/doc-2/edit'
+      }
+    },
+    {
+      messageId: 'message-2',
+      doc: {
+        id: 'doc-3',
+        title: 'Result Doc',
+        url: 'https://docs.google.com/document/d/doc-3/edit'
+      }
+    }
+  ])
+})
+
+test('records linked Google Docs once per session through get-or-create helper', async () => {
+  const { createLinkedGoogleDocRecorder } = loadDesktopModule<GoogleDocArtifactsModule>(
+    '../../desktop/src/renderer/src/hooks/opencode/google-doc-artifacts'
+  )
+  const projectDirectory = '/tmp/openkhodam-project'
+  const linkedDocsBySession = new Map<string, Array<{ id: string }>>([
+    ['session-1', [{ id: 'known-doc' }]]
+  ])
+  const recordedInputs: Array<{
+    projectDirectory: string
+    sessionId: string
+    messageId?: string | null
+    doc: { id: string; title?: string | null; url?: string | null }
+  }> = []
+  const recorder = createLinkedGoogleDocRecorder({
+    async listSessionLinkedDocs(input) {
+      return linkedDocsBySession.get(input.sessionId) ?? []
+    },
+    async recordLinkedGoogleDoc(input) {
+      recordedInputs.push(input)
+      const nextDoc = {
+        firstMessageId: input.messageId ?? null,
+        firstSeenAt: 1,
+        id: input.doc.id,
+        lastMessageId: input.messageId ?? null,
+        lastSeenAt: 1,
+        listed: true,
+        title: input.doc.title ?? null,
+        url: input.doc.url ?? null
+      }
+      linkedDocsBySession.set(input.sessionId, [
+        ...(linkedDocsBySession.get(input.sessionId) ?? []),
+        { id: input.doc.id }
+      ])
+      return nextDoc
+    }
+  })
+
+  await recorder.getOrCreateLinkedGoogleDoc({
+    projectDirectory,
+    sessionId: 'session-1',
+    messageId: 'message-1',
+    doc: { id: 'known-doc', title: 'Known Doc', url: null }
+  })
+  expect(recordedInputs).toEqual([])
+
+  await recorder.getOrCreateLinkedGoogleDoc({
+    projectDirectory,
+    sessionId: 'session-1',
+    messageId: 'message-2',
+    doc: {
+      id: 'doc-1',
+      title: 'Launch Plan',
+      url: 'https://docs.google.com/document/d/doc-1/edit'
+    }
+  })
+  await recorder.getOrCreateLinkedGoogleDoc({
+    projectDirectory,
+    sessionId: 'session-1',
+    messageId: 'message-3',
+    doc: {
+      id: 'doc-1',
+      title: 'Launch Plan Again',
+      url: 'https://docs.google.com/document/d/doc-1/edit'
+    }
+  })
+  await recorder.getOrCreateLinkedGoogleDoc({
+    projectDirectory,
+    sessionId: 'session-2',
+    messageId: 'message-4',
+    doc: {
+      id: 'doc-1',
+      title: 'Launch Plan',
+      url: 'https://docs.google.com/document/d/doc-1/edit'
+    }
+  })
+
+  expect(recordedInputs).toEqual([
+    {
+      projectDirectory,
+      sessionId: 'session-1',
+      messageId: 'message-2',
+      doc: {
+        id: 'doc-1',
+        title: 'Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      }
+    },
+    {
+      projectDirectory,
+      sessionId: 'session-2',
+      messageId: 'message-4',
+      doc: {
+        id: 'doc-1',
+        title: 'Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      }
+    }
+  ])
 })
 
 function loadDesktopModule<TModule>(path: string): TModule {
