@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import type { ElectronApplication } from '@playwright/test'
@@ -6,6 +6,9 @@ import { expect, test, type Locator, type Page } from '../fixtures/electron'
 
 const repositoryDirectory = dirname(process.cwd())
 const desktopOutDirectory = join(repositoryDirectory, 'desktop', 'out')
+const fakeProjectDirectory = process.cwd()
+const projectArtifactsDirectory = join(fakeProjectDirectory, '.openkhodam')
+const projectArtifactsFile = join(projectArtifactsDirectory, 'artifacts.json')
 const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
@@ -68,6 +71,68 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toBeVisible()
+}
+
+async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<void>> {
+  const previousArtifacts = await readOptionalFile(projectArtifactsFile)
+  await mkdir(projectArtifactsDirectory, { recursive: true })
+  await writeFile(
+    projectArtifactsFile,
+    `${JSON.stringify(
+      {
+        version: 1,
+        sessions: {
+          [sessionId]: [
+            {
+              id: 'fixture-linked-doc',
+              title: 'Fixture linked Google Doc',
+              url: 'https://docs.google.com/document/d/fixture-linked-doc/edit',
+              listed: true,
+              firstSeenAt: 1_800_000_000_000,
+              lastSeenAt: 1_800_000_005_000,
+              firstMessageId: 'message-1',
+              lastMessageId: 'message-2'
+            },
+            {
+              id: 'hidden-unlisted-doc',
+              title: 'Hidden unlisted Google Doc',
+              url: 'https://docs.google.com/document/d/hidden-unlisted-doc/edit',
+              listed: false,
+              firstSeenAt: 1_800_000_010_000,
+              lastSeenAt: 1_800_000_010_000,
+              firstMessageId: 'message-3',
+              lastMessageId: 'message-3'
+            }
+          ]
+        }
+      },
+      null,
+      2
+    )}\n`,
+    'utf8'
+  )
+
+  return async () => {
+    if (previousArtifacts === null) {
+      await rm(projectArtifactsFile, { force: true })
+      return
+    }
+
+    await writeFile(projectArtifactsFile, previousArtifacts, 'utf8')
+  }
+}
+
+async function readOptionalFile(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, 'utf8')
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error
 }
 
 async function openSeededDeterministicChat(page: Page): Promise<void> {
@@ -194,7 +259,7 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   await expect(appWindow.getByText(/^(connected|starting|stopped|error)$/).first()).toBeVisible()
   await expect(eventStatusBadge(appWindow)).toBeVisible()
   await expect(chatActionPane(appWindow)).toBeVisible()
-  await expect(chatActionPane(appWindow).getByText('No artifacts yet.')).toBeVisible()
+  await expect(chatActionPane(appWindow).getByText('No linked Google Docs yet.')).toBeVisible()
   await expect(appWindow.getByText('Select a project to view sessions.').first()).toBeVisible()
   await expect(
     appWindow
@@ -249,50 +314,67 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow })
 })
 
 test('resizes and collapses/restores the chat action pane', async ({ appWindow }) => {
-  await openStructuredFixtureChat(appWindow)
+  const restoreProjectArtifacts = await seedSessionLinkedDocs('structured-session')
 
-  const actionPane = chatActionPane(appWindow)
-  const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
-  const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
-  const handleBox = await elementBox(resizeHandle, 'action pane resize handle')
+  try {
+    await openStructuredFixtureChat(appWindow)
 
-  await expect(actionPane.getByRole('heading', { name: 'Artifacts' })).toBeVisible()
-  await expect(actionPane.getByRole('button', { name: 'Select artifact read' })).toBeVisible()
-  await expect(actionPane.getByRole('button', { name: 'Select artifact plan' })).toBeVisible()
-  await expect(actionPane.getByRole('button', { name: 'Select artifact bash' })).toBeVisible()
-  await expect(actionPane.getByText('V1 fixture tool output', { exact: true })).toBeVisible()
+    const actionPane = chatActionPane(appWindow)
+    const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
+    const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
+    const handleBox = await elementBox(resizeHandle, 'action pane resize handle')
 
-  await appWindow.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
-  await appWindow.mouse.down()
-  await appWindow.mouse.move(
-    handleBox.x + handleBox.width / 2 - 120,
-    handleBox.y + handleBox.height / 2,
-    { steps: 10 }
-  )
-  await appWindow.mouse.up()
+    await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toBeVisible()
+    await expect(
+      actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
+    ).toBeVisible()
+    await expect(actionPane.getByText('Doc ID: fixture-linked-doc').first()).toBeVisible()
+    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toBeVisible()
+    await expect(actionPane.getByText('Hidden unlisted Google Doc')).toHaveCount(0)
+    await expect(actionPane.getByRole('button', { name: 'Select artifact read' })).toHaveCount(0)
+    await expect(actionPane.getByRole('button', { name: 'Select artifact plan' })).toHaveCount(0)
+    await expect(actionPane.getByRole('button', { name: 'Select artifact bash' })).toHaveCount(0)
+    await expect(actionPane.getByText('V1 fixture tool output', { exact: true })).toHaveCount(0)
+    await expect(actionPane.getByText('V2 fixture tool output', { exact: true })).toHaveCount(0)
 
-  await expect
-    .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0), {
-      message: 'action pane should grow after dragging resize handle'
-    })
-    .toBeGreaterThan(Math.round(initialActionPaneBox.width) + 40)
+    await appWindow.mouse.move(
+      handleBox.x + handleBox.width / 2,
+      handleBox.y + handleBox.height / 2
+    )
+    await appWindow.mouse.down()
+    await appWindow.mouse.move(
+      handleBox.x + handleBox.width / 2 - 120,
+      handleBox.y + handleBox.height / 2,
+      { steps: 10 }
+    )
+    await appWindow.mouse.up()
 
-  await appWindow.getByRole('button', { name: 'Collapse action pane' }).click()
-  const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
-  await expect(collapsedRail).toBeVisible()
-  await expect(actionPane).toHaveCount(0)
-  await expect(appWindow.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
-  expect((await elementBox(collapsedRail, 'collapsed action pane rail')).width).toBeLessThan(
-    initialActionPaneBox.width
-  )
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+    await expect
+      .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0), {
+        message: 'action pane should grow after dragging resize handle'
+      })
+      .toBeGreaterThan(Math.round(initialActionPaneBox.width) + 40)
 
-  await appWindow.getByRole('button', { name: 'Restore action pane' }).click()
-  await expect(actionPane).toBeVisible()
-  await expect(resizeHandle).toBeVisible()
-  await actionPane.getByRole('button', { name: 'Select artifact bash' }).click()
-  await expect(actionPane.getByText('V2 fixture tool output', { exact: true })).toBeVisible()
-  await expect(actionPane.getByText('V2 fixture tool error', { exact: true })).toBeVisible()
+    await appWindow.getByRole('button', { name: 'Collapse action pane' }).click()
+    const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
+    await expect(collapsedRail).toBeVisible()
+    await expect(actionPane).toHaveCount(0)
+    await expect(appWindow.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
+    expect((await elementBox(collapsedRail, 'collapsed action pane rail')).width).toBeLessThan(
+      initialActionPaneBox.width
+    )
+    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+
+    await appWindow.getByRole('button', { name: 'Restore action pane' }).click()
+    await expect(actionPane).toBeVisible()
+    await expect(resizeHandle).toBeVisible()
+    await expect(
+      actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
+    ).toBeVisible()
+    await expect(actionPane.getByText('Preview placeholder')).toBeVisible()
+  } finally {
+    await restoreProjectArtifacts()
+  }
 })
 
 test('opens a project by directory from the final chat shell', async ({ appWindow }) => {
