@@ -57,7 +57,15 @@ type GoogleWorkspacePlugin = {
   tool: {
     google_docs_read: {
       description: string
-      execute: (args: { documentId?: string }, context: { abort?: AbortSignal }) => Promise<string>
+      execute: (
+        args: { documentId?: string },
+        context: {
+          abort?: AbortSignal
+          directory?: string
+          sessionID?: string
+          worktree?: string
+        }
+      ) => Promise<string>
     }
     google_drive_search_files: {
       description: string
@@ -266,6 +274,48 @@ test('stores project session linked Google Docs with stable path and dedupe time
         'session-1': [rerecorded]
       }
     })
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('gets or creates linked Google Docs without rewriting existing session docs', async () => {
+  const { getOrCreateLinkedGoogleDoc, ProjectArtifactsFileStore } =
+    loadDesktopModule<ProjectArtifactsModule>(
+      '../../desktop/src/main/integrations/project-artifacts'
+    )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-get-or-create-'))
+  const projectPath = join(tempRoot, 'project')
+  await mkdir(projectPath, { recursive: true })
+  const store = new ProjectArtifactsFileStore(projectPath)
+
+  try {
+    const created = await getOrCreateLinkedGoogleDoc({
+      doc: {
+        id: 'doc-1',
+        title: 'Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      },
+      messageId: 'message-1',
+      projectDirectory: projectPath,
+      sessionId: 'session-1'
+    })
+    const firstFileContents = await readFile(store.filePath, 'utf8')
+
+    const existing = await getOrCreateLinkedGoogleDoc({
+      doc: {
+        id: 'doc-1',
+        title: 'Updated Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      },
+      messageId: 'message-2',
+      projectDirectory: projectPath,
+      sessionId: 'session-1'
+    })
+
+    expect(existing).toEqual(created)
+    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([created])
+    expect(await readFile(store.filePath, 'utf8')).toBe(firstFileContents)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
@@ -955,6 +1005,218 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID', originalClientId)
     restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET', originalClientSecret)
     await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('records linked Google Docs from directory context when worktree is root-like', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-artifacts-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  let docsCalls = 0
+
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-docs-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-1')) {
+      docsCalls += 1
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: [
+              {
+                paragraph: {
+                  elements: [{ textRun: { content: `Hello Docs ${docsCalls}\n` } }]
+                }
+              }
+            ]
+          },
+          documentId: 'doc-1',
+          revisionId: `rev-${docsCalls}`,
+          title: docsCalls === 1 ? 'Docs Plan' : 'Updated Docs Plan'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const context = {
+      directory: projectPath,
+      sessionID: 'session-1',
+      worktree: '/'
+    }
+
+    const firstOutput = JSON.parse(
+      await plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, context)
+    ) as {
+      document: Record<string, unknown>
+    }
+    expect(firstOutput.document).toMatchObject({
+      id: 'doc-1',
+      link: 'https://docs.google.com/document/d/doc-1/edit',
+      title: 'Docs Plan',
+      type: 'google.doc.document'
+    })
+
+    const artifactsPath = join(projectPath, '.openkhodam', 'artifacts.json')
+    const artifactContents = await readFile(artifactsPath, 'utf8')
+    const artifacts = JSON.parse(artifactContents) as {
+      sessions: Record<string, Array<Record<string, unknown>>>
+    }
+    expect(artifacts.sessions['session-1']).toHaveLength(1)
+    expect(artifacts.sessions['session-1']?.[0]).toMatchObject({
+      firstMessageId: null,
+      id: 'doc-1',
+      lastMessageId: null,
+      listed: true,
+      title: 'Docs Plan',
+      url: 'https://docs.google.com/document/d/doc-1/edit'
+    })
+    expect(typeof artifacts.sessions['session-1']?.[0]?.firstSeenAt).toBe('number')
+    expect(artifacts.sessions['session-1']?.[0]?.lastSeenAt).toBe(
+      artifacts.sessions['session-1']?.[0]?.firstSeenAt
+    )
+
+    const secondOutput = JSON.parse(
+      await plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, context)
+    ) as {
+      document: Record<string, unknown>
+    }
+    expect(secondOutput.document).toMatchObject({
+      id: 'doc-1',
+      title: 'Updated Docs Plan',
+      type: 'google.doc.document'
+    })
+    expect(await readFile(artifactsPath, 'utf8')).toBe(artifactContents)
+    expect(docsCalls).toBe(2)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('keeps Google Docs read output when linked-doc artifact recording fails', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-record-failure-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project-path-should-not-log')
+  const outsideParentTarget = join(tempRoot, 'outside-parent-should-not-log')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+
+  await mkdir(projectPath, { recursive: true })
+  await mkdir(outsideParentTarget, { recursive: true })
+  await symlink(outsideParentTarget, join(projectPath, '.openkhodam'), 'dir')
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-docs-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-1')) {
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: [
+              {
+                paragraph: {
+                  elements: [{ textRun: { content: 'Hello Docs\n' } }]
+                }
+              }
+            ]
+          },
+          documentId: 'doc-1',
+          revisionId: 'rev-1',
+          title: 'Docs Plan'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await plugin.tool.google_docs_read.execute(
+        { documentId: 'doc-1' },
+        { directory: projectPath, sessionID: 'session-1' }
+      )
+    ) as {
+      document: Record<string, unknown>
+    }
+
+    expect(output.document).toMatchObject({
+      id: 'doc-1',
+      link: 'https://docs.google.com/document/d/doc-1/edit',
+      text: 'Hello Docs',
+      title: 'Docs Plan',
+      type: 'google.doc.document'
+    })
+    expect(warnings).toEqual([
+      [
+        'Failed to record linked Google Doc artifact',
+        {
+          docId: 'doc-1',
+          reason: 'artifact_record_failed',
+          sessionId: 'session-1'
+        }
+      ]
+    ])
+
+    const warningText = JSON.stringify(warnings)
+    expect(warningText).not.toContain('valid-docs-access-token')
+    expect(warningText).not.toContain('refresh-token')
+    expect(warningText).not.toContain('Hello Docs')
+    expect(warningText).not.toContain('must not be a symlink')
+    expect(warningText).not.toContain(tempRoot)
+    expect(warningText).not.toContain(projectPath)
+    expect(warningText).not.toContain(outsideParentTarget)
+    await expect(readFile(join(outsideParentTarget, 'artifacts.json'), 'utf8')).rejects.toThrow()
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
