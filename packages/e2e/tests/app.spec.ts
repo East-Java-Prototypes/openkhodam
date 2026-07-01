@@ -325,11 +325,25 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow }
     const handleBox = await elementBox(resizeHandle, 'action pane resize handle')
 
     await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toBeVisible()
+    const linkedDocToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc Fixture linked Google Doc'
+    })
+    await expect(linkedDocToggle).toBeVisible()
+    await expect(actionPane.getByRole('region', { name: 'Linked Google Doc details' })).toHaveCount(
+      0
+    )
+    await expect(actionPane.getByText('Doc ID: fixture-linked-doc').first()).toBeVisible()
+    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toHaveCount(0)
+    await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
+    await linkedDocToggle.click()
+    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toBeVisible()
+    await expect(actionPane.getByText('Preview placeholder')).toBeVisible()
+    await expect(actionPane.getByRole('region', { name: 'Linked Google Doc details' })).toHaveCount(
+      0
+    )
     await expect(
       actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
-    ).toBeVisible()
-    await expect(actionPane.getByText('Doc ID: fixture-linked-doc').first()).toBeVisible()
-    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toBeVisible()
+    ).toHaveCount(0)
     await expect(actionPane.getByText('Hidden unlisted Google Doc')).toHaveCount(0)
     await expect(actionPane.getByRole('button', { name: 'Select artifact read' })).toHaveCount(0)
     await expect(actionPane.getByRole('button', { name: 'Select artifact plan' })).toHaveCount(0)
@@ -368,9 +382,17 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow }
     await appWindow.getByRole('button', { name: 'Restore action pane' }).click()
     await expect(actionPane).toBeVisible()
     await expect(resizeHandle).toBeVisible()
+    const restoredLinkedDocToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc Fixture linked Google Doc'
+    })
+    await expect(restoredLinkedDocToggle).toBeVisible()
+    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toHaveCount(0)
+    await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
+    await restoredLinkedDocToggle.click()
     await expect(
       actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
-    ).toBeVisible()
+    ).toHaveCount(0)
+    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toBeVisible()
     await expect(actionPane.getByText('Preview placeholder')).toBeVisible()
   } finally {
     await restoreProjectArtifacts()
