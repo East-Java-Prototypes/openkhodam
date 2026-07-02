@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { expect, test } from '@playwright/test'
 
 const testsDirectory = dirname(fileURLToPath(import.meta.url))
+const workspaceDirectory = join(testsDirectory, '..', '..', '..')
 const desktopDirectory = join(testsDirectory, '..', '..', 'desktop')
 const desktopOutDirectory = join(desktopDirectory, 'out')
 const builtPluginPath = join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs')
@@ -59,6 +60,11 @@ type GoogleWorkspacePlugin = {
       ) => Promise<string>
     }
   }
+}
+
+type StartedJitiScript = {
+  done: Promise<{ exitCode: number | null; output: string }>
+  stop: () => Promise<void>
 }
 
 type OpenKhodamConfigFixture = {
@@ -305,6 +311,226 @@ test('loads the Google Workspace ESM plugin and searches Drive with safe metadat
   }
 })
 
+test('does not persist a refreshed Google token over a concurrent disconnect', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-drive-disconnect-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalClientId = process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID
+  const originalClientSecret = process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET
+  let driveAuthorization: string | null = null
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', 'openid', 'profile', googleDriveMetadataReadonlyScope],
+    token: {
+      accessToken: 'expired-access-token',
+      expiresAt: Date.now() - 1_000,
+      idToken: 'old-id-token',
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now() - 1_000
+  })
+
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID = 'fake-client-id'
+  process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET = 'fake-client-secret'
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url === 'https://oauth2.googleapis.com/token') {
+      await writeOpenKhodamConfig(configPath, {
+        account: null,
+        scopes: [],
+        token: null,
+        updatedAt: Date.now()
+      })
+
+      return new Response(
+        JSON.stringify({
+          access_token: 'new-access-token',
+          expires_in: 3600,
+          scope: `openid email profile ${googleDriveMetadataReadonlyScope}`,
+          token_type: 'Bearer'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://www.googleapis.com/drive/v3/files')) {
+      driveAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(JSON.stringify({ files: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
+    ) as {
+      files: Array<Record<string, unknown>>
+    }
+
+    expect(output).toEqual({ files: [] })
+    expect(driveAuthorization).toBe('Bearer new-access-token')
+
+    const persisted = JSON.parse(await readFile(configPath, 'utf8')) as OpenKhodamConfigFixture
+    expect(persisted.integrations.googleWorkspace.account).toBeNull()
+    expect(persisted.integrations.googleWorkspace.scopes).toEqual([])
+    expect(persisted.integrations.googleWorkspace.token).toBeNull()
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID', originalClientId)
+    restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET', originalClientSecret)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('serializes read-modify-write updates across config store processes', async () => {
+  const scriptDirectory = await mkdtemp(join(tmpdir(), 'openkhodam-config-store-script-'))
+  const controlDirectory = join(scriptDirectory, 'control')
+  const configPath = join(scriptDirectory, 'openkhodam-config.json')
+  const refreshScriptPath = join(scriptDirectory, 'refresh-update.ts')
+  const settingsScriptPath = join(scriptDirectory, 'settings-update.ts')
+  const allowRefreshWritePath = join(controlDirectory, 'allow-refresh-write')
+  const refreshReadPath = join(controlDirectory, 'refresh-read')
+  const settingsReadPath = join(controlDirectory, 'settings-read')
+  const settingsStartedPath = join(controlDirectory, 'settings-started')
+  const configModulePath = join(
+    desktopDirectory,
+    'src',
+    'main',
+    'integrations',
+    'openkhodam-config'
+  )
+  let refreshProcess: StartedJitiScript | null = null
+  let settingsProcess: StartedJitiScript | null = null
+
+  await mkdir(controlDirectory, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', 'openid', 'profile', googleDriveMetadataReadonlyScope],
+    token: {
+      accessToken: 'expired-access-token',
+      expiresAt: Date.now() - 1_000,
+      idToken: 'old-id-token',
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now() - 1_000
+  })
+
+  await writeFile(
+    refreshScriptPath,
+    `import assert from 'node:assert/strict'
+import { existsSync, writeFileSync } from 'node:fs'
+
+import { OpenKhodamConfigFileStore } from ${JSON.stringify(configModulePath)}
+
+const refreshStore = new OpenKhodamConfigFileStore(${JSON.stringify(configPath)})
+const sleepBuffer = new Int32Array(new SharedArrayBuffer(4))
+
+await refreshStore.update((config) => {
+  assert.equal(config.integrations.googleWorkspace.token?.accessToken, 'expired-access-token')
+  writeFileSync(${JSON.stringify(refreshReadPath)}, 'read')
+
+  const deadline = Date.now() + 15_000
+  while (!existsSync(${JSON.stringify(allowRefreshWritePath)})) {
+    if (Date.now() > deadline) {
+      throw new Error('Timed out waiting to write stale refresh')
+    }
+    Atomics.wait(sleepBuffer, 0, 0, 25)
+  }
+
+  config.integrations.googleWorkspace.token = {
+    accessToken: 'stale-refreshed-access-token',
+    expiresAt: Date.now() + 60 * 60 * 1000,
+    idToken: 'old-id-token',
+    refreshToken: 'refresh-token',
+    tokenType: 'Bearer'
+  }
+  config.integrations.googleWorkspace.updatedAt = Date.now()
+
+  return config
+})
+
+console.log('refresh wrote stale')
+`,
+    'utf8'
+  )
+
+  await writeFile(
+    settingsScriptPath,
+    `import { writeFileSync } from 'node:fs'
+
+import { OpenKhodamConfigFileStore } from ${JSON.stringify(configModulePath)}
+
+const googleDriveMetadataReadonlyScope = ${JSON.stringify(googleDriveMetadataReadonlyScope)}
+const settingsStore = new OpenKhodamConfigFileStore(${JSON.stringify(configPath)})
+
+writeFileSync(${JSON.stringify(settingsStartedPath)}, 'started')
+
+await settingsStore.update((config) => {
+  writeFileSync(${JSON.stringify(settingsReadPath)}, 'read')
+  config.integrations.googleWorkspace = {
+    account: { email: 'newer@example.com', name: 'Newer User' },
+    scopes: ['email', googleDriveMetadataReadonlyScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'newer-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: 'newer-id-token',
+      refreshToken: 'newer-refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  }
+
+  return config
+})
+
+console.log('settings wrote newer')
+`,
+    'utf8'
+  )
+
+  try {
+    refreshProcess = startJitiScript(refreshScriptPath)
+    await waitForFile(refreshReadPath)
+
+    settingsProcess = startJitiScript(settingsScriptPath)
+    await waitForFile(settingsStartedPath)
+
+    const settingsEnteredBeforeRefreshWasAllowed = await waitForFile(settingsReadPath, 250).then(
+      () => true,
+      () => false
+    )
+    await writeFile(allowRefreshWritePath, 'go', 'utf8')
+
+    await expectJitiProcessPass(refreshProcess, 'refresh wrote stale')
+    await expectJitiProcessPass(settingsProcess, 'settings wrote newer')
+
+    expect(settingsEnteredBeforeRefreshWasAllowed).toBe(false)
+
+    const finalConfig = JSON.parse(await readFile(configPath, 'utf8')) as OpenKhodamConfigFixture
+    expect(finalConfig.integrations.googleWorkspace.account?.email).toBe('newer@example.com')
+    expect(finalConfig.integrations.googleWorkspace.token?.accessToken).toBe('newer-access-token')
+    expect(finalConfig.integrations.googleWorkspace.token?.accessToken).not.toBe(
+      'stale-refreshed-access-token'
+    )
+  } finally {
+    await refreshProcess?.stop()
+    await settingsProcess?.stop()
+    await rm(scriptDirectory, { recursive: true, force: true })
+  }
+})
+
 test('returns a clear Settings connection error when Google Workspace is disconnected', async () => {
   const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-disconnected-'))
   const configPath = join(userDataPath, 'openkhodam-config.json')
@@ -367,6 +593,57 @@ async function loadGoogleWorkspacePlugin(): Promise<GoogleWorkspacePlugin> {
   expect(typeof pluginModule.GoogleWorkspace).toBe('function')
 
   return (pluginModule.GoogleWorkspace as () => Promise<GoogleWorkspacePlugin>)()
+}
+
+function startJitiScript(scriptPath: string): StartedJitiScript {
+  const child = spawn('pnpm', ['exec', 'jiti', scriptPath], {
+    cwd: workspaceDirectory,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  let output = ''
+
+  const done = new Promise<{ exitCode: number | null; output: string }>((resolve, reject) => {
+    child.stdout.on('data', (chunk: Buffer) => {
+      output += chunk.toString()
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      output += chunk.toString()
+    })
+    child.once('error', reject)
+    child.once('exit', (exitCode) => {
+      resolve({ exitCode, output })
+    })
+  })
+
+  return {
+    done,
+    stop: () => stopProcess(child)
+  }
+}
+
+async function expectJitiProcessPass(
+  process: StartedJitiScript,
+  expectedOutput: string
+): Promise<void> {
+  const { exitCode, output } = await process.done
+
+  expect(exitCode, output).toBe(0)
+  expect(output).toContain(expectedOutput)
+}
+
+async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() <= deadline) {
+    try {
+      await readFile(filePath, 'utf8')
+      return
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+
+  throw new Error(`Timed out waiting for file: ${filePath}`)
 }
 
 async function writeOpenKhodamConfig(

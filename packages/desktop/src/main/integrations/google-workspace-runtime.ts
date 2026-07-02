@@ -82,6 +82,8 @@ export async function searchGoogleDriveFiles({
   let token = google.token
 
   if (isTokenExpired(token, now)) {
+    const refreshedFromToken = token
+
     if (!token.refreshToken) {
       throw new Error(
         'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Drive access.'
@@ -102,13 +104,12 @@ export async function searchGoogleDriveFiles({
     }
 
     token = refreshed.token
-    config.integrations.googleWorkspace = {
-      ...google,
-      scopes: refreshed.scopes.length > 0 ? sortScopes(refreshed.scopes) : google.scopes,
-      token,
-      updatedAt: now
-    }
-    await store.write(config)
+    await persistRefreshedAccessToken({
+      refreshed,
+      refreshedAt: now,
+      refreshedFromToken,
+      store
+    })
   }
 
   const resolvedLimit = clampDriveSearchLimit(limit)
@@ -169,6 +170,52 @@ function isUsableAccessToken(token: GoogleWorkspaceTokenConfig): boolean {
 
 function isTokenExpired(token: GoogleWorkspaceTokenConfig, now: number): boolean {
   return typeof token.expiresAt === 'number' && token.expiresAt <= now + TOKEN_EXPIRY_SKEW_MS
+}
+
+async function persistRefreshedAccessToken({
+  refreshed,
+  refreshedAt,
+  refreshedFromToken,
+  store
+}: {
+  refreshed: { scopes: string[]; token: GoogleWorkspaceTokenConfig }
+  refreshedAt: number
+  refreshedFromToken: GoogleWorkspaceTokenConfig
+  store: OpenKhodamConfigFileStore
+}): Promise<void> {
+  await store.update((config) => {
+    const google = config.integrations.googleWorkspace
+
+    if (
+      !google.account ||
+      !google.token ||
+      !isSameGoogleWorkspaceToken(google.token, refreshedFromToken)
+    ) {
+      return config
+    }
+
+    config.integrations.googleWorkspace = {
+      ...google,
+      scopes: refreshed.scopes.length > 0 ? sortScopes(refreshed.scopes) : google.scopes,
+      token: refreshed.token,
+      updatedAt: refreshedAt
+    }
+
+    return config
+  })
+}
+
+function isSameGoogleWorkspaceToken(
+  left: GoogleWorkspaceTokenConfig,
+  right: GoogleWorkspaceTokenConfig
+): boolean {
+  return (
+    left.accessToken === right.accessToken &&
+    left.refreshToken === right.refreshToken &&
+    left.expiresAt === right.expiresAt &&
+    left.tokenType === right.tokenType &&
+    left.idToken === right.idToken
+  )
 }
 
 async function refreshAccessToken({
