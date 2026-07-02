@@ -33,7 +33,9 @@ const sourceGoogleWorkspacePluginPath = join(
 )
 const toolName = 'openkhodam_plugin_ping'
 const googleDriveToolName = 'google_drive_search_files'
+const googleDocsReadToolName = 'google_docs_read'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
+const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 
 type OpenKhodamPocPlugin = {
   'experimental.chat.system.transform': (
@@ -53,6 +55,18 @@ type OpenKhodamPocPlugin = {
 
 type GoogleWorkspacePlugin = {
   tool: {
+    google_docs_read: {
+      description: string
+      execute: (
+        args: { documentId?: string },
+        context: {
+          abort?: AbortSignal
+          directory?: string
+          sessionID?: string
+          worktree?: string
+        }
+      ) => Promise<string>
+    }
     google_drive_search_files: {
       description: string
       execute: (
@@ -260,6 +274,48 @@ test('stores project session linked Google Docs with stable path and dedupe time
         'session-1': [rerecorded]
       }
     })
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('gets or creates linked Google Docs without rewriting existing session docs', async () => {
+  const { getOrCreateLinkedGoogleDoc, ProjectArtifactsFileStore } =
+    loadDesktopModule<ProjectArtifactsModule>(
+      '../../desktop/src/main/integrations/project-artifacts'
+    )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-get-or-create-'))
+  const projectPath = join(tempRoot, 'project')
+  await mkdir(projectPath, { recursive: true })
+  const store = new ProjectArtifactsFileStore(projectPath)
+
+  try {
+    const created = await getOrCreateLinkedGoogleDoc({
+      doc: {
+        id: 'doc-1',
+        title: 'Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      },
+      messageId: 'message-1',
+      projectDirectory: projectPath,
+      sessionId: 'session-1'
+    })
+    const firstFileContents = await readFile(store.filePath, 'utf8')
+
+    const existing = await getOrCreateLinkedGoogleDoc({
+      doc: {
+        id: 'doc-1',
+        title: 'Updated Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      },
+      messageId: 'message-2',
+      projectDirectory: projectPath,
+      sessionId: 'session-1'
+    })
+
+    expect(existing).toEqual(created)
+    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([created])
+    expect(await readFile(store.filePath, 'utf8')).toBe(firstFileContents)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
@@ -786,6 +842,511 @@ test('loads the Google Workspace ESM plugin and searches Drive with safe metadat
   }
 })
 
+test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safely', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-read-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalClientId = process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID
+  const originalClientSecret = process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET
+  let docsAuthorization: string | null = null
+  let docsUrl: URL | null = null
+  let tokenBody: string | null = null
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'expired-docs-access-token',
+      expiresAt: Date.now() - 1_000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID = 'fake-client-id'
+  process.env.OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET = 'fake-client-secret'
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url === 'https://oauth2.googleapis.com/token') {
+      const body = init?.body
+      tokenBody = body instanceof URLSearchParams ? body.toString() : (body?.toString() ?? null)
+      return new Response(
+        JSON.stringify({
+          access_token: 'new-docs-access-token',
+          expires_in: 3600,
+          scope: `openid email profile ${googleDocsDocumentsScope}`,
+          token_type: 'Bearer'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-1')) {
+      docsUrl = new URL(url)
+      docsAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          accessToken: 'should-not-leak',
+          body: {
+            content: [
+              {
+                startIndex: 101,
+                endIndex: 112,
+                paragraph: {
+                  elements: [
+                    { startIndex: 101, endIndex: 112, textRun: { content: 'Hello Docs\n' } }
+                  ]
+                }
+              },
+              {
+                startIndex: 212,
+                endIndex: 224,
+                paragraph: {
+                  elements: [
+                    { startIndex: 212, endIndex: 224, textRun: { content: 'Second line\n' } }
+                  ]
+                }
+              }
+            ]
+          },
+          documentId: 'doc-1',
+          owners: [{ emailAddress: 'owner@example.com' }],
+          revisionId: 'rev-1',
+          title: 'Docs Plan'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    expect(plugin.tool.google_docs_read.description).toContain('google.doc.document')
+
+    const output = JSON.parse(
+      await plugin.tool.google_docs_read.execute({ documentId: ' doc-1 ' }, {})
+    ) as {
+      document: Record<string, unknown>
+    }
+
+    expect(tokenBody).not.toBeNull()
+    const tokenParams = new URLSearchParams(tokenBody ?? '')
+    expect(tokenParams.get('client_id')).toBe('fake-client-id')
+    expect(tokenParams.get('client_secret')).toBe('fake-client-secret')
+    expect(tokenParams.get('grant_type')).toBe('refresh_token')
+    expect(tokenParams.get('refresh_token')).toBe('refresh-token')
+    expect(docsAuthorization).toBe('Bearer new-docs-access-token')
+    expect(docsUrl?.pathname).toBe('/v1/documents/doc-1')
+    expect(docsUrl?.searchParams.get('fields')).toBe(
+      'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
+    )
+    expect(output).toEqual({
+      document: {
+        type: 'google.doc.document',
+        id: 'doc-1',
+        title: 'Docs Plan',
+        revision: 'rev-1',
+        text: 'Hello Docs\nSecond line',
+        markdown: 'Hello Docs\nSecond line',
+        link: 'https://docs.google.com/document/d/doc-1/edit',
+        body: {
+          blocks: [
+            {
+              id: 'body-block-1',
+              ordinal: 1,
+              type: 'paragraph',
+              text: 'Hello Docs\n',
+              markdown: 'Hello Docs\n'
+            },
+            {
+              id: 'body-block-2',
+              ordinal: 2,
+              type: 'paragraph',
+              text: 'Second line\n',
+              markdown: 'Second line\n'
+            }
+          ]
+        }
+      }
+    })
+
+    const outputText = JSON.stringify(output)
+    expect(outputText).not.toContain('expired-docs-access-token')
+    expect(outputText).not.toContain('new-docs-access-token')
+    expect(outputText).not.toContain('refresh-token')
+    expect(outputText).not.toContain('should-not-leak')
+    expect(outputText).not.toContain('owner@example.com')
+    expect(outputText).not.toContain('startIndex')
+    expect(outputText).not.toContain('endIndex')
+    expect(outputText).not.toContain('textStartIndex')
+    expect(outputText).not.toContain('textEndIndex')
+    expect(outputText).not.toContain('101')
+    expect(outputText).not.toContain('112')
+    expect(outputText).not.toContain('212')
+    expect(outputText).not.toContain('224')
+
+    const persisted = JSON.parse(await readFile(configPath, 'utf8')) as OpenKhodamConfigFixture
+    expect(persisted.integrations.googleWorkspace.token?.accessToken).toBe('new-docs-access-token')
+    expect(persisted.integrations.googleWorkspace.scopes).toEqual([
+      'email',
+      googleDocsDocumentsScope,
+      'openid',
+      'profile'
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID', originalClientId)
+    restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET', originalClientSecret)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('records linked Google Docs from directory context when worktree is root-like', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-artifacts-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  let docsCalls = 0
+
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-docs-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-1')) {
+      docsCalls += 1
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: [
+              {
+                paragraph: {
+                  elements: [{ textRun: { content: `Hello Docs ${docsCalls}\n` } }]
+                }
+              }
+            ]
+          },
+          documentId: 'doc-1',
+          revisionId: `rev-${docsCalls}`,
+          title: docsCalls === 1 ? 'Docs Plan' : 'Updated Docs Plan'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const context = {
+      directory: projectPath,
+      sessionID: 'session-1',
+      worktree: '/'
+    }
+
+    const firstOutput = JSON.parse(
+      await plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, context)
+    ) as {
+      document: Record<string, unknown>
+    }
+    expect(firstOutput.document).toMatchObject({
+      id: 'doc-1',
+      link: 'https://docs.google.com/document/d/doc-1/edit',
+      title: 'Docs Plan',
+      type: 'google.doc.document'
+    })
+
+    const artifactsPath = join(projectPath, '.openkhodam', 'artifacts.json')
+    const artifactContents = await readFile(artifactsPath, 'utf8')
+    const artifacts = JSON.parse(artifactContents) as {
+      sessions: Record<string, Array<Record<string, unknown>>>
+    }
+    expect(artifacts.sessions['session-1']).toHaveLength(1)
+    expect(artifacts.sessions['session-1']?.[0]).toMatchObject({
+      firstMessageId: null,
+      id: 'doc-1',
+      lastMessageId: null,
+      listed: true,
+      title: 'Docs Plan',
+      url: 'https://docs.google.com/document/d/doc-1/edit'
+    })
+    expect(typeof artifacts.sessions['session-1']?.[0]?.firstSeenAt).toBe('number')
+    expect(artifacts.sessions['session-1']?.[0]?.lastSeenAt).toBe(
+      artifacts.sessions['session-1']?.[0]?.firstSeenAt
+    )
+
+    const secondOutput = JSON.parse(
+      await plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, context)
+    ) as {
+      document: Record<string, unknown>
+    }
+    expect(secondOutput.document).toMatchObject({
+      id: 'doc-1',
+      title: 'Updated Docs Plan',
+      type: 'google.doc.document'
+    })
+    expect(await readFile(artifactsPath, 'utf8')).toBe(artifactContents)
+    expect(docsCalls).toBe(2)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('keeps Google Docs read output when linked-doc artifact recording fails', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-record-failure-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project-path-should-not-log')
+  const outsideParentTarget = join(tempRoot, 'outside-parent-should-not-log')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+
+  await mkdir(projectPath, { recursive: true })
+  await mkdir(outsideParentTarget, { recursive: true })
+  await symlink(outsideParentTarget, join(projectPath, '.openkhodam'), 'dir')
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-docs-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-1')) {
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: [
+              {
+                paragraph: {
+                  elements: [{ textRun: { content: 'Hello Docs\n' } }]
+                }
+              }
+            ]
+          },
+          documentId: 'doc-1',
+          revisionId: 'rev-1',
+          title: 'Docs Plan'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await plugin.tool.google_docs_read.execute(
+        { documentId: 'doc-1' },
+        { directory: projectPath, sessionID: 'session-1' }
+      )
+    ) as {
+      document: Record<string, unknown>
+    }
+
+    expect(output.document).toMatchObject({
+      id: 'doc-1',
+      link: 'https://docs.google.com/document/d/doc-1/edit',
+      text: 'Hello Docs',
+      title: 'Docs Plan',
+      type: 'google.doc.document'
+    })
+    expect(warnings).toEqual([
+      [
+        'Failed to record linked Google Doc artifact',
+        {
+          docId: 'doc-1',
+          reason: 'artifact_record_failed',
+          sessionId: 'session-1'
+        }
+      ]
+    ])
+
+    const warningText = JSON.stringify(warnings)
+    expect(warningText).not.toContain('valid-docs-access-token')
+    expect(warningText).not.toContain('refresh-token')
+    expect(warningText).not.toContain('Hello Docs')
+    expect(warningText).not.toContain('must not be a symlink')
+    expect(warningText).not.toContain(tempRoot)
+    expect(warningText).not.toContain(projectPath)
+    expect(warningText).not.toContain(outsideParentTarget)
+    await expect(readFile(join(outsideParentTarget, 'artifacts.json'), 'utf8')).rejects.toThrow()
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('logs sanitized Google API failures for Drive and Docs permission errors', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-api-failure-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+  let docsAuthorization: string | null = null
+  let driveAuthorization: string | null = null
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: [
+      'email',
+      googleDocsDocumentsScope,
+      googleDriveMetadataReadonlyScope,
+      'openid',
+      'profile'
+    ],
+    token: {
+      accessToken: 'valid-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://www.googleapis.com/drive/v3/files')) {
+      driveAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          accessToken: 'should-not-log',
+          error: {
+            code: 403,
+            errors: [
+              {
+                message: 'Drive raw detail should not override the safe message.',
+                reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'
+              }
+            ],
+            message: 'Drive permission denied.',
+            status: 'PERMISSION_DENIED'
+          },
+          rawRequestBody: 'request-body-should-not-log'
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-denied')) {
+      docsAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 403,
+            errors: [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }],
+            message: 'Request had insufficient authentication scopes.',
+            status: 'PERMISSION_DENIED'
+          },
+          refreshToken: 'should-not-log'
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
+    ).rejects.toThrow(
+      'Google Drive files.list failed (HTTP 403, PERMISSION_DENIED, ACCESS_TOKEN_SCOPE_INSUFFICIENT): Drive permission denied.'
+    )
+    await expect(
+      plugin.tool.google_docs_read.execute({ documentId: 'doc-denied' }, {})
+    ).rejects.toThrow(
+      'Google Docs documents.get failed (HTTP 403, PERMISSION_DENIED, ACCESS_TOKEN_SCOPE_INSUFFICIENT): Request had insufficient authentication scopes.'
+    )
+
+    expect(driveAuthorization).toBe('Bearer valid-access-token')
+    expect(docsAuthorization).toBe('Bearer valid-access-token')
+    expect(warnings).toEqual([
+      [
+        'Google Workspace API request failed',
+        {
+          code: 'PERMISSION_DENIED',
+          message: 'Drive permission denied.',
+          operation: 'Google Drive files.list',
+          reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
+          status: 403
+        }
+      ],
+      [
+        'Google Workspace API request failed',
+        {
+          code: 'PERMISSION_DENIED',
+          message: 'Request had insufficient authentication scopes.',
+          operation: 'Google Docs documents.get',
+          reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
+          status: 403
+        }
+      ]
+    ])
+
+    const warningText = JSON.stringify(warnings)
+    expect(warningText).not.toContain('valid-access-token')
+    expect(warningText).not.toContain('refresh-token')
+    expect(warningText).not.toContain('should-not-log')
+    expect(warningText).not.toContain('request-body-should-not-log')
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
 test('returns a clear Settings connection error when Google Workspace is disconnected', async () => {
   const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-disconnected-'))
   const configPath = join(userDataPath, 'openkhodam-config.json')
@@ -831,6 +1392,36 @@ test('returns a clear reconnect error when the Drive metadata scope is missing',
       plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
     ).rejects.toThrow(
       'Google Drive access is not enabled. Reconnect Google Workspace in Settings to grant Drive metadata read-only access.'
+    )
+  } finally {
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('returns a clear reconnect error when the Google Docs scope is missing', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-missing-scope-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDriveMetadataReadonlyScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, {})).rejects.toThrow(
+      'Google Docs access is not enabled. Reconnect Google Workspace in Settings to grant Google Docs read/write access.'
     )
   } finally {
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
@@ -923,6 +1514,7 @@ async function expectOpenCodeLoadsPlugins(pluginPaths: string[]): Promise<void> 
     expect(response.status, `${body}\n${server.logs()}`).toBe(200)
     expect(JSON.parse(body) as string[]).toContain(toolName)
     expect(JSON.parse(body) as string[]).toContain(googleDriveToolName)
+    expect(JSON.parse(body) as string[]).toContain(googleDocsReadToolName)
     expect(server.logs()).not.toMatch(/failed to load plugin/i)
   } finally {
     await server.stop()

@@ -193,6 +193,25 @@ export function createProjectArtifactsIntegration(): ProjectArtifactsIntegration
   }
 }
 
+export async function getOrCreateLinkedGoogleDoc(
+  input: RecordLinkedGoogleDocInput
+): Promise<LinkedGoogleDoc> {
+  const store = createProjectArtifactsStore(input)
+  const sessionId = normalizeRequiredString(input.sessionId, 'sessionId')
+  const doc = normalizeLinkedGoogleDocRecordInput(input.doc)
+  const existing = (await store.listSessionLinkedDocs(sessionId)).find(
+    (candidate) => candidate.id === doc.id
+  )
+
+  if (existing) return existing
+
+  return store.recordLinkedGoogleDoc({
+    doc,
+    messageId: input.messageId,
+    sessionId
+  })
+}
+
 export function createDefaultProjectArtifactsConfig(): ProjectArtifactsConfig {
   return {
     version: PROJECT_ARTIFACTS_CONFIG_VERSION,
