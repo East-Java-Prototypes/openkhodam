@@ -137,7 +137,6 @@ export function ChatHomePage({
           panelRef={projectSidebarPanelRef}
           defaultSize="25%"
           minSize="16rem"
-          maxSize="32rem"
           collapsedSize="3rem"
           collapsible
           onResize={handleProjectSidebarResize}
@@ -611,7 +610,6 @@ export function ActiveChatPanel({
         panelRef={actionPanePanelRef}
         defaultSize="30%"
         minSize="16rem"
-        maxSize="30rem"
         collapsedSize="3rem"
         collapsible
         onResize={handleActionPaneResize}

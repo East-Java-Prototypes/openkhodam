@@ -35,14 +35,40 @@ const chatActionPane = (page: Page): Locator =>
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
+const resizeTestViewport = { width: 1200, height: 700 }
 
 type ElementBox = NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>
+
+async function setResizeTestViewport(
+  electronApp: ElectronApplication,
+  page: Page
+): Promise<void> {
+  await electronApp.evaluate(({ BrowserWindow }, size) => {
+    const [applicationWindow] = BrowserWindow.getAllWindows()
+    if (!applicationWindow) throw new Error('Application window should exist for resize tests.')
+
+    applicationWindow.setContentSize(size.width, size.height)
+  }, resizeTestViewport)
+
+  await expect
+    .poll(async () => page.evaluate(() => window.innerWidth), {
+      message: 'resize tests should use a wide app viewport'
+    })
+    .toBeGreaterThanOrEqual(resizeTestViewport.width)
+}
 
 async function elementBox(locator: Locator, description: string): Promise<ElementBox> {
   const box = await locator.boundingBox()
   expect(box, `${description} should have a bounding box`).not.toBeNull()
   if (!box) throw new Error(`${description} should have a bounding box`)
   return box
+}
+
+async function remToPixels(page: Page, rem: number): Promise<number> {
+  return page.evaluate((value) => {
+    const rootFontSize = Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize)
+    return value * rootFontSize
+  }, rem)
 }
 
 async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
@@ -270,18 +296,20 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   ).toBeVisible()
 })
 
-test('resizes and collapses/restores the project sidebar', async ({ appWindow }) => {
+test('resizes and collapses/restores the project sidebar', async ({ appWindow, electronApp }) => {
+  await setResizeTestViewport(electronApp, appWindow)
   await waitForChatShell(appWindow)
 
   const sidebar = appWindow.getByRole('complementary', { name: 'Project folders' })
   const resizeHandle = appWindow.getByRole('separator', { name: 'Resize project sidebar' })
   const initialSidebarBox = await elementBox(sidebar, 'expanded project sidebar')
   const handleBox = await elementBox(resizeHandle, 'project sidebar resize handle')
+  const formerSidebarMaxWidth = await remToPixels(appWindow, 32)
 
   await appWindow.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
   await appWindow.mouse.down()
   await appWindow.mouse.move(
-    handleBox.x + handleBox.width / 2 + 120,
+    handleBox.x + handleBox.width / 2 + 280,
     handleBox.y + handleBox.height / 2,
     { steps: 10 }
   )
@@ -289,9 +317,10 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow })
 
   await expect
     .poll(async () => Math.round((await sidebar.boundingBox())?.width ?? 0), {
-      message: 'project sidebar should grow after dragging resize handle'
+      message: 'project sidebar should resize beyond the former 32rem cap'
     })
-    .toBeGreaterThan(Math.round(initialSidebarBox.width) + 40)
+    .toBeGreaterThan(Math.round(formerSidebarMaxWidth) + 20)
+  await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
 
   await appWindow.getByRole('button', { name: 'Collapse project sidebar' }).click()
   const collapsedRail = appWindow.getByRole('complementary', {
@@ -313,16 +342,18 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow })
   await expect(resizeHandle).toBeVisible()
 })
 
-test('resizes and collapses/restores the chat action pane', async ({ appWindow }) => {
+test('resizes and collapses/restores the chat action pane', async ({ appWindow, electronApp }) => {
   const restoreProjectArtifacts = await seedSessionLinkedDocs('structured-session')
 
   try {
+    await setResizeTestViewport(electronApp, appWindow)
     await openStructuredFixtureChat(appWindow)
 
     const actionPane = chatActionPane(appWindow)
     const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
     const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
     const handleBox = await elementBox(resizeHandle, 'action pane resize handle')
+    const formerActionPaneMaxWidth = await remToPixels(appWindow, 30)
 
     await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toBeVisible()
     const linkedDocToggle = actionPane.getByRole('button', {
@@ -357,7 +388,7 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow }
     )
     await appWindow.mouse.down()
     await appWindow.mouse.move(
-      handleBox.x + handleBox.width / 2 - 120,
+      handleBox.x + handleBox.width / 2 - 300,
       handleBox.y + handleBox.height / 2,
       { steps: 10 }
     )
@@ -365,9 +396,10 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow }
 
     await expect
       .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0), {
-        message: 'action pane should grow after dragging resize handle'
+        message: 'action pane should resize beyond the former 30rem cap'
       })
-      .toBeGreaterThan(Math.round(initialActionPaneBox.width) + 40)
+      .toBeGreaterThan(Math.round(formerActionPaneMaxWidth) + 20)
+    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 
     await appWindow.getByRole('button', { name: 'Collapse action pane' }).click()
     const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
