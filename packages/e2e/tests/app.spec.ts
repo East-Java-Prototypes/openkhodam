@@ -39,10 +39,7 @@ const resizeTestViewport = { width: 1200, height: 700 }
 
 type ElementBox = NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>
 
-async function setResizeTestViewport(
-  electronApp: ElectronApplication,
-  page: Page
-): Promise<void> {
+async function setResizeTestViewport(electronApp: ElectronApplication, page: Page): Promise<void> {
   await electronApp.evaluate(({ BrowserWindow }, size) => {
     const [applicationWindow] = BrowserWindow.getAllWindows()
     if (!applicationWindow) throw new Error('Application window should exist for resize tests.')
@@ -66,7 +63,9 @@ async function elementBox(locator: Locator, description: string): Promise<Elemen
 
 async function remToPixels(page: Page, rem: number): Promise<number> {
   return page.evaluate((value) => {
-    const rootFontSize = Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize)
+    const rootFontSize = Number.parseFloat(
+      window.getComputedStyle(document.documentElement).fontSize
+    )
     return value * rootFontSize
   }, rem)
 }
