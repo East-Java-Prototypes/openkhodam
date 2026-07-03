@@ -548,10 +548,7 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       exact: true
     })
     await expect(linkedDocToggle).toBeVisible()
-    await expect(actionPane.getByRole('region', { name: 'Linked Google Doc details' })).toHaveCount(
-      0
-    )
-    await expect(actionPane.getByText('Doc ID: fixture-linked-doc').first()).toBeVisible()
+    await expect(actionPane.getByText('Doc ID: fixture-linked-doc')).toHaveCount(0)
     await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toHaveCount(0)
     await expect(
       actionPane.getByRole('region', {
@@ -577,9 +574,11 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       )
       .toBe('function')
     await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
-    await expect(actionPane.getByRole('region', { name: 'Linked Google Doc details' })).toHaveCount(
-      0
-    )
+    await expect(actionPane.getByText('Title', { exact: true })).toHaveCount(0)
+    await expect(actionPane.getByText('Doc ID', { exact: true })).toHaveCount(0)
+    await expect(actionPane.getByText('Google Docs URL', { exact: true })).toHaveCount(0)
+    await expect(actionPane.getByText('First linked', { exact: true })).toHaveCount(0)
+    await expect(actionPane.getByText('Last linked', { exact: true })).toHaveCount(0)
     const noUrlLinkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc without URL'
     })

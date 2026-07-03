@@ -70,34 +70,27 @@ function LinkedDocItem({ doc }: { doc: LinkedGoogleDoc }): JSX.Element {
       >
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="truncate text-sm font-medium">{title}</span>
-          <span className="text-muted-foreground truncate text-xs">Doc ID: {doc.id}</span>
           <span className="text-muted-foreground line-clamp-2 text-xs leading-5">
             {doc.url ?? 'No Google Docs URL stored.'}
           </span>
         </span>
-        <span className="text-muted-foreground shrink-0 text-xs">Details</span>
+        <span className="text-muted-foreground shrink-0 text-xs">Preview</span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t px-3 py-3">
-        <dl className="grid gap-2 text-sm">
-          <LinkedDocDetail label="Title" value={title} />
-          <LinkedDocDetail label="Doc ID" value={doc.id} />
-          <LinkedDocDetail label="Google Docs URL" value={doc.url ?? 'No URL stored.'} />
-          <LinkedDocDetail label="First linked" value={formatLinkedDocTime(doc.firstSeenAt)} />
-          <LinkedDocDetail label="Last linked" value={formatLinkedDocTime(doc.lastSeenAt)} />
-        </dl>
-        <div className="mt-4 flex flex-col gap-3">
+      <CollapsibleContent className="border-t p-3">
+        <div className="flex flex-col gap-3">
           {doc.url ? (
-            <a
-              href={doc.url}
-              target="_blank"
-              rel="noreferrer"
-              className={cn(buttonVariants({ size: 'xs', variant: 'outline' }), 'w-fit')}
-            >
-              Open in Google Docs
-            </a>
-          ) : (
-            <p className="text-sm text-muted-foreground">No Google Docs URL was stored.</p>
-          )}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium text-foreground">Preview</p>
+              <a
+                href={doc.url}
+                target="_blank"
+                rel="noreferrer"
+                className={cn(buttonVariants({ size: 'xs', variant: 'outline' }), 'w-fit')}
+              >
+                Open in Google Docs
+              </a>
+            </div>
+          ) : null}
           <LinkedDocBrowserPreview title={title} sourceUrl={doc.url} />
         </div>
       </CollapsibleContent>
@@ -141,19 +134,6 @@ function LinkedDocBrowserPreview({
   )
 }
 
-function LinkedDocDetail({ label, value }: { label: string; value: string }): JSX.Element {
-  return (
-    <div className="grid gap-1 border bg-background/50 p-2">
-      <dt className="text-muted-foreground text-xs font-medium uppercase tracking-wide">{label}</dt>
-      <dd className="break-words text-xs leading-5">{value}</dd>
-    </div>
-  )
-}
-
 function linkedDocTitle(doc: LinkedGoogleDoc): string {
   return doc.title?.trim() || 'Untitled Google Doc'
-}
-
-function formatLinkedDocTime(value: number): string {
-  return value > 0 ? new Date(value).toLocaleString() : 'Unknown'
 }
