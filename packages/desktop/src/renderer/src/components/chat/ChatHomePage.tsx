@@ -220,43 +220,37 @@ function ChatShellTitlebar({
       role="toolbar"
       aria-label="Pane controls"
     >
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="ghost"
+        className="app-region-no-drag"
+        aria-label={projectSidebarLabel}
+        title={projectSidebarLabel}
+        aria-pressed={!isProjectSidebarOpen}
+        onClick={onToggleProjectSidebar}
+      >
+        <PaneToggleIcon side="left" open={isProjectSidebarOpen} />
+      </Button>
       <div className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
         OpenKhodam
       </div>
-      <div
-        className="app-region-no-drag flex shrink-0 items-center gap-1"
-        role="group"
-        aria-label="Pane toggles"
-      >
+      {hasActionPane ? (
         <Button
           type="button"
           size="icon-xs"
           variant="ghost"
           className="app-region-no-drag"
-          aria-label={projectSidebarLabel}
-          title={projectSidebarLabel}
-          aria-pressed={!isProjectSidebarOpen}
-          onClick={onToggleProjectSidebar}
+          aria-label={actionPaneLabel}
+          title={actionPaneLabel}
+          aria-pressed={!isActionPaneOpen}
+          onClick={onToggleActionPane}
         >
-          <PaneToggleIcon side="left" open={isProjectSidebarOpen} />
+          <PaneToggleIcon side="right" open={isActionPaneOpen} />
         </Button>
-        {hasActionPane ? (
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            className="app-region-no-drag"
-            aria-label={actionPaneLabel}
-            title={actionPaneLabel}
-            aria-pressed={!isActionPaneOpen}
-            onClick={onToggleActionPane}
-          >
-            <PaneToggleIcon side="right" open={isActionPaneOpen} />
-          </Button>
-        ) : (
-          <div className="size-6" aria-hidden="true" />
-        )}
-      </div>
+      ) : (
+        <div className="size-6" aria-hidden="true" />
+      )}
     </div>
   )
 }

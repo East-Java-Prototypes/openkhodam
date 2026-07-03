@@ -106,7 +106,7 @@ async function appRegion(locator: Locator): Promise<string> {
   )
 }
 
-async function expectRightAlignedPaneControls(
+async function expectSplitCornerPaneControls(
   titlebar: Locator,
   projectSidebarButton: Locator,
   actionPaneButton: Locator
@@ -114,23 +114,20 @@ async function expectRightAlignedPaneControls(
   const titlebarBox = await elementBox(titlebar, 'pane controls titlebar')
   const projectButtonBox = await elementBox(projectSidebarButton, 'project sidebar titlebar toggle')
   const actionButtonBox = await elementBox(actionPaneButton, 'action pane titlebar toggle')
+  const leftSideEnd = titlebarBox.x + titlebarBox.width * 0.35
   const rightSideStart = titlebarBox.x + titlebarBox.width * 0.65
 
   expect(
-    projectButtonBox.x,
-    'project sidebar toggle should sit in the right titlebar cluster'
-  ).toBeGreaterThan(rightSideStart)
+    projectButtonBox.x + projectButtonBox.width,
+    'project sidebar toggle should sit in the left titlebar corner'
+  ).toBeLessThan(leftSideEnd)
   expect(
     actionButtonBox.x,
-    'action pane toggle should sit to the right of project toggle'
-  ).toBeGreaterThan(projectButtonBox.x)
-  expect(
-    actionButtonBox.x - (projectButtonBox.x + projectButtonBox.width),
-    'titlebar pane toggles should be adjacent'
-  ).toBeLessThan(24)
+    'action pane toggle should sit in the right titlebar corner'
+  ).toBeGreaterThan(rightSideStart)
   expect(
     actionButtonBox.x + actionButtonBox.width,
-    'titlebar pane toggles should stay inside the titlebar'
+    'action pane toggle should stay inside the titlebar'
   ).toBeLessThanOrEqual(titlebarBox.x + titlebarBox.width + 1)
 }
 
@@ -345,7 +342,7 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
   const formerSidebarMaxWidth = await remToPixels(appWindow, 32)
 
   await expect(collapseSidebarButton).toBeVisible()
-  await expectRightAlignedPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
+  await expectSplitCornerPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
   await expect.poll(() => appRegion(titlebar)).toBe('drag')
   await expect.poll(() => appRegion(collapseSidebarButton)).toBe('no-drag')
 
@@ -403,7 +400,7 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     const formerActionPaneMaxWidth = await remToPixels(appWindow, 30)
 
     await expect(collapseActionPaneButton).toBeVisible()
-    await expectRightAlignedPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
+    await expectSplitCornerPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
     await expect.poll(() => appRegion(titlebar)).toBe('drag')
     await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
     await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toBeVisible()
