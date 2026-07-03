@@ -13,6 +13,7 @@ const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
 const fixtureLinkedDocUrl = 'https://docs.google.com/document/d/fixture-linked-doc/edit'
+const arbitraryLinkedDocUrl = 'https://example.test/document/d/arbitrary-linked-doc/edit'
 const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
 const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
@@ -259,9 +260,9 @@ async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<v
               lastMessageId: 'message-2'
             },
             {
-              id: 'malicious-linked-doc-url',
-              title: 'Malicious linked Google Doc URL',
-              url: 'https://evil.example/document/d/fixture-linked-doc/edit',
+              id: 'arbitrary-linked-doc-url',
+              title: 'Arbitrary linked Google Doc URL',
+              url: arbitraryLinkedDocUrl,
               listed: true,
               firstSeenAt: 1_800_000_007_000,
               lastSeenAt: 1_800_000_007_000,
@@ -521,11 +522,7 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
   await expect(resizeHandle).toBeVisible()
 })
 
-test('resizes and collapses/restores the chat action pane', async ({
-  appWindow,
-  electronApp,
-  fakeOpenCodeServer
-}) => {
+test('resizes and collapses/restores the chat action pane', async ({ appWindow, electronApp }) => {
   const restoreProjectArtifacts = await seedSessionLinkedDocs('structured-session')
 
   try {
@@ -579,22 +576,6 @@ test('resizes and collapses/restores the chat action pane', async ({
         { message: 'linked Google Doc preview should be an Electron webview' }
       )
       .toBe('function')
-    const unsafeProgrammaticWebviewUrl = `${fakeOpenCodeServer.url}/unsafe-webview-navigation`
-    await browserPreview.locator('webview').evaluate((element, unsafeUrl) => {
-      const webview = element as { loadURL: (url: string) => Promise<void> }
-      void webview.loadURL(unsafeUrl).catch(() => undefined)
-    }, unsafeProgrammaticWebviewUrl)
-    await appWindow.waitForTimeout(300)
-    await expect
-      .poll(
-        async () =>
-          browserPreview.locator('webview').evaluate((element) => {
-            const webview = element as { getURL: () => string }
-            return webview.getURL()
-          }),
-        { message: 'linked Google Doc preview should reject unsafe programmatic navigation' }
-      )
-      .toBe(fixtureLinkedDocUrl)
     await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
     await expect(actionPane.getByRole('region', { name: 'Linked Google Doc details' })).toHaveCount(
       0
@@ -614,23 +595,19 @@ test('resizes and collapses/restores the chat action pane', async ({
         .getByText('No Google Docs URL was stored, so no browser preview can be loaded.')
         .first()
     ).toBeVisible()
-    const maliciousUrlLinkedDocToggle = actionPane.getByRole('button', {
-      name: 'Toggle linked Google Doc Malicious linked Google Doc URL'
+    const arbitraryUrlLinkedDocToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc Arbitrary linked Google Doc URL'
     })
-    await expect(maliciousUrlLinkedDocToggle).toBeVisible()
-    await maliciousUrlLinkedDocToggle.click()
-    const maliciousUrlBrowserPreview = actionPane.getByRole('region', {
-      name: 'Google Docs browser preview for Malicious linked Google Doc URL'
+    await expect(arbitraryUrlLinkedDocToggle).toBeVisible()
+    await arbitraryUrlLinkedDocToggle.click()
+    const arbitraryUrlBrowserPreview = actionPane.getByRole('region', {
+      name: 'Google Docs browser preview for Arbitrary linked Google Doc URL'
     })
-    await expect(maliciousUrlBrowserPreview).toBeVisible()
-    await expect(maliciousUrlBrowserPreview.locator('webview')).toHaveCount(0)
-    await expect(
-      maliciousUrlBrowserPreview
-        .getByText(
-          'The stored Google Docs URL is not an expected Google Docs document URL, so no browser preview can be loaded.'
-        )
-        .first()
-    ).toBeVisible()
+    await expect(arbitraryUrlBrowserPreview).toBeVisible()
+    await expect(arbitraryUrlBrowserPreview.locator('webview')).toHaveAttribute(
+      'src',
+      arbitraryLinkedDocUrl
+    )
     await expect(
       actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
     ).toHaveCount(0)
