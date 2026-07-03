@@ -579,6 +579,8 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(actionPane.getByText('Google Docs URL', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('First linked', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Last linked', { exact: true })).toHaveCount(0)
+    await linkedDocToggle.click()
+    await expect(browserPreview).toHaveCount(0)
     const noUrlLinkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc without URL'
     })
@@ -594,10 +596,13 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
         .getByText('No Google Docs URL was stored, so no browser preview can be loaded.')
         .first()
     ).toBeVisible()
+    await noUrlLinkedDocToggle.click()
+    await expect(noUrlBrowserPreview).toHaveCount(0)
     const arbitraryUrlLinkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Arbitrary linked Google Doc URL'
     })
     await expect(arbitraryUrlLinkedDocToggle).toBeVisible()
+    await arbitraryUrlLinkedDocToggle.scrollIntoViewIfNeeded()
     await arbitraryUrlLinkedDocToggle.click()
     const arbitraryUrlBrowserPreview = actionPane.getByRole('region', {
       name: 'Google Docs browser preview for Arbitrary linked Google Doc URL'
