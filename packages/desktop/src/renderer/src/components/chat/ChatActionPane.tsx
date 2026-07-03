@@ -6,11 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
-export function ChatActionPane({
-  linkedDocs
-}: {
-  linkedDocs: LinkedGoogleDoc[]
-}): JSX.Element {
+export function ChatActionPane({ linkedDocs }: { linkedDocs: LinkedGoogleDoc[] }): JSX.Element {
   return (
     <aside
       className="flex h-full min-h-0 min-w-0 flex-col border-l bg-sidebar/40 text-foreground"
