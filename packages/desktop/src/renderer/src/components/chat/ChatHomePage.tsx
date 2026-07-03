@@ -63,6 +63,7 @@ import { ChatActionPane } from './ChatActionPane'
 import { ChatMessageParts } from './ChatMessageParts'
 import type {
   OpenCodeChatShellState,
+  OpenCodeHeartbeatStatus,
   OpenCodeModelOption,
   OpenCodeProjectRouteState,
   OpenCodeSessionRouteState,
@@ -325,12 +326,6 @@ function ProjectChatSidebar({
               </div>
             </div>
           </SidebarMenuItem>
-          <SidebarMenuItem>
-            <div className="flex flex-wrap gap-2 px-2 py-1">
-              <Badge variant="secondary">{shell.statusLabel}</Badge>
-              <Badge variant="outline">{shell.eventLabel}</Badge>
-            </div>
-          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent className="px-4 pb-4">
@@ -369,29 +364,61 @@ function ProjectChatSidebar({
       <SidebarFooter className="border-t p-4">
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="flex flex-wrap gap-2 px-2 py-1">
-              <Button
-                nativeButton={false}
-                render={<Link to="/" role="link" />}
-                size="xs"
-                variant="outline"
-              >
-                Home
-              </Button>
-              <Button
-                nativeButton={false}
-                render={<Link to="/settings" role="link" />}
-                size="xs"
-                variant="outline"
-              >
-                Settings
-              </Button>
+            <div className="flex items-center justify-between gap-3 px-2 py-1">
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button
+                  nativeButton={false}
+                  render={<Link to="/" role="link" />}
+                  size="xs"
+                  variant="outline"
+                >
+                  Home
+                </Button>
+                <Button
+                  nativeButton={false}
+                  render={<Link to="/settings" role="link" />}
+                  size="xs"
+                  variant="outline"
+                >
+                  Settings
+                </Button>
+              </div>
+              <SidebarHeartbeat status={shell.heartbeatStatus} />
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
+  )
+}
+
+function SidebarHeartbeat({ status }: { status: OpenCodeHeartbeatStatus }): JSX.Element {
+  return (
+    <div
+      data-slot="sidebar-heartbeat"
+      data-state={status.connected ? 'connected' : 'disconnected'}
+      role="img"
+      aria-label={status.ariaLabel}
+      title={status.title}
+      className={cn(
+        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[11px] leading-none font-medium tabular-nums',
+        status.connected
+          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+          : 'border-destructive/40 bg-destructive/10 text-destructive'
+      )}
+    >
+      <span
+        data-slot="sidebar-heartbeat-dot"
+        aria-hidden="true"
+        className={cn(
+          'size-2 rounded-full',
+          status.connected ? 'bg-emerald-500' : 'bg-destructive'
+        )}
+      />
+      <span aria-hidden="true">{status.displayLabel}</span>
+      <span className="sr-only">{status.ariaLabel}</span>
+    </div>
   )
 }
 

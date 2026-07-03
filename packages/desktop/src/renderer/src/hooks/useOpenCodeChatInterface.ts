@@ -14,6 +14,7 @@ import {
 } from './useOpenCodeChat'
 import {
   openCodeSessionEventErrorsQueryKey,
+  type OpenCodeEventsState,
   useOpenCodeEvents,
   type OpenCodeSessionEventError
 } from './useOpenCodeEvents'
@@ -39,11 +40,17 @@ const emptyMessages: unknown[] = []
 
 type TimeValue = string | number | null
 
+export type OpenCodeHeartbeatStatus = {
+  connected: boolean
+  displayLabel: string
+  ariaLabel: string
+  title: string
+}
+
 export type OpenCodeChatShellState = {
   projects: ChatProject[]
-  statusLabel: string
   statusMessage: string | null
-  eventLabel: string
+  heartbeatStatus: OpenCodeHeartbeatStatus
   isLoading: boolean
   errorMessage: string | null
   emptyMessage: string | null
@@ -128,6 +135,7 @@ export function useOpenCodeChatShell(
   const [openedDirectory, setOpenedDirectory] = useState<string | null>(null)
   const lastOpenedProjectId = useRef<string | null>(null)
   const openedProject = openProjectMutation.data ? mapOpenedProject(openProjectMutation.data) : null
+  const heartbeatStatus = getHeartbeatStatus(connection, events)
 
   useEffect(() => {
     if (!openedProject || lastOpenedProjectId.current === openedProject.id) return
@@ -139,11 +147,8 @@ export function useOpenCodeChatShell(
 
   return {
     projects: useMemo(() => mapProjects(projects), [projects]),
-    statusLabel: status.state,
     statusMessage: status.message,
-    eventLabel: events.listening
-      ? `Live${events.lastEventType ? ` · ${events.lastEventType}` : ''}${events.lastEventAt ? ` · ${new Date(events.lastEventAt).toLocaleTimeString()}` : ''}`
-      : 'Events paused',
+    heartbeatStatus,
     isLoading: projectsQuery.isLoading,
     errorMessage: firstErrorMessage(
       connectionQuery.error,
@@ -536,6 +541,49 @@ function getShellEmptyMessage(
   if (connection === null) return 'Waiting for the OpenCode sidecar connection.'
   if (projectsLoaded && projectCount === 0) return 'No OpenCode projects found.'
   return null
+}
+
+function getHeartbeatStatus(
+  connection: unknown,
+  events: OpenCodeEventsState
+): OpenCodeHeartbeatStatus {
+  const eventErrorMessage =
+    connection === null || !events.error ? null : formatUnknownError(events.error)
+  const connected = connection !== null && events.listening && eventErrorMessage === null
+  const stateText = connected ? 'OpenCode connected.' : 'OpenCode disconnected.'
+  const streamText = getHeartbeatStreamText(connection, events, eventErrorMessage)
+  const heartbeatText = events.lastEventAt
+    ? `Last heartbeat: ${formatHeartbeatTimestamp(events.lastEventAt)}${events.lastEventType ? ` (${events.lastEventType})` : ''}.`
+    : connected
+      ? 'Waiting for the first heartbeat.'
+      : 'No heartbeat received.'
+  const detail = `${stateText} ${streamText} ${heartbeatText}`
+
+  return {
+    connected,
+    displayLabel: events.lastEventAt ? formatTime(events.lastEventAt) : connected ? 'Live' : 'Off',
+    ariaLabel: detail,
+    title: detail
+  }
+}
+
+function getHeartbeatStreamText(
+  connection: unknown,
+  events: OpenCodeEventsState,
+  eventErrorMessage: string | null
+): string {
+  if (connection === null) return 'OpenCode sidecar connection is unavailable.'
+  if (eventErrorMessage) return `Event stream error: ${eventErrorMessage}.`
+  if (events.listening) return 'Listening for live events.'
+  return 'Live events paused.'
+}
+
+function formatHeartbeatTimestamp(value: number): string {
+  return new Date(value).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }
 
 function getProjectEmptyMessage(
