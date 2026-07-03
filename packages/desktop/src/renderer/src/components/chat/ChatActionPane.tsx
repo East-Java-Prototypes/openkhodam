@@ -1,17 +1,15 @@
 import type { JSX } from 'react'
 import type { LinkedGoogleDoc } from '@openkhodam/ui/types'
 
-import { Button, buttonVariants } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
 export function ChatActionPane({
-  linkedDocs,
-  onCollapse
+  linkedDocs
 }: {
   linkedDocs: LinkedGoogleDoc[]
-  onCollapse: () => void
 }): JSX.Element {
   return (
     <aside
@@ -20,23 +18,11 @@ export function ChatActionPane({
       aria-label="Action pane"
     >
       <header className="shrink-0 px-4 py-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-muted-foreground text-sm">Linked Google Docs</p>
-            <h2 id="action-pane-heading" className="text-lg font-semibold tracking-tight">
-              Action pane
-            </h2>
-          </div>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            aria-label="Collapse action pane"
-            title="Collapse action pane"
-            onClick={onCollapse}
-          >
-            Collapse
-          </Button>
+        <div className="min-w-0">
+          <p className="text-muted-foreground text-sm">Linked Google Docs</p>
+          <h2 id="action-pane-heading" className="text-lg font-semibold tracking-tight">
+            Action pane
+          </h2>
         </div>
       </header>
       <Separator />
