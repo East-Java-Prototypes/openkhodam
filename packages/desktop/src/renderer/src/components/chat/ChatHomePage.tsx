@@ -145,6 +145,15 @@ export function ChatHomePage({
     setActionPaneOpen((open) => !open)
   }, [])
 
+  let projectSidebarPane: ReactNode
+  if (isProjectSidebarOpen) {
+    projectSidebarPane = <ProjectChatSidebar shell={shell} project={project} session={session} />
+  } else {
+    projectSidebarPane = (
+      <CollapsedProjectSidebarRail onRestore={() => handleProjectSidebarOpenChange(true)} />
+    )
+  }
+
   return (
     <ActionPaneControlsContext.Provider value={actionPaneControls}>
       <SidebarProvider
@@ -178,11 +187,7 @@ export function ChatHomePage({
             collapsible
             onResize={handleProjectSidebarResize}
           >
-            {isProjectSidebarOpen ? (
-              <ProjectChatSidebar shell={shell} project={project} session={session} />
-            ) : (
-              <CollapsedProjectSidebarRail onRestore={() => handleProjectSidebarOpenChange(true)} />
-            )}
+            {projectSidebarPane}
           </ResizablePanel>
           <ResizableHandle withHandle aria-label="Resize project sidebar" />
           <ResizablePanel id="active-pane-panel" defaultSize="75%" minSize="20rem">
