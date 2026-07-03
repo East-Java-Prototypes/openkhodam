@@ -12,9 +12,17 @@ import type {
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 
+type SupportedDesktopPlatform = 'darwin' | 'linux' | 'win32'
+
+const supportedDesktopPlatforms = new Set<NodeJS.Platform>(['darwin', 'linux', 'win32'])
+
+function supportedDesktopPlatform(platform: NodeJS.Platform): SupportedDesktopPlatform {
+  return supportedDesktopPlatforms.has(platform) ? (platform as SupportedDesktopPlatform) : 'linux'
+}
+
 // Custom APIs for renderer
 const api = {
-  platform: process.platform,
+  platform: supportedDesktopPlatform(process.platform),
   getOpenCodeConnection: (): Promise<OpenCodeConnection> =>
     ipcRenderer.invoke('opencode:get-connection'),
   getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>

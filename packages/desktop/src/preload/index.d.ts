@@ -18,16 +18,7 @@ export type {
   OpenCodeSidecarStatus
 } from '@openkhodam/ui/types'
 
-export type DesktopPlatform =
-  | 'aix'
-  | 'darwin'
-  | 'freebsd'
-  | 'linux'
-  | 'openbsd'
-  | 'sunos'
-  | 'win32'
-  | 'cygwin'
-  | 'netbsd'
+export type DesktopPlatform = 'darwin' | 'linux' | 'win32'
 
 export type OpenKhodamAPI = {
   platform: DesktopPlatform
