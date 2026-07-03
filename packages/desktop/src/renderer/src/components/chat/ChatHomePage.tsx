@@ -261,13 +261,7 @@ function ChatShellTitlebar({
   )
 }
 
-function PaneToggleIcon({
-  side,
-  open
-}: {
-  side: 'left' | 'right'
-  open: boolean
-}): JSX.Element {
+function PaneToggleIcon({ side, open }: { side: 'left' | 'right'; open: boolean }): JSX.Element {
   const dividerX = side === 'left' ? 8 : 16
   const arrowPath =
     side === 'left'
@@ -668,11 +662,14 @@ export function ActiveChatPanel({
     [setActionPaneOpen, syncActionPanePanel]
   )
 
-  const handleActionPaneResize = useCallback((size: PanelSize): void => {
-    const isCollapsed = actionPanePanelRef.current?.isCollapsed() ?? size.inPixels <= 64
+  const handleActionPaneResize = useCallback(
+    (size: PanelSize): void => {
+      const isCollapsed = actionPanePanelRef.current?.isCollapsed() ?? size.inPixels <= 64
 
-    setActionPaneOpen(!isCollapsed)
-  }, [setActionPaneOpen])
+      setActionPaneOpen(!isCollapsed)
+    },
+    [setActionPaneOpen]
+  )
 
   useEffect(() => {
     syncActionPanePanel(isActionPaneOpen)
