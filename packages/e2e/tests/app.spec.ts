@@ -547,16 +547,25 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
     })
+    const linkedDocPreviewToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc preview Fixture linked Google Doc',
+      exact: true
+    })
+    const linkedDocOpenLink = actionPane.getByRole('link', {
+      name: 'Open linked Google Doc Fixture linked Google Doc in Google Docs'
+    })
     await expect(linkedDocToggle).toBeVisible()
+    await expect(linkedDocPreviewToggle).toBeVisible()
     await expect(actionPane.getByText('Doc ID: fixture-linked-doc')).toHaveCount(0)
-    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toHaveCount(0)
+    await expect(linkedDocOpenLink).toBeVisible()
+    await expect(linkedDocOpenLink).toHaveAttribute('href', fixtureLinkedDocUrl)
+    await expect(linkedDocOpenLink).toHaveAttribute('target', '_blank')
     await expect(
       actionPane.getByRole('region', {
         name: 'Google Docs browser preview for Fixture linked Google Doc'
       })
     ).toHaveCount(0)
-    await linkedDocToggle.click()
-    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toBeVisible()
+    await linkedDocPreviewToggle.click()
     const browserPreview = actionPane.getByRole('region', {
       name: 'Google Docs browser preview for Fixture linked Google Doc'
     })
@@ -573,6 +582,8 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
         { message: 'linked Google Doc preview should be an Electron webview' }
       )
       .toBe('function')
+    await expect(actionPane.getByText('Preview', { exact: true })).toHaveCount(0)
+    await expect(actionPane.getByText('Browser preview', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
     await expect(actionPane.getByText('Title', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Doc ID', { exact: true })).toHaveCount(0)
@@ -585,6 +596,11 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       name: 'Toggle linked Google Doc Fixture linked Google Doc without URL'
     })
     await expect(noUrlLinkedDocToggle).toBeVisible()
+    await expect(
+      actionPane.getByRole('link', {
+        name: 'Open linked Google Doc Fixture linked Google Doc without URL in Google Docs'
+      })
+    ).toHaveCount(0)
     await noUrlLinkedDocToggle.click()
     const noUrlBrowserPreview = actionPane.getByRole('region', {
       name: 'Google Docs browser preview for Fixture linked Google Doc without URL'
@@ -601,7 +617,12 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     const arbitraryUrlLinkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Arbitrary linked Google Doc URL'
     })
+    const arbitraryUrlOpenLink = actionPane.getByRole('link', {
+      name: 'Open linked Google Doc Arbitrary linked Google Doc URL in Google Docs'
+    })
     await expect(arbitraryUrlLinkedDocToggle).toBeVisible()
+    await expect(arbitraryUrlOpenLink).toHaveAttribute('href', arbitraryLinkedDocUrl)
+    await expect(arbitraryUrlOpenLink).toHaveAttribute('target', '_blank')
     await arbitraryUrlLinkedDocToggle.scrollIntoViewIfNeeded()
     await arbitraryUrlLinkedDocToggle.click()
     const arbitraryUrlBrowserPreview = actionPane.getByRole('region', {
@@ -659,18 +680,26 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
     })
+    const restoredLinkedDocPreviewToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc preview Fixture linked Google Doc',
+      exact: true
+    })
+    const restoredLinkedDocOpenLink = actionPane.getByRole('link', {
+      name: 'Open linked Google Doc Fixture linked Google Doc in Google Docs'
+    })
     await expect(restoredLinkedDocToggle).toBeVisible()
-    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toHaveCount(0)
+    await expect(restoredLinkedDocPreviewToggle).toBeVisible()
+    await expect(restoredLinkedDocOpenLink).toBeVisible()
+    await expect(restoredLinkedDocOpenLink).toHaveAttribute('href', fixtureLinkedDocUrl)
     await expect(
       actionPane.getByRole('region', {
         name: 'Google Docs browser preview for Fixture linked Google Doc'
       })
     ).toHaveCount(0)
-    await restoredLinkedDocToggle.click()
+    await restoredLinkedDocPreviewToggle.click()
     await expect(
       actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
     ).toHaveCount(0)
-    await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toBeVisible()
     const restoredBrowserPreview = actionPane.getByRole('region', {
       name: 'Google Docs browser preview for Fixture linked Google Doc'
     })
@@ -679,6 +708,8 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       'src',
       fixtureLinkedDocUrl
     )
+    await expect(actionPane.getByText('Preview', { exact: true })).toHaveCount(0)
+    await expect(actionPane.getByText('Browser preview', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
   } finally {
     await restoreProjectArtifacts()
