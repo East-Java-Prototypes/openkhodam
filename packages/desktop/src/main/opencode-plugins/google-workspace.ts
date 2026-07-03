@@ -1,12 +1,13 @@
-import { statSync } from 'node:fs'
-import { posix, win32 } from 'node:path'
-
 import type { GoogleDocDocumentArtifact } from '../integrations/google-workspace-runtime'
 import {
+  createGoogleDocDocumentPreview,
   readGoogleDocDocument,
   searchGoogleDriveFiles
 } from '../integrations/google-workspace-runtime'
-import { getOrCreateLinkedGoogleDoc } from '../integrations/project-artifacts'
+import {
+  getOrCreateLinkedGoogleDoc,
+  persistGoogleDocDocumentArtifact
+} from '../integrations/project-artifacts'
 
 type GoogleDriveSearchFilesToolArgs = {
   limit?: number
@@ -101,7 +102,7 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
     },
     google_docs_read: {
       description:
-        'Read a Google Docs document using the Google Workspace account connected in OpenKhodam Settings. Returns a safe google.doc.document artifact with document text.',
+        'Read a Google Docs document using the Google Workspace account connected in OpenKhodam Settings. Returns a safe google.doc.document artifact with a bounded head preview.',
       args: {
         documentId: {
           description: 'The Google Docs document ID to read.',
@@ -116,7 +117,9 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
         })
         await recordReadGoogleDocArtifact(context, result.document)
 
-        return JSON.stringify(result)
+        return JSON.stringify({
+          document: createGoogleDocDocumentPreview(result.document)
+        })
       }
     }
   }
@@ -130,13 +133,32 @@ async function recordReadGoogleDocArtifact(
   context: GoogleWorkspaceToolContext,
   document: GoogleDocDocumentArtifact
 ): Promise<void> {
-  const projectDirectory = resolveProjectDirectoryForArtifactRecord(context)
+  const projectDirectory = nonEmptyString(context.directory)
+  if (!projectDirectory) return
+
+  let artifactPath: string | null = null
+
+  try {
+    const persisted = await persistGoogleDocDocumentArtifact({
+      document,
+      projectDirectory
+    })
+    artifactPath = persisted.artifactPath
+  } catch {
+    console.warn('Failed to persist Google Doc artifact', {
+      docId: document.id,
+      reason: 'artifact_persist_failed'
+    })
+    return
+  }
+
   const sessionId = nonEmptyString(context.sessionID)
-  if (!projectDirectory || !sessionId) return
+  if (!sessionId) return
 
   try {
     await getOrCreateLinkedGoogleDoc({
       doc: {
+        artifactPath,
         id: document.id,
         title: document.title,
         url: document.link
@@ -150,46 +172,6 @@ async function recordReadGoogleDocArtifact(
       reason: 'artifact_record_failed',
       sessionId
     })
-  }
-}
-
-function resolveProjectDirectoryForArtifactRecord(
-  context: GoogleWorkspaceToolContext
-): string | null {
-  return usableProjectDirectory(context.worktree) ?? usableProjectDirectory(context.directory)
-}
-
-function usableProjectDirectory(value: unknown): string | null {
-  const directory = nonEmptyString(value)
-  if (!directory) return null
-  if (!isAbsoluteProjectPath(directory)) return null
-  if (isRootLikePath(directory)) return null
-  if (!isExistingDirectory(directory)) return null
-
-  return directory
-}
-
-function isAbsoluteProjectPath(value: string): boolean {
-  return posix.isAbsolute(value) || win32.isAbsolute(value)
-}
-
-function isRootLikePath(value: string): boolean {
-  return (
-    isNormalizedRootLikePath(posix.normalize(value), posix) ||
-    isNormalizedRootLikePath(win32.normalize(value), win32)
-  )
-}
-
-function isNormalizedRootLikePath(value: string, pathModule: Pick<typeof posix, 'parse'>): boolean {
-  const root = pathModule.parse(value).root
-  return root.length > 0 && value === root
-}
-
-function isExistingDirectory(value: string): boolean {
-  try {
-    return statSync(value).isDirectory()
-  } catch {
-    return false
   }
 }
 

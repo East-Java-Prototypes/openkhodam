@@ -133,6 +133,7 @@ function linkedGoogleDocsEqual(left: LinkedGoogleDoc[], right: LinkedGoogleDoc[]
 
 function linkedGoogleDocEquals(left: LinkedGoogleDoc, right: LinkedGoogleDoc): boolean {
   return (
+    left.artifactPath === right.artifactPath &&
     left.id === right.id &&
     left.title === right.title &&
     left.url === right.url &&

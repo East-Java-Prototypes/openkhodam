@@ -49,6 +49,7 @@ export type GoogleWorkspaceIntegrationStatus =
     }
 
 export type LinkedGoogleDoc = {
+  artifactPath: string | null
   id: string
   title: string | null
   url: string | null
@@ -60,6 +61,7 @@ export type LinkedGoogleDoc = {
 }
 
 export type LinkedGoogleDocRecord = {
+  artifactPath?: string | null
   id: string
   title?: string | null
   url?: string | null

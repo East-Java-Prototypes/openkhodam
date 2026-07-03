@@ -230,6 +230,7 @@ test('stores project session linked Google Docs with stable path and dedupe time
     })
 
     expect(recorded).toEqual({
+      artifactPath: null,
       firstMessageId: 'message-1',
       firstSeenAt: 1_000,
       id: 'doc-1',
@@ -259,6 +260,7 @@ test('stores project session linked Google Docs with stable path and dedupe time
     })
 
     expect(rerecorded).toMatchObject({
+      artifactPath: null,
       firstMessageId: 'message-1',
       firstSeenAt: 1_000,
       id: 'doc-1',
@@ -400,6 +402,24 @@ test('rejects project artifact symlinks before reading or writing', async () => 
   const outsideParentTarget = join(tempRoot, 'outside-parent-target')
   const outsideFileTarget = join(tempRoot, 'outside-artifacts.json')
   const doc = { id: 'doc-1' }
+  const fullDoc = {
+    type: 'google.doc.document' as const,
+    id: 'doc-1',
+    title: 'Launch Plan',
+    revision: 'rev-1',
+    text: 'Hello Docs',
+    link: 'https://docs.google.com/document/d/doc-1/edit',
+    body: {
+      blocks: [
+        {
+          id: 'body-block-1',
+          ordinal: 1,
+          type: 'paragraph' as const,
+          text: 'Hello Docs'
+        }
+      ]
+    }
+  }
 
   try {
     await mkdir(projectPath, { recursive: true })
@@ -415,10 +435,22 @@ test('rejects project artifact symlinks before reading or writing', async () => 
         doc
       })
     ).rejects.toThrow(/must not be a symlink/)
+    await expect(parentSymlinkStore.persistGoogleDocDocumentArtifact(fullDoc)).rejects.toThrow(
+      /must not be a symlink/
+    )
     await expect(stat(join(outsideParentTarget, 'artifacts.json'))).rejects.toThrow()
 
     await rm(join(projectPath, '.openkhodam'), { force: true })
     await mkdir(join(projectPath, '.openkhodam'), { recursive: true })
+    await symlink(outsideParentTarget, join(projectPath, '.openkhodam', 'artifacts'), 'dir')
+
+    const nestedSymlinkStore = new ProjectArtifactsFileStore(projectPath)
+    await expect(nestedSymlinkStore.persistGoogleDocDocumentArtifact(fullDoc)).rejects.toThrow(
+      /\.openkhodam\/artifacts must not be a symlink/
+    )
+    await expect(stat(join(outsideParentTarget, 'google-docs'))).rejects.toThrow()
+
+    await rm(join(projectPath, '.openkhodam', 'artifacts'), { force: true })
     await writeFile(outsideFileTarget, 'outside target', 'utf8')
     await symlink(outsideFileTarget, join(projectPath, '.openkhodam', 'artifacts.json'), 'file')
 
@@ -542,6 +574,7 @@ test('normalizes invalid linked-doc artifact records defensively', async () => {
       sessions: {
         'session-a': [
           {
+            artifactPath: null,
             firstMessageId: 'message-1',
             firstSeenAt: 50,
             id: 'doc-1',
@@ -554,6 +587,7 @@ test('normalizes invalid linked-doc artifact records defensively', async () => {
         ],
         'session-b': [
           {
+            artifactPath: null,
             firstMessageId: null,
             firstSeenAt: 12,
             id: 'doc-2',
@@ -953,7 +987,6 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
         title: 'Docs Plan',
         revision: 'rev-1',
         text: 'Hello Docs\nSecond line',
-        markdown: 'Hello Docs\nSecond line',
         link: 'https://docs.google.com/document/d/doc-1/edit',
         body: {
           blocks: [
@@ -961,17 +994,21 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
               id: 'body-block-1',
               ordinal: 1,
               type: 'paragraph',
-              text: 'Hello Docs\n',
-              markdown: 'Hello Docs\n'
+              text: 'Hello Docs\n'
             },
             {
               id: 'body-block-2',
               ordinal: 2,
               type: 'paragraph',
-              text: 'Second line\n',
-              markdown: 'Second line\n'
+              text: 'Second line\n'
             }
           ]
+        },
+        preview: {
+          truncated: false,
+          totalTextLength: 22,
+          totalBlockCount: 2,
+          includedBlockCount: 2
         }
       }
     })
@@ -986,6 +1023,7 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     expect(outputText).not.toContain('endIndex')
     expect(outputText).not.toContain('textStartIndex')
     expect(outputText).not.toContain('textEndIndex')
+    expect(outputText).not.toContain('markdown')
     expect(outputText).not.toContain('101')
     expect(outputText).not.toContain('112')
     expect(outputText).not.toContain('212')
@@ -1005,6 +1043,155 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID', originalClientId)
     restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET', originalClientSecret)
     await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('bounds Google Docs read previews while persisting the full normalized artifact', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-preview-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const fallbackWorktreePath = join(tempRoot, 'fallback-worktree')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const textCapBlock = 'x'.repeat(700)
+  const blockCapBlock = 'b'.repeat(10)
+  const textCapBlocks = Array.from({ length: 25 }, () => textCapBlock)
+  const blockCapBlocks = Array.from({ length: 25 }, () => blockCapBlock)
+
+  await mkdir(projectPath, { recursive: true })
+  await mkdir(fallbackWorktreePath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-docs-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-text-cap')) {
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: createGoogleDocParagraphs(textCapBlocks)
+          },
+          documentId: 'doc-text-cap',
+          revisionId: 'rev-text-cap',
+          title: 'Text Cap Doc'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-block-cap')) {
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: createGoogleDocParagraphs(blockCapBlocks)
+          },
+          documentId: 'doc-block-cap',
+          revisionId: 'rev-block-cap',
+          title: 'Block Cap Doc'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const context = {
+      directory: projectPath,
+      sessionID: 'session-1',
+      worktree: fallbackWorktreePath
+    }
+
+    const textCapOutput = JSON.parse(
+      await plugin.tool.google_docs_read.execute({ documentId: 'doc-text-cap' }, context)
+    ) as {
+      document: Record<string, unknown>
+    }
+    const textCapDocument = textCapOutput.document as {
+      body: { blocks: Array<{ text: string }> }
+      preview: Record<string, unknown>
+      text: string
+    }
+    expect(textCapDocument.text).toHaveLength(12_000)
+    expect(textCapDocument.body.blocks).toHaveLength(18)
+    expect(textCapDocument.body.blocks[17]?.text).toHaveLength(100)
+    expect(textCapDocument.preview).toEqual({
+      truncated: true,
+      totalTextLength: 17_500,
+      totalBlockCount: 25,
+      includedBlockCount: 18
+    })
+    expect(JSON.stringify(textCapDocument)).not.toContain('markdown')
+
+    const blockCapOutput = JSON.parse(
+      await plugin.tool.google_docs_read.execute({ documentId: 'doc-block-cap' }, context)
+    ) as {
+      document: Record<string, unknown>
+    }
+    const blockCapDocument = blockCapOutput.document as {
+      body: { blocks: Array<{ text: string }> }
+      preview: Record<string, unknown>
+      text: string
+    }
+    expect(blockCapDocument.text).toHaveLength(200)
+    expect(blockCapDocument.body.blocks).toHaveLength(20)
+    expect(blockCapDocument.preview).toEqual({
+      truncated: true,
+      totalTextLength: 250,
+      totalBlockCount: 25,
+      includedBlockCount: 20
+    })
+
+    const textCapArtifactPath = join(
+      projectPath,
+      '.openkhodam',
+      'artifacts',
+      'google-docs',
+      'doc-text-cap.json'
+    )
+    const fullTextCapArtifact = JSON.parse(await readFile(textCapArtifactPath, 'utf8')) as {
+      body: { blocks: Array<{ text: string }> }
+      text: string
+    }
+    expect(fullTextCapArtifact.text).toHaveLength(17_500)
+    expect(fullTextCapArtifact.body.blocks).toHaveLength(25)
+    expect(fullTextCapArtifact.body.blocks[17]?.text).toHaveLength(700)
+    expect(JSON.stringify(fullTextCapArtifact)).not.toContain('markdown')
+
+    const artifacts = JSON.parse(
+      await readFile(join(projectPath, '.openkhodam', 'artifacts.json'), 'utf8')
+    ) as {
+      sessions: Record<string, Array<Record<string, unknown>>>
+    }
+    expect(artifacts.sessions['session-1']).toHaveLength(2)
+    expect(artifacts.sessions['session-1']?.[0]).toMatchObject({
+      artifactPath: '.openkhodam/artifacts/google-docs/doc-text-cap.json',
+      id: 'doc-text-cap',
+      title: 'Text Cap Doc',
+      url: 'https://docs.google.com/document/d/doc-text-cap/edit'
+    })
+    expect(JSON.stringify(artifacts)).not.toContain(textCapBlock)
+    await expect(stat(join(fallbackWorktreePath, '.openkhodam'))).rejects.toThrow()
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
@@ -1080,12 +1267,20 @@ test('records linked Google Docs from directory context when worktree is root-li
     })
 
     const artifactsPath = join(projectPath, '.openkhodam', 'artifacts.json')
+    const fullArtifactPath = join(
+      projectPath,
+      '.openkhodam',
+      'artifacts',
+      'google-docs',
+      'doc-1.json'
+    )
     const artifactContents = await readFile(artifactsPath, 'utf8')
     const artifacts = JSON.parse(artifactContents) as {
       sessions: Record<string, Array<Record<string, unknown>>>
     }
     expect(artifacts.sessions['session-1']).toHaveLength(1)
     expect(artifacts.sessions['session-1']?.[0]).toMatchObject({
+      artifactPath: '.openkhodam/artifacts/google-docs/doc-1.json',
       firstMessageId: null,
       id: 'doc-1',
       lastMessageId: null,
@@ -1097,6 +1292,19 @@ test('records linked Google Docs from directory context when worktree is root-li
     expect(artifacts.sessions['session-1']?.[0]?.lastSeenAt).toBe(
       artifacts.sessions['session-1']?.[0]?.firstSeenAt
     )
+    expect(JSON.parse(await readFile(fullArtifactPath, 'utf8'))).toMatchObject({
+      body: {
+        blocks: [
+          {
+            text: 'Hello Docs 1\n'
+          }
+        ]
+      },
+      id: 'doc-1',
+      revision: 'rev-1',
+      text: 'Hello Docs 1',
+      title: 'Docs Plan'
+    })
 
     const secondOutput = JSON.parse(
       await plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, context)
@@ -1109,6 +1317,12 @@ test('records linked Google Docs from directory context when worktree is root-li
       type: 'google.doc.document'
     })
     expect(await readFile(artifactsPath, 'utf8')).toBe(artifactContents)
+    expect(JSON.parse(await readFile(fullArtifactPath, 'utf8'))).toMatchObject({
+      id: 'doc-1',
+      revision: 'rev-2',
+      text: 'Hello Docs 2',
+      title: 'Updated Docs Plan'
+    })
     expect(docsCalls).toBe(2)
   } finally {
     globalThis.fetch = originalFetch
@@ -1194,11 +1408,10 @@ test('keeps Google Docs read output when linked-doc artifact recording fails', a
     })
     expect(warnings).toEqual([
       [
-        'Failed to record linked Google Doc artifact',
+        'Failed to persist Google Doc artifact',
         {
           docId: 'doc-1',
-          reason: 'artifact_record_failed',
-          sessionId: 'session-1'
+          reason: 'artifact_persist_failed'
         }
       ]
     ])
@@ -1469,6 +1682,16 @@ function restoreEnv(name: string, value: string | undefined): void {
   }
 
   process.env[name] = value
+}
+
+function createGoogleDocParagraphs(
+  blocks: string[]
+): Array<{ paragraph: { elements: Array<{ textRun: { content: string } }> } }> {
+  return blocks.map((text) => ({
+    paragraph: {
+      elements: [{ textRun: { content: text } }]
+    }
+  }))
 }
 
 test('registers the ping tool from the ESM artifact through the real OpenCode loader', async () => {
