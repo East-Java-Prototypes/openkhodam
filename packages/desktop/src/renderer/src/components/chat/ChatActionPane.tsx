@@ -58,6 +58,7 @@ function LinkedDocList({ linkedDocs }: { linkedDocs: LinkedGoogleDoc[] }): JSX.E
 
 function LinkedDocItem({ doc }: { doc: LinkedGoogleDoc }): JSX.Element {
   const title = linkedDocTitle(doc)
+  const browserPreviewUrl = toGoogleDocsPreviewUrl(doc.url)
   return (
     <Collapsible className="border bg-background/60" aria-label={`Linked Google Doc ${title}`}>
       <CollapsibleTrigger
@@ -98,16 +99,54 @@ function LinkedDocItem({ doc }: { doc: LinkedGoogleDoc }): JSX.Element {
           ) : (
             <p className="text-sm text-muted-foreground">No Google Docs URL was stored.</p>
           )}
-          <div className="border border-dashed bg-background/60 p-3 text-sm text-muted-foreground">
-            <p className="font-medium text-foreground">Preview placeholder</p>
-            <p className="mt-2 leading-6">
-              Remote Google Docs preview is not loaded in this pane. Use the link above to open the
-              document.
-            </p>
-          </div>
+          <LinkedDocBrowserPreview
+            title={title}
+            sourceUrl={browserPreviewUrl}
+            storedUrl={doc.url}
+          />
         </div>
       </CollapsibleContent>
     </Collapsible>
+  )
+}
+
+function LinkedDocBrowserPreview({
+  sourceUrl,
+  storedUrl,
+  title
+}: {
+  sourceUrl: string | null
+  storedUrl: string | null
+  title: string
+}): JSX.Element {
+  const label = `Google Docs browser preview for ${title}`
+  const unavailableMessage = storedUrl
+    ? 'The stored Google Docs URL is not an expected Google Docs document URL, so no browser preview can be loaded.'
+    : 'No Google Docs URL was stored, so no browser preview can be loaded.'
+
+  return (
+    <section className="overflow-hidden border bg-background/60" role="region" aria-label={label}>
+      <div className="border-b px-3 py-2 text-sm">
+        <p className="font-medium text-foreground">Browser preview</p>
+        <p className="mt-1 break-words text-muted-foreground text-xs leading-5">
+          {sourceUrl ?? unavailableMessage}
+        </p>
+      </div>
+      {sourceUrl ? (
+        <webview
+          aria-label={label}
+          className="h-[32rem] w-full bg-background"
+          data-testid="linked-google-doc-browser-preview"
+          src={sourceUrl}
+          title={label}
+        />
+      ) : (
+        <div className="border border-dashed bg-background/60 m-3 p-3 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">No preview available</p>
+          <p className="mt-2 leading-6">{unavailableMessage}</p>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -126,4 +165,21 @@ function linkedDocTitle(doc: LinkedGoogleDoc): string {
 
 function formatLinkedDocTime(value: number): string {
   return value > 0 ? new Date(value).toLocaleString() : 'Unknown'
+}
+
+function toGoogleDocsPreviewUrl(value: string | null): string | null {
+  if (!value) return null
+
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return null
+  }
+
+  if (url.protocol !== 'https:') return null
+  if (url.hostname !== 'docs.google.com') return null
+  if (!/^\/document\/(?:u\/\d+\/)?d\/[^/]+(?:\/|$)/.test(url.pathname)) return null
+
+  return url.href
 }

@@ -12,6 +12,7 @@ const projectArtifactsFile = join(projectArtifactsDirectory, 'artifacts.json')
 const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
+const fixtureLinkedDocUrl = 'https://docs.google.com/document/d/fixture-linked-doc/edit'
 const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
 const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
@@ -240,11 +241,31 @@ async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<v
             {
               id: 'fixture-linked-doc',
               title: 'Fixture linked Google Doc',
-              url: 'https://docs.google.com/document/d/fixture-linked-doc/edit',
+              url: fixtureLinkedDocUrl,
               listed: true,
               firstSeenAt: 1_800_000_000_000,
               lastSeenAt: 1_800_000_005_000,
               firstMessageId: 'message-1',
+              lastMessageId: 'message-2'
+            },
+            {
+              id: 'fixture-linked-doc-without-url',
+              title: 'Fixture linked Google Doc without URL',
+              url: null,
+              listed: true,
+              firstSeenAt: 1_800_000_006_000,
+              lastSeenAt: 1_800_000_006_000,
+              firstMessageId: 'message-2',
+              lastMessageId: 'message-2'
+            },
+            {
+              id: 'malicious-linked-doc-url',
+              title: 'Malicious linked Google Doc URL',
+              url: 'https://evil.example/document/d/fixture-linked-doc/edit',
+              listed: true,
+              firstSeenAt: 1_800_000_007_000,
+              lastSeenAt: 1_800_000_007_000,
+              firstMessageId: 'message-2',
               lastMessageId: 'message-2'
             },
             {
@@ -500,7 +521,11 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
   await expect(resizeHandle).toBeVisible()
 })
 
-test('resizes and collapses/restores the chat action pane', async ({ appWindow, electronApp }) => {
+test('resizes and collapses/restores the chat action pane', async ({
+  appWindow,
+  electronApp,
+  fakeOpenCodeServer
+}) => {
   const restoreProjectArtifacts = await seedSessionLinkedDocs('structured-session')
 
   try {
@@ -522,7 +547,8 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
     await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toBeVisible()
     const linkedDocToggle = actionPane.getByRole('button', {
-      name: 'Toggle linked Google Doc Fixture linked Google Doc'
+      name: 'Toggle linked Google Doc Fixture linked Google Doc',
+      exact: true
     })
     await expect(linkedDocToggle).toBeVisible()
     await expect(actionPane.getByRole('region', { name: 'Linked Google Doc details' })).toHaveCount(
@@ -530,13 +556,81 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     )
     await expect(actionPane.getByText('Doc ID: fixture-linked-doc').first()).toBeVisible()
     await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toHaveCount(0)
-    await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
+    await expect(
+      actionPane.getByRole('region', {
+        name: 'Google Docs browser preview for Fixture linked Google Doc'
+      })
+    ).toHaveCount(0)
     await linkedDocToggle.click()
     await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toBeVisible()
-    await expect(actionPane.getByText('Preview placeholder')).toBeVisible()
+    const browserPreview = actionPane.getByRole('region', {
+      name: 'Google Docs browser preview for Fixture linked Google Doc'
+    })
+    await expect(browserPreview).toBeVisible()
+    await expect(browserPreview.locator('webview')).toHaveAttribute('src', fixtureLinkedDocUrl)
+    await expect
+      .poll(
+        async () =>
+          browserPreview
+            .locator('webview')
+            .evaluate(
+              (element) => typeof (element as { getWebContentsId?: unknown }).getWebContentsId
+            ),
+        { message: 'linked Google Doc preview should be an Electron webview' }
+      )
+      .toBe('function')
+    const unsafeProgrammaticWebviewUrl = `${fakeOpenCodeServer.url}/unsafe-webview-navigation`
+    await browserPreview.locator('webview').evaluate((element, unsafeUrl) => {
+      const webview = element as { loadURL: (url: string) => Promise<void> }
+      void webview.loadURL(unsafeUrl).catch(() => undefined)
+    }, unsafeProgrammaticWebviewUrl)
+    await appWindow.waitForTimeout(300)
+    await expect
+      .poll(
+        async () =>
+          browserPreview.locator('webview').evaluate((element) => {
+            const webview = element as { getURL: () => string }
+            return webview.getURL()
+          }),
+        { message: 'linked Google Doc preview should reject unsafe programmatic navigation' }
+      )
+      .toBe(fixtureLinkedDocUrl)
+    await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
     await expect(actionPane.getByRole('region', { name: 'Linked Google Doc details' })).toHaveCount(
       0
     )
+    const noUrlLinkedDocToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc Fixture linked Google Doc without URL'
+    })
+    await expect(noUrlLinkedDocToggle).toBeVisible()
+    await noUrlLinkedDocToggle.click()
+    const noUrlBrowserPreview = actionPane.getByRole('region', {
+      name: 'Google Docs browser preview for Fixture linked Google Doc without URL'
+    })
+    await expect(noUrlBrowserPreview).toBeVisible()
+    await expect(noUrlBrowserPreview.locator('webview')).toHaveCount(0)
+    await expect(
+      noUrlBrowserPreview
+        .getByText('No Google Docs URL was stored, so no browser preview can be loaded.')
+        .first()
+    ).toBeVisible()
+    const maliciousUrlLinkedDocToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc Malicious linked Google Doc URL'
+    })
+    await expect(maliciousUrlLinkedDocToggle).toBeVisible()
+    await maliciousUrlLinkedDocToggle.click()
+    const maliciousUrlBrowserPreview = actionPane.getByRole('region', {
+      name: 'Google Docs browser preview for Malicious linked Google Doc URL'
+    })
+    await expect(maliciousUrlBrowserPreview).toBeVisible()
+    await expect(maliciousUrlBrowserPreview.locator('webview')).toHaveCount(0)
+    await expect(
+      maliciousUrlBrowserPreview
+        .getByText(
+          'The stored Google Docs URL is not an expected Google Docs document URL, so no browser preview can be loaded.'
+        )
+        .first()
+    ).toBeVisible()
     await expect(
       actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
     ).toHaveCount(0)
@@ -581,17 +675,30 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(actionPane).toBeVisible()
     await expect(resizeHandle).toBeVisible()
     const restoredLinkedDocToggle = actionPane.getByRole('button', {
-      name: 'Toggle linked Google Doc Fixture linked Google Doc'
+      name: 'Toggle linked Google Doc Fixture linked Google Doc',
+      exact: true
     })
     await expect(restoredLinkedDocToggle).toBeVisible()
     await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toHaveCount(0)
-    await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
+    await expect(
+      actionPane.getByRole('region', {
+        name: 'Google Docs browser preview for Fixture linked Google Doc'
+      })
+    ).toHaveCount(0)
     await restoredLinkedDocToggle.click()
     await expect(
       actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
     ).toHaveCount(0)
     await expect(actionPane.getByRole('link', { name: 'Open in Google Docs' })).toBeVisible()
-    await expect(actionPane.getByText('Preview placeholder')).toBeVisible()
+    const restoredBrowserPreview = actionPane.getByRole('region', {
+      name: 'Google Docs browser preview for Fixture linked Google Doc'
+    })
+    await expect(restoredBrowserPreview).toBeVisible()
+    await expect(restoredBrowserPreview.locator('webview')).toHaveAttribute(
+      'src',
+      fixtureLinkedDocUrl
+    )
+    await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
   } finally {
     await restoreProjectArtifacts()
   }
