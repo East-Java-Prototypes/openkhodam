@@ -1,5 +1,5 @@
 import { lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, posix } from 'node:path'
 
 import type {
   LinkedGoogleDoc,
@@ -11,11 +11,14 @@ import type {
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 
-import { JsonConfigFile } from '../config/json-config-file'
+import { JsonConfigFile, writeJsonConfigFile } from '../config/json-config-file'
+import type { GoogleDocDocumentArtifact } from './google-workspace-runtime'
 
 export const OPENKHODAM_PROJECT_DIRECTORY_NAME = '.openkhodam'
 export const PROJECT_ARTIFACTS_CONFIG_VERSION = 1
 export const PROJECT_ARTIFACTS_FILE_NAME = 'artifacts.json'
+export const PROJECT_ARTIFACTS_DIRECTORY_NAME = 'artifacts'
+export const GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME = 'google-docs'
 
 export type ProjectArtifactsFileStoreOptions = {
   readonly now?: () => number
@@ -37,9 +40,21 @@ type ProjectArtifactsStoreRecordInput = Omit<RecordLinkedGoogleDocInput, 'projec
 type ProjectArtifactsStoreListingInput = Omit<UpdateLinkedGoogleDocListingInput, 'projectDirectory'>
 
 type NormalizedLinkedGoogleDocRecord = {
+  artifactPath: string | null
   id: string
   title: string | null
   url: string | null
+}
+
+type FileStat = NonNullable<ReturnType<typeof lstatSync>>
+
+export type PersistGoogleDocDocumentArtifactInput = {
+  document: GoogleDocDocumentArtifact
+  projectDirectory: string
+}
+
+export type PersistGoogleDocDocumentArtifactResult = {
+  artifactPath: string
 }
 
 export class ProjectArtifactsFileStore {
@@ -96,6 +111,7 @@ export class ProjectArtifactsFileStore {
       const existing = sessionDocs[existingIndex]
       const updatedDoc = {
         ...nextDoc,
+        artifactPath: nextDoc.artifactPath ?? existing.artifactPath,
         firstSeenAt: existing.firstSeenAt,
         firstMessageId: existing.firstMessageId ?? nextDoc.firstMessageId,
         listed: existing.listed
@@ -122,6 +138,19 @@ export class ProjectArtifactsFileStore {
     input: ProjectArtifactsStoreListingInput
   ): Promise<LinkedGoogleDoc | null> {
     return this.setLinkedGoogleDocListed(input, true)
+  }
+
+  async persistGoogleDocDocumentArtifact(
+    document: GoogleDocDocumentArtifact
+  ): Promise<PersistGoogleDocDocumentArtifactResult> {
+    const documentId = normalizeGoogleDocArtifactDocumentId(document.id)
+    const artifactPath = getGoogleDocArtifactRelativePath(documentId)
+    const filePath = getGoogleDocArtifactFilePath(this.projectDirectory, documentId)
+
+    this.prepareGoogleDocArtifactPathForWrite(filePath)
+    await writeJsonConfigFile(filePath, document)
+
+    return { artifactPath }
   }
 
   private async setLinkedGoogleDocListed(
@@ -160,6 +189,12 @@ export class ProjectArtifactsFileStore {
     this.validateProjectDirectory()
     ensureProjectArtifactsDirectory(this.projectDirectory)
     validateProjectArtifactsPath(this.projectDirectory, this.filePath)
+  }
+
+  private prepareGoogleDocArtifactPathForWrite(filePath: string): void {
+    this.validateProjectDirectory()
+    ensureGoogleDocsArtifactsDirectory(this.projectDirectory)
+    validateGoogleDocsArtifactPath(this.projectDirectory, filePath)
   }
 }
 
@@ -210,6 +245,12 @@ export async function getOrCreateLinkedGoogleDoc(
     messageId: input.messageId,
     sessionId
   })
+}
+
+export async function persistGoogleDocDocumentArtifact(
+  input: PersistGoogleDocDocumentArtifactInput
+): Promise<PersistGoogleDocDocumentArtifactResult> {
+  return createProjectArtifactsStore(input).persistGoogleDocDocumentArtifact(input.document)
 }
 
 export function createDefaultProjectArtifactsConfig(): ProjectArtifactsConfig {
@@ -266,42 +307,125 @@ export function normalizeProjectDirectory(projectDirectory: string): string {
 }
 
 function ensureProjectArtifactsDirectory(projectDirectory: string): void {
-  const directoryPath = getProjectArtifactsDirectoryPath(projectDirectory)
-  if (lstatIfExists(directoryPath)) return
+  ensureRegularDirectory(
+    getProjectArtifactsDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam'
+  )
+}
 
-  try {
-    mkdirSync(directoryPath)
-  } catch (error) {
-    if (!isNodeError(error) || error.code !== 'EEXIST') throw error
-  }
+function ensureGoogleDocsArtifactsDirectory(projectDirectory: string): void {
+  ensureProjectArtifactsDirectory(projectDirectory)
+  ensureRegularDirectory(
+    getProjectArtifactDataDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam/artifacts'
+  )
+  ensureRegularDirectory(
+    getGoogleDocsArtifactsDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam/artifacts/google-docs'
+  )
 }
 
 function validateProjectArtifactsPath(projectDirectory: string, filePath: string): void {
   const directoryPath = getProjectArtifactsDirectoryPath(projectDirectory)
-  const directoryStat = lstatIfExists(directoryPath)
-  if (!directoryStat) return
-  if (directoryStat.isSymbolicLink()) {
-    throw new Error('Project artifacts directory .openkhodam must not be a symlink.')
-  }
-  if (!directoryStat.isDirectory()) {
-    throw new Error('Project artifacts directory .openkhodam must be a directory.')
-  }
+  validateRegularDirectoryIfExists(directoryPath, 'Project artifacts directory .openkhodam')
+  validateRegularFileIfExists(filePath, 'Project artifacts file artifacts.json')
+}
 
-  const fileStat = lstatIfExists(filePath)
-  if (!fileStat) return
-  if (fileStat.isSymbolicLink()) {
-    throw new Error('Project artifacts file artifacts.json must not be a symlink.')
-  }
-  if (!fileStat.isFile()) {
-    throw new Error('Project artifacts file artifacts.json must be a regular file.')
-  }
+function validateGoogleDocsArtifactPath(projectDirectory: string, filePath: string): void {
+  validateRegularDirectoryIfExists(
+    getProjectArtifactsDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam'
+  )
+  validateRegularDirectoryIfExists(
+    getProjectArtifactDataDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam/artifacts'
+  )
+  validateRegularDirectoryIfExists(
+    getGoogleDocsArtifactsDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam/artifacts/google-docs'
+  )
+  validateRegularFileIfExists(filePath, 'Google Docs artifact file')
 }
 
 function getProjectArtifactsDirectoryPath(projectDirectory: string): string {
   return join(projectDirectory, OPENKHODAM_PROJECT_DIRECTORY_NAME)
 }
 
-function lstatIfExists(path: string): ReturnType<typeof lstatSync> | null {
+function getProjectArtifactDataDirectoryPath(projectDirectory: string): string {
+  return join(projectDirectory, OPENKHODAM_PROJECT_DIRECTORY_NAME, PROJECT_ARTIFACTS_DIRECTORY_NAME)
+}
+
+function getGoogleDocsArtifactsDirectoryPath(projectDirectory: string): string {
+  return join(
+    projectDirectory,
+    OPENKHODAM_PROJECT_DIRECTORY_NAME,
+    PROJECT_ARTIFACTS_DIRECTORY_NAME,
+    GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME
+  )
+}
+
+function getGoogleDocArtifactRelativePath(documentId: string): string {
+  return posix.join(
+    OPENKHODAM_PROJECT_DIRECTORY_NAME,
+    PROJECT_ARTIFACTS_DIRECTORY_NAME,
+    GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME,
+    `${documentId}.json`
+  )
+}
+
+function getGoogleDocArtifactFilePath(projectDirectory: string, documentId: string): string {
+  return join(
+    projectDirectory,
+    OPENKHODAM_PROJECT_DIRECTORY_NAME,
+    PROJECT_ARTIFACTS_DIRECTORY_NAME,
+    GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME,
+    `${documentId}.json`
+  )
+}
+
+function ensureRegularDirectory(directoryPath: string, displayName: string): void {
+  const directoryStat = lstatIfExists(directoryPath)
+  if (directoryStat) {
+    validateDirectoryStat(directoryStat, displayName)
+    return
+  }
+
+  try {
+    mkdirSync(directoryPath)
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'EEXIST') throw error
+  }
+
+  validateRegularDirectoryIfExists(directoryPath, displayName)
+}
+
+function validateRegularDirectoryIfExists(directoryPath: string, displayName: string): void {
+  const directoryStat = lstatIfExists(directoryPath)
+  if (!directoryStat) return
+  validateDirectoryStat(directoryStat, displayName)
+}
+
+function validateDirectoryStat(stat: FileStat, displayName: string): void {
+  if (stat.isSymbolicLink()) {
+    throw new Error(`${displayName} must not be a symlink.`)
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`${displayName} must be a directory.`)
+  }
+}
+
+function validateRegularFileIfExists(filePath: string, displayName: string): void {
+  const fileStat = lstatIfExists(filePath)
+  if (!fileStat) return
+  if (fileStat.isSymbolicLink()) {
+    throw new Error(`${displayName} must not be a symlink.`)
+  }
+  if (!fileStat.isFile()) {
+    throw new Error(`${displayName} must be a regular file.`)
+  }
+}
+
+function lstatIfExists(path: string): FileStat | null {
   try {
     return lstatSync(path)
   } catch (error) {
@@ -340,6 +464,7 @@ function normalizeStoredLinkedGoogleDoc(value: unknown): LinkedGoogleDoc | null 
   const lastSeenAt = normalizeStoredTimestamp(value.lastSeenAt) ?? firstSeenAt
 
   return {
+    artifactPath: normalizeStoredArtifactPath(value.artifactPath),
     id,
     title: normalizeStoredString(value.title),
     url: normalizeStoredUrl(value.url),
@@ -374,6 +499,7 @@ function normalizeLinkedGoogleDocRecordInput(
   if (!isRecord(value)) throw new Error('Linked Google Doc record must be an object.')
 
   return {
+    artifactPath: normalizeInputArtifactPath(value.artifactPath),
     id: normalizeRequiredString(value.id, 'doc.id'),
     title: normalizeOptionalString(value.title),
     url: normalizeInputUrl(value.url)
@@ -417,6 +543,50 @@ function normalizeStoredTimestamp(value: unknown): number | null {
   if (typeof value !== 'number') return null
   if (!Number.isFinite(value)) return null
   return Math.max(0, Math.trunc(value))
+}
+
+function normalizeGoogleDocArtifactDocumentId(value: unknown): string {
+  const documentId = normalizeRequiredString(value, 'document.id')
+  if (!isSafeArtifactFileName(documentId)) {
+    throw new Error('Google Docs document ID is not safe for an artifact file path.')
+  }
+
+  return documentId
+}
+
+function normalizeInputArtifactPath(value: unknown): string | null {
+  const normalized = normalizeOptionalString(value)
+  if (!normalized) return null
+  if (!isSafeGoogleDocArtifactPath(normalized)) {
+    throw new Error('Linked Google Doc artifact path must be a safe project-local path.')
+  }
+
+  return normalized
+}
+
+function normalizeStoredArtifactPath(value: unknown): string | null {
+  const normalized = normalizeStoredString(value)
+  if (!normalized) return null
+  return isSafeGoogleDocArtifactPath(normalized) ? normalized : null
+}
+
+function isSafeArtifactFileName(value: string): boolean {
+  return value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\')
+}
+
+function isSafeGoogleDocArtifactPath(value: string): boolean {
+  if (isAbsolute(value) || value.includes('\\')) return false
+
+  const parts = value.split('/')
+  if (parts.some((part) => !part || part === '.' || part === '..')) return false
+
+  return (
+    parts.length === 4 &&
+    parts[0] === OPENKHODAM_PROJECT_DIRECTORY_NAME &&
+    parts[1] === PROJECT_ARTIFACTS_DIRECTORY_NAME &&
+    parts[2] === GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME &&
+    parts[3].endsWith('.json')
+  )
 }
 
 function normalizeInputUrl(value: unknown): string | null {

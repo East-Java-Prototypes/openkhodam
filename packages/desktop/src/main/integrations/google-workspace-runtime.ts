@@ -11,6 +11,8 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const DEFAULT_DRIVE_SEARCH_LIMIT = 10
 const MAX_DRIVE_SEARCH_LIMIT = 20
 const TOKEN_EXPIRY_SKEW_MS = 60 * 1000
+const GOOGLE_DOCS_READ_PREVIEW_BLOCK_LIMIT = 20
+const GOOGLE_DOCS_READ_PREVIEW_TEXT_LIMIT = 12_000
 
 type Fetch = typeof fetch
 
@@ -79,7 +81,6 @@ export type GoogleDocDocumentArtifact = {
   title: string | null
   revision: string | null
   text: string
-  markdown: string
   link: string | null
   body: {
     blocks: GoogleDocBodyBlock[]
@@ -91,7 +92,17 @@ export type GoogleDocBodyBlock = {
   ordinal: number
   type: 'paragraph'
   text: string
-  markdown: string
+}
+
+export type GoogleDocDocumentPreviewMetadata = {
+  truncated: boolean
+  totalTextLength: number
+  totalBlockCount: number
+  includedBlockCount: number
+}
+
+export type GoogleDocDocumentPreviewArtifact = GoogleDocDocumentArtifact & {
+  preview: GoogleDocDocumentPreviewMetadata
 }
 
 export type GoogleDocsReadDocumentResult = {
@@ -209,6 +220,30 @@ export function createDocsDocumentUrl(documentId: string): URL {
     'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
   )
   return url
+}
+
+export function createGoogleDocDocumentPreview(
+  document: GoogleDocDocumentArtifact
+): GoogleDocDocumentPreviewArtifact {
+  const blocks = limitGoogleDocBodyBlocksForPreview(document.body.blocks)
+  const text = blocks
+    .map((block) => block.text)
+    .join('')
+    .trimEnd()
+
+  return {
+    ...document,
+    text,
+    body: {
+      blocks
+    },
+    preview: {
+      truncated: text.length < document.text.length || blocks.length < document.body.blocks.length,
+      totalTextLength: document.text.length,
+      totalBlockCount: document.body.blocks.length,
+      includedBlockCount: blocks.length
+    }
+  }
 }
 
 function normalizeDocumentId(documentId: string): string {
@@ -397,7 +432,6 @@ function toSafeGoogleDocDocument(
     title: typeof value.title === 'string' && value.title ? value.title : null,
     revision: typeof value.revisionId === 'string' && value.revisionId ? value.revisionId : null,
     text,
-    markdown: text,
     link: createGoogleDocLink(id),
     body: {
       blocks: extractGoogleDocBodyBlocks(value)
@@ -444,11 +478,33 @@ function extractGoogleDocBodyBlocks(document: GoogleDocsDocumentResponse): Googl
         id: `body-block-${index + 1}`,
         ordinal: index + 1,
         type: 'paragraph' as const,
-        text,
-        markdown: text
+        text
       }
     ]
   })
+}
+
+function limitGoogleDocBodyBlocksForPreview(blocks: GoogleDocBodyBlock[]): GoogleDocBodyBlock[] {
+  const previewBlocks: GoogleDocBodyBlock[] = []
+  let remainingTextLength = GOOGLE_DOCS_READ_PREVIEW_TEXT_LIMIT
+
+  for (const block of blocks.slice(0, GOOGLE_DOCS_READ_PREVIEW_BLOCK_LIMIT)) {
+    if (remainingTextLength <= 0) break
+
+    if (block.text.length <= remainingTextLength) {
+      previewBlocks.push(block)
+      remainingTextLength -= block.text.length
+      continue
+    }
+
+    previewBlocks.push({
+      ...block,
+      text: block.text.slice(0, remainingTextLength)
+    })
+    break
+  }
+
+  return previewBlocks
 }
 
 function extractParagraphTextRuns(value: unknown): Array<{
