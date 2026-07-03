@@ -130,3 +130,13 @@
     @apply font-sans;
   }
 }
+
+.app-titlebar {
+  -webkit-app-region: drag;
+  padding-inline: 5.5rem 8.75rem;
+}
+
+.app-region-no-drag,
+.app-region-no-drag * {
+  -webkit-app-region: no-drag;
+}

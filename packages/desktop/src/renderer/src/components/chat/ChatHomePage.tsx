@@ -2,7 +2,9 @@ import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LinkedGoogleDoc } from '@openkhodam/ui/types'
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -74,6 +76,14 @@ type ChatHomePageProps = {
   activePane?: ReactNode
 }
 
+type ActionPaneControlsContextValue = {
+  isActionPaneOpen: boolean
+  setActionPaneOpen: (open: boolean) => void
+  setActionPaneAvailable: (available: boolean) => void
+}
+
+const ActionPaneControlsContext = createContext<ActionPaneControlsContextValue | null>(null)
+
 const emptyChatMessages: ChatMessage[] = []
 const emptyLinkedDocs: LinkedGoogleDoc[] = []
 
@@ -85,6 +95,17 @@ export function ChatHomePage({
 }: ChatHomePageProps): JSX.Element {
   const projectSidebarPanelRef = useRef<PanelImperativeHandle | null>(null)
   const [isProjectSidebarOpen, setProjectSidebarOpen] = useState(true)
+  const [isActionPaneOpen, setActionPaneOpen] = useState(true)
+  const [isActionPaneAvailable, setActionPaneAvailable] = useState(false)
+
+  const actionPaneControls = useMemo<ActionPaneControlsContextValue>(
+    () => ({
+      isActionPaneOpen,
+      setActionPaneOpen,
+      setActionPaneAvailable
+    }),
+    [isActionPaneOpen]
+  )
 
   const syncProjectSidebarPanel = useCallback((open: boolean): void => {
     const projectSidebarPanel = projectSidebarPanelRef.current
@@ -116,63 +137,179 @@ export function ChatHomePage({
     syncProjectSidebarPanel(isProjectSidebarOpen)
   }, [isProjectSidebarOpen, syncProjectSidebarPanel])
 
+  const toggleProjectSidebar = useCallback((): void => {
+    handleProjectSidebarOpenChange(!isProjectSidebarOpen)
+  }, [handleProjectSidebarOpenChange, isProjectSidebarOpen])
+
+  const toggleActionPane = useCallback((): void => {
+    setActionPaneOpen((open) => !open)
+  }, [])
+
   return (
-    <SidebarProvider
-      open={isProjectSidebarOpen}
-      onOpenChange={handleProjectSidebarOpenChange}
-      style={
-        {
-          '--sidebar-width': '100%'
-        } as CSSProperties
-      }
-      className="h-dvh min-h-0 overflow-hidden"
-    >
-      <ResizablePanelGroup
-        id="chat-home-layout"
-        orientation="horizontal"
-        className="min-h-0 min-w-0"
+    <ActionPaneControlsContext.Provider value={actionPaneControls}>
+      <SidebarProvider
+        open={isProjectSidebarOpen}
+        onOpenChange={handleProjectSidebarOpenChange}
+        style={
+          {
+            '--sidebar-width': '100%'
+          } as CSSProperties
+        }
+        className="flex h-dvh min-h-0 flex-col overflow-hidden"
       >
-        <ResizablePanel
-          id="project-sidebar-panel"
-          panelRef={projectSidebarPanelRef}
-          defaultSize="25%"
-          minSize="16rem"
-          collapsedSize="3rem"
-          collapsible
-          onResize={handleProjectSidebarResize}
+        <ChatShellTitlebar
+          isProjectSidebarOpen={isProjectSidebarOpen}
+          onToggleProjectSidebar={toggleProjectSidebar}
+          hasActionPane={isActionPaneAvailable}
+          isActionPaneOpen={isActionPaneOpen}
+          onToggleActionPane={toggleActionPane}
+        />
+        <ResizablePanelGroup
+          id="chat-home-layout"
+          orientation="horizontal"
+          className="min-h-0 min-w-0 flex-1"
         >
-          {isProjectSidebarOpen ? (
-            <ProjectChatSidebar
-              shell={shell}
-              project={project}
-              session={session}
-              onCollapse={() => handleProjectSidebarOpenChange(false)}
-            />
-          ) : (
-            <CollapsedProjectSidebarRail onRestore={() => handleProjectSidebarOpenChange(true)} />
-          )}
-        </ResizablePanel>
-        <ResizableHandle withHandle aria-label="Resize project sidebar" />
-        <ResizablePanel id="active-pane-panel" defaultSize="75%" minSize="20rem">
-          <main className="grid h-full min-h-0 min-w-0 grid-cols-1 overflow-hidden bg-background text-foreground">
-            {activePane ?? <ActiveChatPanel project={project} session={session} />}
-          </main>
-        </ResizablePanel>
-      </ResizablePanelGroup>
-    </SidebarProvider>
+          <ResizablePanel
+            id="project-sidebar-panel"
+            panelRef={projectSidebarPanelRef}
+            defaultSize="25%"
+            minSize="16rem"
+            collapsedSize="3rem"
+            collapsible
+            onResize={handleProjectSidebarResize}
+          >
+            {isProjectSidebarOpen ? (
+              <ProjectChatSidebar shell={shell} project={project} session={session} />
+            ) : (
+              <CollapsedProjectSidebarRail onRestore={() => handleProjectSidebarOpenChange(true)} />
+            )}
+          </ResizablePanel>
+          <ResizableHandle withHandle aria-label="Resize project sidebar" />
+          <ResizablePanel id="active-pane-panel" defaultSize="75%" minSize="20rem">
+            <main className="grid h-full min-h-0 min-w-0 grid-cols-1 overflow-hidden bg-background text-foreground">
+              {activePane ?? <ActiveChatPanel project={project} session={session} />}
+            </main>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      </SidebarProvider>
+    </ActionPaneControlsContext.Provider>
   )
+}
+
+function ChatShellTitlebar({
+  isProjectSidebarOpen,
+  onToggleProjectSidebar,
+  hasActionPane,
+  isActionPaneOpen,
+  onToggleActionPane
+}: {
+  isProjectSidebarOpen: boolean
+  onToggleProjectSidebar: () => void
+  hasActionPane: boolean
+  isActionPaneOpen: boolean
+  onToggleActionPane: () => void
+}): JSX.Element {
+  const projectSidebarLabel = isProjectSidebarOpen
+    ? 'Collapse project sidebar'
+    : 'Restore project sidebar'
+  const actionPaneLabel = isActionPaneOpen ? 'Collapse action pane' : 'Restore action pane'
+
+  return (
+    <div
+      className="app-titlebar flex h-10 shrink-0 items-center gap-2 border-b bg-background/95 text-foreground"
+      role="toolbar"
+      aria-label="Pane controls"
+    >
+      <div className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
+        OpenKhodam
+      </div>
+      <div
+        className="app-region-no-drag flex shrink-0 items-center gap-1"
+        role="group"
+        aria-label="Pane toggles"
+      >
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          className="app-region-no-drag"
+          aria-label={projectSidebarLabel}
+          title={projectSidebarLabel}
+          aria-pressed={!isProjectSidebarOpen}
+          onClick={onToggleProjectSidebar}
+        >
+          <PaneToggleIcon side="left" open={isProjectSidebarOpen} />
+        </Button>
+        {hasActionPane ? (
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            className="app-region-no-drag"
+            aria-label={actionPaneLabel}
+            title={actionPaneLabel}
+            aria-pressed={!isActionPaneOpen}
+            onClick={onToggleActionPane}
+          >
+            <PaneToggleIcon side="right" open={isActionPaneOpen} />
+          </Button>
+        ) : (
+          <div className="size-6" aria-hidden="true" />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PaneToggleIcon({
+  side,
+  open
+}: {
+  side: 'left' | 'right'
+  open: boolean
+}): JSX.Element {
+  const dividerX = side === 'left' ? 8 : 16
+  const arrowPath =
+    side === 'left'
+      ? open
+        ? 'm11 9-3 3 3 3'
+        : 'm8 9 3 3-3 3'
+      : open
+        ? 'm13 9 3 3-3 3'
+        : 'm16 9-3 3 3 3'
+
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="1" />
+      <path d={`M${dividerX} 4v16`} />
+      <path d={arrowPath} />
+    </svg>
+  )
+}
+
+function useActionPaneControls(): ActionPaneControlsContextValue {
+  const context = useContext(ActionPaneControlsContext)
+  if (!context) throw new Error('ActiveChatPanel must be rendered within ChatHomePage.')
+
+  return context
 }
 
 function ProjectChatSidebar({
   shell,
   project,
-  session,
-  onCollapse
+  session
 }: {
   shell: OpenCodeChatShellState
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
-  onCollapse: () => void
 }): JSX.Element {
   return (
     <Sidebar
@@ -184,23 +321,13 @@ function ProjectChatSidebar({
       <SidebarHeader className="p-4 pb-2">
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="flex items-start justify-between gap-3 px-2 py-1">
+            <div className="px-2 py-1">
               <div className="min-w-0">
                 <p className="text-muted-foreground text-sm font-medium">OpenKhodam</p>
                 <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
                   Project folders
                 </h1>
               </div>
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                aria-label="Collapse project sidebar"
-                title="Collapse project sidebar"
-                onClick={onCollapse}
-              >
-                Collapse
-              </Button>
             </div>
           </SidebarMenuItem>
           <SidebarMenuItem>
@@ -517,8 +644,8 @@ export function ActiveChatPanel({
   composer?: ReactNode
   composerErrorMessage?: string | null
 }): JSX.Element {
+  const { isActionPaneOpen, setActionPaneOpen, setActionPaneAvailable } = useActionPaneControls()
   const actionPanePanelRef = useRef<PanelImperativeHandle | null>(null)
-  const [isActionPaneOpen, setActionPaneOpen] = useState(true)
   const messages = session?.messages ?? emptyChatMessages
 
   const syncActionPanePanel = useCallback((open: boolean): void => {
@@ -538,18 +665,23 @@ export function ActiveChatPanel({
       syncActionPanePanel(open)
       setActionPaneOpen(open)
     },
-    [syncActionPanePanel]
+    [setActionPaneOpen, syncActionPanePanel]
   )
 
   const handleActionPaneResize = useCallback((size: PanelSize): void => {
     const isCollapsed = actionPanePanelRef.current?.isCollapsed() ?? size.inPixels <= 64
 
     setActionPaneOpen(!isCollapsed)
-  }, [])
+  }, [setActionPaneOpen])
 
   useEffect(() => {
     syncActionPanePanel(isActionPaneOpen)
   }, [isActionPaneOpen, syncActionPanePanel])
+
+  useEffect(() => {
+    setActionPaneAvailable(true)
+    return () => setActionPaneAvailable(false)
+  }, [setActionPaneAvailable])
 
   return (
     <ResizablePanelGroup
@@ -615,10 +747,7 @@ export function ActiveChatPanel({
         onResize={handleActionPaneResize}
       >
         {isActionPaneOpen ? (
-          <ChatActionPane
-            linkedDocs={linkedDocs}
-            onCollapse={() => handleActionPaneOpenChange(false)}
-          />
+          <ChatActionPane linkedDocs={linkedDocs} />
         ) : (
           <CollapsedActionPaneRail onRestore={() => handleActionPaneOpenChange(true)} />
         )}

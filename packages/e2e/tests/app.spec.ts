@@ -32,6 +32,7 @@ const selectedProjectSessions = (page: Page): Locator =>
 const messageTranscript = (page: Page): Locator => page.getByRole('region', { name: 'Messages' })
 const chatActionPane = (page: Page): Locator =>
   page.getByRole('complementary', { name: 'Action pane', exact: true })
+const paneControls = (page: Page): Locator => page.getByRole('toolbar', { name: 'Pane controls' })
 const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
@@ -86,6 +87,7 @@ async function expectOpenedProjectRouteResolved(page: Page): Promise<void> {
 }
 
 async function waitForChatShell(page: Page): Promise<void> {
+  await expect(paneControls(page)).toBeVisible()
   await expect(projectHomeLink(page)).toBeVisible()
   await expect(projectSettingsLink(page)).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Project sessions' })).toHaveCount(0)
@@ -96,6 +98,40 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toBeVisible()
+}
+
+async function appRegion(locator: Locator): Promise<string> {
+  return locator.evaluate((element) =>
+    getComputedStyle(element).getPropertyValue('-webkit-app-region')
+  )
+}
+
+async function expectRightAlignedPaneControls(
+  titlebar: Locator,
+  projectSidebarButton: Locator,
+  actionPaneButton: Locator
+): Promise<void> {
+  const titlebarBox = await elementBox(titlebar, 'pane controls titlebar')
+  const projectButtonBox = await elementBox(projectSidebarButton, 'project sidebar titlebar toggle')
+  const actionButtonBox = await elementBox(actionPaneButton, 'action pane titlebar toggle')
+  const rightSideStart = titlebarBox.x + titlebarBox.width * 0.65
+
+  expect(
+    projectButtonBox.x,
+    'project sidebar toggle should sit in the right titlebar cluster'
+  ).toBeGreaterThan(rightSideStart)
+  expect(
+    actionButtonBox.x,
+    'action pane toggle should sit to the right of project toggle'
+  ).toBeGreaterThan(projectButtonBox.x)
+  expect(
+    actionButtonBox.x - (projectButtonBox.x + projectButtonBox.width),
+    'titlebar pane toggles should be adjacent'
+  ).toBeLessThan(24)
+  expect(
+    actionButtonBox.x + actionButtonBox.width,
+    'titlebar pane toggles should stay inside the titlebar'
+  ).toBeLessThanOrEqual(titlebarBox.x + titlebarBox.width + 1)
 }
 
 async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<void>> {
@@ -301,9 +337,17 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
 
   const sidebar = appWindow.getByRole('complementary', { name: 'Project folders' })
   const resizeHandle = appWindow.getByRole('separator', { name: 'Resize project sidebar' })
+  const titlebar = paneControls(appWindow)
+  const collapseSidebarButton = titlebar.getByRole('button', { name: 'Collapse project sidebar' })
+  const collapseActionPaneButton = titlebar.getByRole('button', { name: 'Collapse action pane' })
   const initialSidebarBox = await elementBox(sidebar, 'expanded project sidebar')
   const handleBox = await elementBox(resizeHandle, 'project sidebar resize handle')
   const formerSidebarMaxWidth = await remToPixels(appWindow, 32)
+
+  await expect(collapseSidebarButton).toBeVisible()
+  await expectRightAlignedPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
+  await expect.poll(() => appRegion(titlebar)).toBe('drag')
+  await expect.poll(() => appRegion(collapseSidebarButton)).toBe('no-drag')
 
   await appWindow.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
   await appWindow.mouse.down()
@@ -321,19 +365,20 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
     .toBeGreaterThan(Math.round(formerSidebarMaxWidth) + 20)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
 
-  await appWindow.getByRole('button', { name: 'Collapse project sidebar' }).click()
+  await collapseSidebarButton.click()
   const collapsedRail = appWindow.getByRole('complementary', {
     name: 'Collapsed project sidebar'
   })
   await expect(collapsedRail).toBeVisible()
   await expect(sidebar).toHaveCount(0)
-  await expect(appWindow.getByRole('button', { name: 'Restore project sidebar' })).toBeVisible()
+  await expect(titlebar.getByRole('button', { name: 'Restore project sidebar' })).toBeVisible()
+  await expect(collapsedRail.getByRole('button', { name: 'Restore project sidebar' })).toBeVisible()
   expect((await elementBox(collapsedRail, 'collapsed project sidebar rail')).width).toBeLessThan(
     initialSidebarBox.width
   )
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
 
-  await appWindow.getByRole('button', { name: 'Restore project sidebar' }).click()
+  await titlebar.getByRole('button', { name: 'Restore project sidebar' }).click()
   await expect(sidebar).toBeVisible()
   await expect(projectHomeLink(appWindow)).toBeVisible()
   await expect(projectSettingsLink(appWindow)).toBeVisible()
@@ -350,10 +395,17 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
 
     const actionPane = chatActionPane(appWindow)
     const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
+    const titlebar = paneControls(appWindow)
+    const collapseSidebarButton = titlebar.getByRole('button', { name: 'Collapse project sidebar' })
+    const collapseActionPaneButton = titlebar.getByRole('button', { name: 'Collapse action pane' })
     const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
     const handleBox = await elementBox(resizeHandle, 'action pane resize handle')
     const formerActionPaneMaxWidth = await remToPixels(appWindow, 30)
 
+    await expect(collapseActionPaneButton).toBeVisible()
+    await expectRightAlignedPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
+    await expect.poll(() => appRegion(titlebar)).toBe('drag')
+    await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
     await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toBeVisible()
     const linkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc'
@@ -400,17 +452,18 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       .toBeGreaterThan(Math.round(formerActionPaneMaxWidth) + 20)
     await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 
-    await appWindow.getByRole('button', { name: 'Collapse action pane' }).click()
+    await collapseActionPaneButton.click()
     const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
     await expect(collapsedRail).toBeVisible()
     await expect(actionPane).toHaveCount(0)
-    await expect(appWindow.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
+    await expect(titlebar.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
+    await expect(collapsedRail.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
     expect((await elementBox(collapsedRail, 'collapsed action pane rail')).width).toBeLessThan(
       initialActionPaneBox.width
     )
     await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 
-    await appWindow.getByRole('button', { name: 'Restore action pane' }).click()
+    await titlebar.getByRole('button', { name: 'Restore action pane' }).click()
     await expect(actionPane).toBeVisible()
     await expect(resizeHandle).toBeVisible()
     const restoredLinkedDocToggle = actionPane.getByRole('button', {
