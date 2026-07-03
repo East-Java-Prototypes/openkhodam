@@ -15,16 +15,20 @@ const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.
 const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
 const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
+const projectSidebar = (page: Page): Locator =>
+  page.getByRole('complementary', { name: 'Project folders' })
+const projectSidebarHeader = (page: Page): Locator =>
+  projectSidebar(page).locator('[data-slot="sidebar-header"]')
+const projectSidebarFooter = (page: Page): Locator =>
+  projectSidebar(page).locator('[data-slot="sidebar-footer"]')
+const projectHeartbeatStatus = (page: Page): Locator =>
+  projectSidebarFooter(page).locator('[data-slot="sidebar-heartbeat"]')
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
 const projectSettingsLink = (page: Page): Locator =>
-  page
-    .getByRole('complementary', { name: 'Project folders' })
-    .getByRole('link', { name: 'Settings', exact: true })
+  projectSidebar(page).getByRole('link', { name: 'Settings', exact: true })
 const projectHomeLink = (page: Page): Locator =>
-  page
-    .getByRole('complementary', { name: 'Project folders' })
-    .getByRole('link', { name: 'Home', exact: true })
+  projectSidebar(page).getByRole('link', { name: 'Home', exact: true })
 const sessionChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' }).getByRole('link')
 const selectedProjectSessions = (page: Page): Locator =>
@@ -33,7 +37,6 @@ const messageTranscript = (page: Page): Locator => page.getByRole('region', { na
 const chatActionPane = (page: Page): Locator =>
   page.getByRole('complementary', { name: 'Action pane', exact: true })
 const paneControls = (page: Page): Locator => page.getByRole('toolbar', { name: 'Pane controls' })
-const eventStatusBadge = (page: Page): Locator => page.getByText(/^(Live|Events paused)/).first()
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
 const resizeTestViewport = { width: 1200, height: 700 }
@@ -60,6 +63,35 @@ async function elementBox(locator: Locator, description: string): Promise<Elemen
   expect(box, `${description} should have a bounding box`).not.toBeNull()
   if (!box) throw new Error(`${description} should have a bounding box`)
   return box
+}
+
+async function expectFooterHeartbeat(locator: Locator): Promise<void> {
+  await expect(locator).toBeVisible()
+  await expect(locator).toHaveAttribute('role', 'img')
+  await expect(locator).toHaveAttribute(
+    'aria-label',
+    /OpenCode (connected|disconnected)\..*(Last heartbeat:|No heartbeat received\.|Waiting for the first heartbeat\.)/
+  )
+  await expect(locator).toHaveAttribute(
+    'title',
+    /OpenCode (connected|disconnected)\..*(Last heartbeat:|No heartbeat received\.|Waiting for the first heartbeat\.)/
+  )
+  await expect
+    .poll(
+      async () =>
+        locator.evaluate((element) => {
+          const state = element.getAttribute('data-state')
+          const dotClass =
+            element.querySelector('[data-slot="sidebar-heartbeat-dot"]')?.getAttribute('class') ??
+            ''
+
+          if (state === 'connected' && dotClass.includes('bg-emerald-500')) return 'connected'
+          if (state === 'disconnected' && dotClass.includes('bg-destructive')) return 'disconnected'
+          return `${state ?? 'missing'}:${dotClass}`
+        }),
+      { message: 'footer heartbeat dot should match its connected/disconnected state' }
+    )
+    .toMatch(/^(connected|disconnected)$/)
 }
 
 async function remToPixels(page: Page, rem: number): Promise<number> {
@@ -90,6 +122,7 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(paneControls(page)).toBeVisible()
   await expect(projectHomeLink(page)).toBeVisible()
   await expect(projectSettingsLink(page)).toBeVisible()
+  await expect(projectHeartbeatStatus(page)).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Project folders' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Project sessions' })).toHaveCount(0)
@@ -322,8 +355,24 @@ async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplicati
 
 test('renders the built desktop chat shell', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
-  await expect(appWindow.getByText(/^(connected|starting|stopped|error)$/).first()).toBeVisible()
-  await expect(eventStatusBadge(appWindow)).toBeVisible()
+  await expect(
+    projectSidebarHeader(appWindow).getByText(/^(connected|starting|stopped|error)$/)
+  ).toHaveCount(0)
+  await expect(
+    projectSidebarHeader(appWindow).getByText(/^(Live( · .*)?|Events paused)$/)
+  ).toHaveCount(0)
+  await expectFooterHeartbeat(projectHeartbeatStatus(appWindow))
+  const footerBox = await elementBox(projectSidebarFooter(appWindow), 'project sidebar footer')
+  const settingsBox = await elementBox(
+    projectSettingsLink(appWindow),
+    'project settings footer link'
+  )
+  const heartbeatBox = await elementBox(
+    projectHeartbeatStatus(appWindow),
+    'project footer heartbeat'
+  )
+  expect(heartbeatBox.x).toBeGreaterThan(settingsBox.x)
+  expect(heartbeatBox.x + heartbeatBox.width).toBeLessThanOrEqual(footerBox.x + footerBox.width + 1)
   await expect(chatActionPane(appWindow)).toBeVisible()
   await expect(chatActionPane(appWindow).getByText('No linked Google Docs yet.')).toBeVisible()
   await expect(appWindow.getByText('Select a project to view sessions.').first()).toBeVisible()
@@ -496,7 +545,6 @@ test('opens a project by directory from the final chat shell', async ({ appWindo
   const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
 
   await expect(openButton).toBeDisabled()
-  await expect(appWindow.getByText('connected', { exact: true }).first()).toBeVisible()
   await directoryInput.fill(repositoryDirectory)
   await expect(openButton).toBeEnabled()
 
@@ -515,8 +563,8 @@ test('opens a project by directory into the project route with start composer', 
   const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
   const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
 
-  await expect(appWindow.getByText('connected', { exact: true }).first()).toBeVisible()
   await directoryInput.fill(repositoryDirectory)
+  await expect(openButton).toBeEnabled()
   await openButton.click()
   await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
@@ -898,10 +946,12 @@ test('keeps two prompts pending before the first stable projection arrives', asy
   await expect(appWindow.getByText(`Fake response for: ${secondPrompt}`)).toBeVisible()
 })
 
-test('shows the real live events status surface without fake SSE data', async ({ appWindow }) => {
+test('shows the real live events footer heartbeat without fake SSE data', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
-  await expect(eventStatusBadge(appWindow)).toBeVisible()
-  await expect(appWindow.getByText(/^(Live( · .*)?|Events paused)$/).first()).toBeVisible()
+  await expect(
+    projectSidebarHeader(appWindow).getByText(/^(Live( · .*)?|Events paused)$/)
+  ).toHaveCount(0)
+  await expectFooterHeartbeat(projectHeartbeatStatus(appWindow))
 })
 
 test('shows the real OpenCode sidecar settings surface', async ({ appWindow, electronApp }) => {
