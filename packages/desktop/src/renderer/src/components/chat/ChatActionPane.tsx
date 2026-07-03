@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
 import type { LinkedGoogleDoc } from '@openkhodam/ui/types'
+import { ExternalLinkIcon, EyeIcon } from 'lucide-react'
 
 import { buttonVariants } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -58,41 +59,57 @@ function LinkedDocList({ linkedDocs }: { linkedDocs: LinkedGoogleDoc[] }): JSX.E
 
 function LinkedDocItem({ doc }: { doc: LinkedGoogleDoc }): JSX.Element {
   const title = linkedDocTitle(doc)
+  const toggleLabel = `Toggle linked Google Doc ${title}`
+  const previewToggleLabel = `Toggle linked Google Doc preview ${title}`
+  const openLabel = `Open linked Google Doc ${title} in Google Docs`
+
   return (
     <Collapsible className="border bg-background/60" aria-label={`Linked Google Doc ${title}`}>
-      <CollapsibleTrigger
-        type="button"
-        className={cn(
-          buttonVariants({ variant: 'ghost' }),
-          'h-auto w-full justify-between gap-3 px-3 py-2 text-left whitespace-normal hover:bg-background/70'
-        )}
-        aria-label={`Toggle linked Google Doc ${title}`}
-      >
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="truncate text-sm font-medium">{title}</span>
-          <span className="text-muted-foreground line-clamp-2 text-xs leading-5">
-            {doc.url ?? 'No Google Docs URL stored.'}
+      <div className="flex items-stretch">
+        <CollapsibleTrigger
+          type="button"
+          className={cn(
+            buttonVariants({ variant: 'ghost' }),
+            'h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left whitespace-normal hover:bg-background/70'
+          )}
+          aria-label={toggleLabel}
+          title={toggleLabel}
+        >
+          <span className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="truncate text-sm font-medium">{title}</span>
+            <span className="text-muted-foreground line-clamp-2 text-xs leading-5">
+              {doc.url ?? 'No Google Docs URL stored.'}
+            </span>
           </span>
-        </span>
-        <span className="text-muted-foreground shrink-0 text-xs">Preview</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="border-t p-3">
-        <div className="flex flex-col gap-3">
+        </CollapsibleTrigger>
+        <div className="flex shrink-0 items-stretch border-l">
+          <CollapsibleTrigger
+            type="button"
+            className={cn(buttonVariants({ size: 'icon-xs', variant: 'ghost' }), 'h-auto min-h-10')}
+            aria-label={previewToggleLabel}
+            title={previewToggleLabel}
+          >
+            <EyeIcon aria-hidden="true" />
+          </CollapsibleTrigger>
           {doc.url ? (
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-sm font-medium text-foreground">Preview</p>
-              <a
-                href={doc.url}
-                target="_blank"
-                rel="noreferrer"
-                className={cn(buttonVariants({ size: 'xs', variant: 'outline' }), 'w-fit')}
-              >
-                Open in Google Docs
-              </a>
-            </div>
+            <a
+              href={doc.url}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={openLabel}
+              title={openLabel}
+              className={cn(
+                buttonVariants({ size: 'icon-xs', variant: 'ghost' }),
+                'h-auto min-h-10 border-l'
+              )}
+            >
+              <ExternalLinkIcon aria-hidden="true" />
+            </a>
           ) : null}
-          <LinkedDocBrowserPreview title={title} sourceUrl={doc.url} />
         </div>
+      </div>
+      <CollapsibleContent className="border-t">
+        <LinkedDocBrowserPreview title={title} sourceUrl={doc.url} />
       </CollapsibleContent>
     </Collapsible>
   )
@@ -109,13 +126,7 @@ function LinkedDocBrowserPreview({
   const unavailableMessage = 'No Google Docs URL was stored, so no browser preview can be loaded.'
 
   return (
-    <section className="overflow-hidden border bg-background/60" role="region" aria-label={label}>
-      <div className="border-b px-3 py-2 text-sm">
-        <p className="font-medium text-foreground">Browser preview</p>
-        <p className="mt-1 break-words text-muted-foreground text-xs leading-5">
-          {sourceUrl ?? unavailableMessage}
-        </p>
-      </div>
+    <section className="overflow-hidden bg-background/60" role="region" aria-label={label}>
       {sourceUrl ? (
         <webview
           aria-label={label}
