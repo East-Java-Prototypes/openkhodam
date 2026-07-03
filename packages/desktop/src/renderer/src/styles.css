@@ -133,7 +133,14 @@
 
 .app-titlebar {
   -webkit-app-region: drag;
-  padding-inline: 5.5rem 8.75rem;
+  --app-titlebar-left-safe-area: 5.5rem;
+  --app-titlebar-right-safe-area: 0.5rem;
+  padding-inline: var(--app-titlebar-left-safe-area) var(--app-titlebar-right-safe-area);
+}
+
+.app-titlebar[data-platform='win32'],
+.app-titlebar[data-platform='linux'] {
+  --app-titlebar-right-safe-area: 8.75rem;
 }
 
 .app-region-no-drag,

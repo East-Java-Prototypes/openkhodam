@@ -111,11 +111,14 @@ async function expectSplitCornerPaneControls(
   projectSidebarButton: Locator,
   actionPaneButton: Locator
 ): Promise<void> {
+  const platform = await titlebar.evaluate(() => window.api.platform)
   const titlebarBox = await elementBox(titlebar, 'pane controls titlebar')
   const projectButtonBox = await elementBox(projectSidebarButton, 'project sidebar titlebar toggle')
   const actionButtonBox = await elementBox(actionPaneButton, 'action pane titlebar toggle')
   const leftSideEnd = titlebarBox.x + titlebarBox.width * 0.35
   const rightSideStart = titlebarBox.x + titlebarBox.width * 0.65
+  const actionRightGap =
+    titlebarBox.x + titlebarBox.width - (actionButtonBox.x + actionButtonBox.width)
 
   expect(
     projectButtonBox.x + projectButtonBox.width,
@@ -129,6 +132,11 @@ async function expectSplitCornerPaneControls(
     actionButtonBox.x + actionButtonBox.width,
     'action pane toggle should stay inside the titlebar'
   ).toBeLessThanOrEqual(titlebarBox.x + titlebarBox.width + 1)
+  if (platform === 'darwin') {
+    expect(actionRightGap, 'macOS action pane toggle should sit near the right edge').toBeLessThan(
+      24
+    )
+  }
 }
 
 async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<void>> {

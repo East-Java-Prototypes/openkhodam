@@ -213,10 +213,12 @@ function ChatShellTitlebar({
     ? 'Collapse project sidebar'
     : 'Restore project sidebar'
   const actionPaneLabel = isActionPaneOpen ? 'Collapse action pane' : 'Restore action pane'
+  const platform = window.api.platform
 
   return (
     <div
       className="app-titlebar flex h-10 shrink-0 items-center gap-2 border-b bg-background/95 text-foreground"
+      data-platform={platform}
       role="toolbar"
       aria-label="Pane controls"
     >

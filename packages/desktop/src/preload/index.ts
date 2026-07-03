@@ -14,6 +14,7 @@ import type {
 
 // Custom APIs for renderer
 const api = {
+  platform: process.platform,
   getOpenCodeConnection: (): Promise<OpenCodeConnection> =>
     ipcRenderer.invoke('opencode:get-connection'),
   getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>

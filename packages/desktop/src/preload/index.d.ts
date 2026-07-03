@@ -18,7 +18,19 @@ export type {
   OpenCodeSidecarStatus
 } from '@openkhodam/ui/types'
 
+export type DesktopPlatform =
+  | 'aix'
+  | 'darwin'
+  | 'freebsd'
+  | 'linux'
+  | 'openbsd'
+  | 'sunos'
+  | 'win32'
+  | 'cygwin'
+  | 'netbsd'
+
 export type OpenKhodamAPI = {
+  platform: DesktopPlatform
   getOpenCodeConnection: () => Promise<OpenCodeConnection>
   getOpenCodeStatus: () => Promise<OpenCodeSidecarStatus>
   restartOpenCode: () => Promise<OpenCodeSidecarStatus>
