@@ -4,7 +4,6 @@ import { ExternalLinkIcon, EyeIcon } from 'lucide-react'
 
 import { buttonVariants } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
 export function ChatActionPane({ linkedDocs }: { linkedDocs: LinkedGoogleDoc[] }): JSX.Element {
@@ -14,15 +13,6 @@ export function ChatActionPane({ linkedDocs }: { linkedDocs: LinkedGoogleDoc[] }
       role="complementary"
       aria-label="Action pane"
     >
-      <header className="shrink-0 px-4 py-4">
-        <div className="min-w-0">
-          <p className="text-muted-foreground text-sm">Linked Google Docs</p>
-          <h2 id="action-pane-heading" className="text-lg font-semibold tracking-tight">
-            Action pane
-          </h2>
-        </div>
-      </header>
-      <Separator />
       {linkedDocs.length > 0 ? (
         <LinkedDocList linkedDocs={linkedDocs} />
       ) : (
@@ -41,13 +31,7 @@ export function ChatActionPane({ linkedDocs }: { linkedDocs: LinkedGoogleDoc[] }
 
 function LinkedDocList({ linkedDocs }: { linkedDocs: LinkedGoogleDoc[] }): JSX.Element {
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto p-4" aria-labelledby="linked-docs-heading">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 id="linked-docs-heading" className="text-sm font-semibold">
-          Linked Google Docs
-        </h3>
-        <span className="text-muted-foreground text-xs">{linkedDocs.length}</span>
-      </div>
+    <section className="min-h-0 flex-1 overflow-y-auto p-4" aria-label="Linked Google Docs">
       <div className="flex flex-col gap-2">
         {linkedDocs.map((doc) => (
           <LinkedDocItem key={doc.id} doc={doc} />

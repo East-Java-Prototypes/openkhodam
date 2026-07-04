@@ -578,7 +578,7 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expectSplitCornerPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
     await expect.poll(() => appRegion(titlebar)).toBe('drag')
     await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
-    await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toBeVisible()
+    await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toHaveCount(0)
     const linkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
