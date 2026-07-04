@@ -119,6 +119,21 @@ async function expectFooterHeartbeat(page: Page, locator: Locator): Promise<void
     heartbeatBox.width,
     'footer heartbeat should remain a compact dot indicator'
   ).toBeLessThanOrEqual(32)
+  await expect
+    .poll(
+      () =>
+        locator.evaluate((element) => {
+          const style = window.getComputedStyle(element)
+          return [
+            style.borderTopWidth,
+            style.borderRightWidth,
+            style.borderBottomWidth,
+            style.borderLeftWidth
+          ]
+        }),
+      { message: 'footer heartbeat trigger should not render a visible border' }
+    )
+    .toEqual(['0px', '0px', '0px', '0px'])
 
   const tooltipText = await locator.getAttribute('aria-label')
   expect(tooltipText, 'footer heartbeat should expose details for the tooltip').not.toBeNull()
@@ -402,15 +417,17 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   ).toHaveCount(0)
   await expectFooterHeartbeat(appWindow, projectHeartbeatStatus(appWindow))
   const footerBox = await elementBox(projectSidebarFooter(appWindow), 'project sidebar footer')
-  const settingsBox = await elementBox(
-    projectSettingsLink(appWindow),
-    'project settings footer link'
-  )
   const heartbeatBox = await elementBox(
     projectHeartbeatStatus(appWindow),
     'project footer heartbeat'
   )
-  expect(heartbeatBox.x).toBeGreaterThan(settingsBox.x)
+  const homeBox = await elementBox(projectHomeLink(appWindow), 'project home footer link')
+  const settingsBox = await elementBox(
+    projectSettingsLink(appWindow),
+    'project settings footer link'
+  )
+  expect(heartbeatBox.x).toBeLessThan(homeBox.x)
+  expect(homeBox.x).toBeLessThan(settingsBox.x)
   expect(heartbeatBox.x + heartbeatBox.width).toBeLessThanOrEqual(footerBox.x + footerBox.width + 1)
   await expect(chatActionPane(appWindow)).toBeVisible()
   await expect(chatActionPane(appWindow).getByText('No linked Google Docs yet.')).toBeVisible()
