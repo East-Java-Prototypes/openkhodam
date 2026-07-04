@@ -1,9 +1,13 @@
+import { Buffer } from 'node:buffer'
 import { lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
+import { unlink } from 'node:fs/promises'
 import { isAbsolute, join, posix } from 'node:path'
 
 import type {
+  GoogleDocDocumentArtifact,
   LinkedGoogleDoc,
   LinkedGoogleDocRecord,
+  PersistedGoogleDocDocumentArtifact,
   ProjectArtifactsConfig,
   ProjectArtifactsListInput,
   ProjectSessionLinkedDocsListInput,
@@ -12,10 +16,10 @@ import type {
 } from '@openkhodam/ui/types'
 
 import { JsonConfigFile, writeJsonConfigFile } from '../config/json-config-file'
-import type { GoogleDocDocumentArtifact } from './google-workspace-runtime'
 
 export const OPENKHODAM_PROJECT_DIRECTORY_NAME = '.openkhodam'
 export const PROJECT_ARTIFACTS_CONFIG_VERSION = 1
+export const GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION = 1
 export const PROJECT_ARTIFACTS_FILE_NAME = 'artifacts.json'
 export const PROJECT_ARTIFACTS_DIRECTORY_NAME = 'artifacts'
 export const GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME = 'google-docs'
@@ -55,6 +59,16 @@ export type PersistGoogleDocDocumentArtifactInput = {
 
 export type PersistGoogleDocDocumentArtifactResult = {
   artifactPath: string
+  created: boolean
+}
+
+export type DeleteGoogleDocDocumentArtifactInput = {
+  artifactPath: string
+  projectDirectory: string
+}
+
+export type DeleteGoogleDocDocumentArtifactResult = {
+  deleted: boolean
 }
 
 export class ProjectArtifactsFileStore {
@@ -144,13 +158,36 @@ export class ProjectArtifactsFileStore {
     document: GoogleDocDocumentArtifact
   ): Promise<PersistGoogleDocDocumentArtifactResult> {
     const documentId = normalizeGoogleDocArtifactDocumentId(document.id)
-    const artifactPath = getGoogleDocArtifactRelativePath(documentId)
-    const filePath = getGoogleDocArtifactFilePath(this.projectDirectory, documentId)
+    const fileName = encodeGoogleDocArtifactFileName(documentId)
+    const artifactPath = getGoogleDocArtifactRelativePath(fileName)
+    const filePath = getGoogleDocArtifactFilePath(this.projectDirectory, fileName)
+    const artifact = createPersistedGoogleDocDocumentArtifact(document, this.now())
 
+    await this.read()
     this.prepareGoogleDocArtifactPathForWrite(filePath)
-    await writeJsonConfigFile(filePath, document)
+    const existingFileStat = lstatIfExists(filePath)
+    await writeJsonConfigFile(filePath, artifact)
 
-    return { artifactPath }
+    return { artifactPath, created: existingFileStat === null }
+  }
+
+  async deleteGoogleDocDocumentArtifact(
+    artifactPath: string
+  ): Promise<DeleteGoogleDocDocumentArtifactResult> {
+    const normalizedArtifactPath = normalizeRequiredGoogleDocArtifactPath(artifactPath)
+    const filePath = getGoogleDocArtifactFilePathFromRelativePath(
+      this.projectDirectory,
+      normalizedArtifactPath
+    )
+
+    this.prepareGoogleDocArtifactPathForDelete(filePath)
+    try {
+      await unlink(filePath)
+      return { deleted: true }
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') return { deleted: false }
+      throw error
+    }
   }
 
   private async setLinkedGoogleDocListed(
@@ -196,6 +233,11 @@ export class ProjectArtifactsFileStore {
     ensureGoogleDocsArtifactsDirectory(this.projectDirectory)
     validateGoogleDocsArtifactPath(this.projectDirectory, filePath)
   }
+
+  private prepareGoogleDocArtifactPathForDelete(filePath: string): void {
+    this.validateProjectDirectory()
+    validateGoogleDocsArtifactPath(this.projectDirectory, filePath)
+  }
 }
 
 export function createProjectArtifactsIntegration(): ProjectArtifactsIntegration {
@@ -238,7 +280,17 @@ export async function getOrCreateLinkedGoogleDoc(
     (candidate) => candidate.id === doc.id
   )
 
-  if (existing) return existing
+  if (existing) {
+    if (doc.artifactPath && doc.artifactPath !== existing.artifactPath) {
+      return store.recordLinkedGoogleDoc({
+        doc,
+        messageId: input.messageId,
+        sessionId
+      })
+    }
+
+    return existing
+  }
 
   return store.recordLinkedGoogleDoc({
     doc,
@@ -251,6 +303,12 @@ export async function persistGoogleDocDocumentArtifact(
   input: PersistGoogleDocDocumentArtifactInput
 ): Promise<PersistGoogleDocDocumentArtifactResult> {
   return createProjectArtifactsStore(input).persistGoogleDocDocumentArtifact(input.document)
+}
+
+export async function deleteGoogleDocDocumentArtifact(
+  input: DeleteGoogleDocDocumentArtifactInput
+): Promise<DeleteGoogleDocDocumentArtifactResult> {
+  return createProjectArtifactsStore(input).deleteGoogleDocDocumentArtifact(input.artifactPath)
 }
 
 export function createDefaultProjectArtifactsConfig(): ProjectArtifactsConfig {
@@ -364,23 +422,31 @@ function getGoogleDocsArtifactsDirectoryPath(projectDirectory: string): string {
   )
 }
 
-function getGoogleDocArtifactRelativePath(documentId: string): string {
+function getGoogleDocArtifactRelativePath(fileName: string): string {
   return posix.join(
     OPENKHODAM_PROJECT_DIRECTORY_NAME,
     PROJECT_ARTIFACTS_DIRECTORY_NAME,
     GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME,
-    `${documentId}.json`
+    fileName
   )
 }
 
-function getGoogleDocArtifactFilePath(projectDirectory: string, documentId: string): string {
+function getGoogleDocArtifactFilePath(projectDirectory: string, fileName: string): string {
   return join(
     projectDirectory,
     OPENKHODAM_PROJECT_DIRECTORY_NAME,
     PROJECT_ARTIFACTS_DIRECTORY_NAME,
     GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME,
-    `${documentId}.json`
+    fileName
   )
+}
+
+function getGoogleDocArtifactFilePathFromRelativePath(
+  projectDirectory: string,
+  artifactPath: string
+): string {
+  const fileName = artifactPath.split('/')[3] ?? ''
+  return getGoogleDocArtifactFilePath(projectDirectory, fileName)
 }
 
 function ensureRegularDirectory(directoryPath: string, displayName: string): void {
@@ -546,12 +612,27 @@ function normalizeStoredTimestamp(value: unknown): number | null {
 }
 
 function normalizeGoogleDocArtifactDocumentId(value: unknown): string {
-  const documentId = normalizeRequiredString(value, 'document.id')
-  if (!isSafeArtifactFileName(documentId)) {
-    throw new Error('Google Docs document ID is not safe for an artifact file path.')
+  return normalizeRequiredString(value, 'document.id')
+}
+
+function createPersistedGoogleDocDocumentArtifact(
+  document: GoogleDocDocumentArtifact,
+  cachedAt: number
+): PersistedGoogleDocDocumentArtifact {
+  return {
+    ...document,
+    schemaVersion: GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION,
+    cachedAt
+  }
+}
+
+function encodeGoogleDocArtifactFileName(documentId: string): string {
+  const encodedDocumentId = Buffer.from(documentId, 'utf8').toString('base64url')
+  if (!isSafeEncodedGoogleDocArtifactId(encodedDocumentId)) {
+    throw new Error('Google Docs document ID could not be encoded for an artifact file path.')
   }
 
-  return documentId
+  return `encoded-${encodedDocumentId}.json`
 }
 
 function normalizeInputArtifactPath(value: unknown): string | null {
@@ -564,14 +645,19 @@ function normalizeInputArtifactPath(value: unknown): string | null {
   return normalized
 }
 
+function normalizeRequiredGoogleDocArtifactPath(value: unknown): string {
+  const normalized = normalizeRequiredString(value, 'artifactPath')
+  if (!isSafeGoogleDocArtifactPath(normalized)) {
+    throw new Error('Google Docs artifact path must be a safe project-local path.')
+  }
+
+  return normalized
+}
+
 function normalizeStoredArtifactPath(value: unknown): string | null {
   const normalized = normalizeStoredString(value)
   if (!normalized) return null
   return isSafeGoogleDocArtifactPath(normalized) ? normalized : null
-}
-
-function isSafeArtifactFileName(value: string): boolean {
-  return value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\')
 }
 
 function isSafeGoogleDocArtifactPath(value: string): boolean {
@@ -585,8 +671,20 @@ function isSafeGoogleDocArtifactPath(value: string): boolean {
     parts[0] === OPENKHODAM_PROJECT_DIRECTORY_NAME &&
     parts[1] === PROJECT_ARTIFACTS_DIRECTORY_NAME &&
     parts[2] === GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME &&
-    parts[3].endsWith('.json')
+    isSafeGoogleDocArtifactFileName(parts[3])
   )
+}
+
+function isSafeGoogleDocArtifactFileName(value: string): boolean {
+  const prefix = 'encoded-'
+  const suffix = '.json'
+  if (!value.startsWith(prefix) || !value.endsWith(suffix)) return false
+
+  return isSafeEncodedGoogleDocArtifactId(value.slice(prefix.length, -suffix.length))
+}
+
+function isSafeEncodedGoogleDocArtifactId(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value)
 }
 
 function normalizeInputUrl(value: unknown): string | null {

@@ -1,5 +1,15 @@
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile
+} from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -281,7 +291,7 @@ test('stores project session linked Google Docs with stable path and dedupe time
   }
 })
 
-test('gets or creates linked Google Docs without rewriting existing session docs', async () => {
+test('gets or creates linked Google Docs and backfills artifact paths only when needed', async () => {
   const { getOrCreateLinkedGoogleDoc, ProjectArtifactsFileStore } =
     loadDesktopModule<ProjectArtifactsModule>(
       '../../desktop/src/main/integrations/project-artifacts'
@@ -318,6 +328,26 @@ test('gets or creates linked Google Docs without rewriting existing session docs
     expect(existing).toEqual(created)
     await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([created])
     expect(await readFile(store.filePath, 'utf8')).toBe(firstFileContents)
+
+    const withArtifactPath = await getOrCreateLinkedGoogleDoc({
+      doc: {
+        artifactPath: expectedGoogleDocArtifactPath('doc-1'),
+        id: 'doc-1',
+        title: 'Updated Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      },
+      messageId: 'message-3',
+      projectDirectory: projectPath,
+      sessionId: 'session-1'
+    })
+    expect(withArtifactPath).toMatchObject({
+      artifactPath: expectedGoogleDocArtifactPath('doc-1'),
+      firstMessageId: 'message-1',
+      firstSeenAt: created.firstSeenAt,
+      id: 'doc-1',
+      lastMessageId: 'message-3',
+      title: 'Updated Launch Plan'
+    })
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
@@ -1054,6 +1084,9 @@ test('bounds Google Docs read previews while persisting the full normalized arti
   const configPath = join(userDataPath, 'openkhodam-config.json')
   const originalFetch = globalThis.fetch
   const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const textCapDocumentId = 'doc/text cap?:unsafe'
+  const blockCapDocumentId = 'doc-block-cap'
+  const noSessionDocumentId = 'doc-no-session'
   const textCapBlock = 'x'.repeat(700)
   const blockCapBlock = 'b'.repeat(10)
   const textCapBlocks = Array.from({ length: 25 }, () => textCapBlock)
@@ -1076,15 +1109,16 @@ test('bounds Google Docs read previews while persisting the full normalized arti
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+    const docsDocumentId = readFetchedGoogleDocsDocumentId(url)
 
-    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-text-cap')) {
+    if (docsDocumentId === textCapDocumentId) {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
       return new Response(
         JSON.stringify({
           body: {
             content: createGoogleDocParagraphs(textCapBlocks)
           },
-          documentId: 'doc-text-cap',
+          documentId: textCapDocumentId,
           revisionId: 'rev-text-cap',
           title: 'Text Cap Doc'
         }),
@@ -1092,16 +1126,31 @@ test('bounds Google Docs read previews while persisting the full normalized arti
       )
     }
 
-    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-block-cap')) {
+    if (docsDocumentId === blockCapDocumentId) {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
       return new Response(
         JSON.stringify({
           body: {
             content: createGoogleDocParagraphs(blockCapBlocks)
           },
-          documentId: 'doc-block-cap',
+          documentId: blockCapDocumentId,
           revisionId: 'rev-block-cap',
           title: 'Block Cap Doc'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (docsDocumentId === noSessionDocumentId) {
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: createGoogleDocParagraphs(['Preview without session\n'])
+          },
+          documentId: noSessionDocumentId,
+          revisionId: 'rev-no-session',
+          title: 'No Session Doc'
         }),
         { status: 200, headers: { 'content-type': 'application/json' } }
       )
@@ -1119,7 +1168,7 @@ test('bounds Google Docs read previews while persisting the full normalized arti
     }
 
     const textCapOutput = JSON.parse(
-      await plugin.tool.google_docs_read.execute({ documentId: 'doc-text-cap' }, context)
+      await plugin.tool.google_docs_read.execute({ documentId: textCapDocumentId }, context)
     ) as {
       document: Record<string, unknown>
     }
@@ -1140,7 +1189,7 @@ test('bounds Google Docs read previews while persisting the full normalized arti
     expect(JSON.stringify(textCapDocument)).not.toContain('markdown')
 
     const blockCapOutput = JSON.parse(
-      await plugin.tool.google_docs_read.execute({ documentId: 'doc-block-cap' }, context)
+      await plugin.tool.google_docs_read.execute({ documentId: blockCapDocumentId }, context)
     ) as {
       document: Record<string, unknown>
     }
@@ -1158,17 +1207,40 @@ test('bounds Google Docs read previews while persisting the full normalized arti
       includedBlockCount: 20
     })
 
-    const textCapArtifactPath = join(
+    const noSessionProjectPath = join(tempRoot, 'no-session-project')
+    await mkdir(noSessionProjectPath, { recursive: true })
+    const noSessionOutput = JSON.parse(
+      await plugin.tool.google_docs_read.execute(
+        { documentId: noSessionDocumentId },
+        { directory: noSessionProjectPath }
+      )
+    ) as {
+      document: Record<string, unknown>
+    }
+    expect(noSessionOutput.document).toMatchObject({
+      id: noSessionDocumentId,
+      preview: {
+        truncated: false,
+        totalTextLength: 23,
+        totalBlockCount: 1,
+        includedBlockCount: 1
+      },
+      text: 'Preview without session'
+    })
+    await expect(stat(join(noSessionProjectPath, '.openkhodam'))).rejects.toThrow()
+
+    const textCapArtifactPath = expectedGoogleDocArtifactAbsolutePath(
       projectPath,
-      '.openkhodam',
-      'artifacts',
-      'google-docs',
-      'doc-text-cap.json'
+      textCapDocumentId
     )
     const fullTextCapArtifact = JSON.parse(await readFile(textCapArtifactPath, 'utf8')) as {
       body: { blocks: Array<{ text: string }> }
+      cachedAt: unknown
+      schemaVersion: unknown
       text: string
     }
+    expect(fullTextCapArtifact.schemaVersion).toBe(1)
+    expect(typeof fullTextCapArtifact.cachedAt).toBe('number')
     expect(fullTextCapArtifact.text).toHaveLength(17_500)
     expect(fullTextCapArtifact.body.blocks).toHaveLength(25)
     expect(fullTextCapArtifact.body.blocks[17]?.text).toHaveLength(700)
@@ -1181,11 +1253,16 @@ test('bounds Google Docs read previews while persisting the full normalized arti
     }
     expect(artifacts.sessions['session-1']).toHaveLength(2)
     expect(artifacts.sessions['session-1']?.[0]).toMatchObject({
-      artifactPath: '.openkhodam/artifacts/google-docs/doc-text-cap.json',
-      id: 'doc-text-cap',
+      artifactPath: expectedGoogleDocArtifactPath(textCapDocumentId),
+      id: textCapDocumentId,
       title: 'Text Cap Doc',
-      url: 'https://docs.google.com/document/d/doc-text-cap/edit'
+      url: `https://docs.google.com/document/d/${encodeURIComponent(textCapDocumentId)}/edit`
     })
+    const indexedArtifactPath = String(artifacts.sessions['session-1']?.[0]?.artifactPath)
+    expect(indexedArtifactPath).not.toContain(textCapDocumentId)
+    expect(indexedArtifactPath).not.toContain('text cap')
+    expect(indexedArtifactPath).not.toContain('?')
+    expect(indexedArtifactPath).not.toContain(':')
     expect(JSON.stringify(artifacts)).not.toContain(textCapBlock)
     await expect(stat(join(fallbackWorktreePath, '.openkhodam'))).rejects.toThrow()
   } finally {
@@ -1267,20 +1344,14 @@ test('records linked Google Docs from directory context when worktree is root-li
     })
 
     const artifactsPath = join(projectPath, '.openkhodam', 'artifacts.json')
-    const fullArtifactPath = join(
-      projectPath,
-      '.openkhodam',
-      'artifacts',
-      'google-docs',
-      'doc-1.json'
-    )
+    const fullArtifactPath = expectedGoogleDocArtifactAbsolutePath(projectPath, 'doc-1')
     const artifactContents = await readFile(artifactsPath, 'utf8')
     const artifacts = JSON.parse(artifactContents) as {
       sessions: Record<string, Array<Record<string, unknown>>>
     }
     expect(artifacts.sessions['session-1']).toHaveLength(1)
     expect(artifacts.sessions['session-1']?.[0]).toMatchObject({
-      artifactPath: '.openkhodam/artifacts/google-docs/doc-1.json',
+      artifactPath: expectedGoogleDocArtifactPath('doc-1'),
       firstMessageId: null,
       id: 'doc-1',
       lastMessageId: null,
@@ -1302,6 +1373,7 @@ test('records linked Google Docs from directory context when worktree is root-li
       },
       id: 'doc-1',
       revision: 'rev-1',
+      schemaVersion: 1,
       text: 'Hello Docs 1',
       title: 'Docs Plan'
     })
@@ -1320,6 +1392,7 @@ test('records linked Google Docs from directory context when worktree is root-li
     expect(JSON.parse(await readFile(fullArtifactPath, 'utf8'))).toMatchObject({
       id: 'doc-1',
       revision: 'rev-2',
+      schemaVersion: 1,
       text: 'Hello Docs 2',
       title: 'Updated Docs Plan'
     })
@@ -1327,6 +1400,116 @@ test('records linked Google Docs from directory context when worktree is root-li
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('cleans up full Google Doc artifacts when session index recording fails', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-index-failure-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project-path-should-not-log')
+  const openKhodamPath = join(projectPath, '.openkhodam')
+  const googleDocsArtifactDirectory = join(openKhodamPath, 'artifacts', 'google-docs')
+  const artifactsPath = join(openKhodamPath, 'artifacts.json')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+
+  await mkdir(googleDocsArtifactDirectory, { recursive: true })
+  await writeFile(artifactsPath, '{\n  "version": 1,\n  "sessions": {}\n}\n', 'utf8')
+  await chmod(openKhodamPath, 0o555)
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-docs-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-index-failure')) {
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: createGoogleDocParagraphs(['Cleanup me\n'])
+          },
+          documentId: 'doc-index-failure',
+          revisionId: 'rev-index-failure',
+          title: 'Index Failure Doc'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await plugin.tool.google_docs_read.execute(
+        { documentId: 'doc-index-failure' },
+        { directory: projectPath, sessionID: 'session-1' }
+      )
+    ) as {
+      document: Record<string, unknown>
+    }
+
+    expect(output.document).toMatchObject({
+      id: 'doc-index-failure',
+      preview: {
+        truncated: false,
+        totalTextLength: 10,
+        totalBlockCount: 1,
+        includedBlockCount: 1
+      },
+      text: 'Cleanup me',
+      title: 'Index Failure Doc',
+      type: 'google.doc.document'
+    })
+    expect(warnings).toEqual([
+      [
+        'Failed to record linked Google Doc artifact',
+        {
+          artifactCleanedUp: true,
+          docId: 'doc-index-failure',
+          reason: 'artifact_record_failed',
+          sessionId: 'session-1'
+        }
+      ]
+    ])
+
+    const warningText = JSON.stringify(warnings)
+    expect(warningText).not.toContain('valid-docs-access-token')
+    expect(warningText).not.toContain('refresh-token')
+    expect(warningText).not.toContain('Cleanup me')
+    expect(warningText).not.toContain('EACCES')
+    expect(warningText).not.toContain(tempRoot)
+    expect(warningText).not.toContain(projectPath)
+    await expect(
+      stat(expectedGoogleDocArtifactAbsolutePath(projectPath, 'doc-index-failure'))
+    ).rejects.toThrow()
+    await expect(readFile(artifactsPath, 'utf8')).resolves.toBe(
+      '{\n  "version": 1,\n  "sessions": {}\n}\n'
+    )
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await chmod(openKhodamPath, 0o755).catch(() => undefined)
     await rm(tempRoot, { recursive: true, force: true })
   }
 })
@@ -1692,6 +1875,28 @@ function createGoogleDocParagraphs(
       elements: [{ textRun: { content: text } }]
     }
   }))
+}
+
+function expectedGoogleDocArtifactAbsolutePath(projectPath: string, documentId: string): string {
+  return join(projectPath, ...expectedGoogleDocArtifactPath(documentId).split('/'))
+}
+
+function expectedGoogleDocArtifactPath(documentId: string): string {
+  return `.openkhodam/artifacts/google-docs/${expectedGoogleDocArtifactFileName(documentId)}`
+}
+
+function expectedGoogleDocArtifactFileName(documentId: string): string {
+  return `encoded-${Buffer.from(documentId, 'utf8').toString('base64url')}.json`
+}
+
+function readFetchedGoogleDocsDocumentId(url: string): string | null {
+  const parsed = new URL(url)
+  const prefix = '/v1/documents/'
+  if (parsed.origin !== 'https://docs.googleapis.com' || !parsed.pathname.startsWith(prefix)) {
+    return null
+  }
+
+  return decodeURIComponent(parsed.pathname.slice(prefix.length))
 }
 
 test('registers the ping tool from the ESM artifact through the real OpenCode loader', async () => {

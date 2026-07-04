@@ -1,5 +1,19 @@
+import type {
+  GoogleDocBodyBlock,
+  GoogleDocDocumentArtifact,
+  GoogleDocDocumentPreviewArtifact,
+  GoogleDocDocumentPreviewMetadata
+} from '@openkhodam/ui/types'
+
 import type { GoogleWorkspaceTokenConfig } from './openkhodam-config'
 import { OpenKhodamConfigFileStore } from './openkhodam-config'
+
+export type {
+  GoogleDocBodyBlock,
+  GoogleDocDocumentArtifact,
+  GoogleDocDocumentPreviewArtifact,
+  GoogleDocDocumentPreviewMetadata
+}
 
 export const GOOGLE_DRIVE_METADATA_READONLY_SCOPE =
   'https://www.googleapis.com/auth/drive.metadata.readonly'
@@ -73,36 +87,6 @@ export type GoogleDriveSearchFilesInput = {
   limit?: number
   query: string
   signal?: AbortSignal
-}
-
-export type GoogleDocDocumentArtifact = {
-  type: 'google.doc.document'
-  id: string
-  title: string | null
-  revision: string | null
-  text: string
-  link: string | null
-  body: {
-    blocks: GoogleDocBodyBlock[]
-  }
-}
-
-export type GoogleDocBodyBlock = {
-  id: string
-  ordinal: number
-  type: 'paragraph'
-  text: string
-}
-
-export type GoogleDocDocumentPreviewMetadata = {
-  truncated: boolean
-  totalTextLength: number
-  totalBlockCount: number
-  includedBlockCount: number
-}
-
-export type GoogleDocDocumentPreviewArtifact = GoogleDocDocumentArtifact & {
-  preview: GoogleDocDocumentPreviewMetadata
 }
 
 export type GoogleDocsReadDocumentResult = {

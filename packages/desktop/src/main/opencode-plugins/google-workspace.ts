@@ -5,6 +5,7 @@ import {
   searchGoogleDriveFiles
 } from '../integrations/google-workspace-runtime'
 import {
+  deleteGoogleDocDocumentArtifact,
   getOrCreateLinkedGoogleDoc,
   persistGoogleDocDocumentArtifact
 } from '../integrations/project-artifacts'
@@ -134,9 +135,11 @@ async function recordReadGoogleDocArtifact(
   document: GoogleDocDocumentArtifact
 ): Promise<void> {
   const projectDirectory = nonEmptyString(context.directory)
-  if (!projectDirectory) return
+  const sessionId = nonEmptyString(context.sessionID)
+  if (!projectDirectory || !sessionId) return
 
   let artifactPath: string | null = null
+  let createdArtifact = false
 
   try {
     const persisted = await persistGoogleDocDocumentArtifact({
@@ -144,6 +147,7 @@ async function recordReadGoogleDocArtifact(
       projectDirectory
     })
     artifactPath = persisted.artifactPath
+    createdArtifact = persisted.created
   } catch {
     console.warn('Failed to persist Google Doc artifact', {
       docId: document.id,
@@ -151,9 +155,6 @@ async function recordReadGoogleDocArtifact(
     })
     return
   }
-
-  const sessionId = nonEmptyString(context.sessionID)
-  if (!sessionId) return
 
   try {
     await getOrCreateLinkedGoogleDoc({
@@ -167,11 +168,52 @@ async function recordReadGoogleDocArtifact(
       sessionId
     })
   } catch {
+    const artifactCleanedUp = artifactPath
+      ? await cleanupCreatedGoogleDocArtifact({
+          artifactPath,
+          createdArtifact,
+          docId: document.id,
+          projectDirectory,
+          sessionId
+        })
+      : null
     console.warn('Failed to record linked Google Doc artifact', {
+      artifactCleanedUp,
       docId: document.id,
       reason: 'artifact_record_failed',
       sessionId
     })
+  }
+}
+
+async function cleanupCreatedGoogleDocArtifact({
+  artifactPath,
+  createdArtifact,
+  docId,
+  projectDirectory,
+  sessionId
+}: {
+  artifactPath: string
+  createdArtifact: boolean
+  docId: string
+  projectDirectory: string
+  sessionId: string
+}): Promise<boolean | null> {
+  if (!createdArtifact) return null
+
+  try {
+    const result = await deleteGoogleDocDocumentArtifact({
+      artifactPath,
+      projectDirectory
+    })
+    return result.deleted
+  } catch {
+    console.warn('Failed to clean up Google Doc artifact after record failure', {
+      docId,
+      reason: 'artifact_cleanup_failed',
+      sessionId
+    })
+    return false
   }
 }
 
