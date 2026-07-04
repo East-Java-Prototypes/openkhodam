@@ -189,7 +189,7 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('navigation', { name: 'Project folders' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
-  await expect(page.getByText('OpenCode', { exact: true })).toBeVisible()
+  await expect(page.getByText('OpenCode', { exact: true })).toHaveCount(0)
 }
 
 async function appRegion(locator: Locator): Promise<string> {
@@ -1214,7 +1214,7 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   await projectHomeLink(appWindow).click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/#\/$/)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
-  await expect(appWindow.getByText('OpenCode', { exact: true })).toBeVisible()
+  await expect(appWindow.getByText('OpenCode', { exact: true })).toHaveCount(0)
 })
 
 test.describe('Google Workspace settings gating', () => {

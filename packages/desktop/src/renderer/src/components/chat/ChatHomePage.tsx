@@ -16,7 +16,6 @@ import {
 } from 'react'
 import type { PanelImperativeHandle, PanelSize } from 'react-resizable-panels'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Combobox,
@@ -764,17 +763,10 @@ export function ActiveChatPanel({
           className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
           aria-labelledby="active-chat-heading"
         >
-          <header className="shrink-0 flex items-center justify-between gap-4 px-6 py-4">
-            <div>
-              <p className="text-muted-foreground text-sm">Active chat</p>
-              <h2 id="active-chat-heading" className="text-xl font-semibold tracking-tight">
-                {session?.activeChat?.title ?? 'No chat selected'}
-              </h2>
-              {project?.selectedProject ? (
-                <p className="text-muted-foreground text-sm">{project.selectedProject.name}</p>
-              ) : null}
-            </div>
-            <Badge variant="secondary">OpenCode</Badge>
+          <header className="shrink-0 px-6 py-3">
+            <h2 id="active-chat-heading" className="text-base font-semibold tracking-tight">
+              {session?.activeChat?.title ?? 'No chat selected'}
+            </h2>
           </header>
           <Separator />
           <ChatMessageList
