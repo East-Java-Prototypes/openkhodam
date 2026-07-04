@@ -48,7 +48,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -343,23 +342,9 @@ function ProjectChatSidebar({
       collapsible="none"
       className="relative min-h-0 border-r bg-sidebar/70"
       role="complementary"
-      aria-labelledby="projects-heading"
+      aria-label="Projects"
     >
-      <SidebarHeader className="p-4 pb-2">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <div className="px-2 py-1">
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-sm font-medium">OpenKhodam</p>
-                <h1 id="projects-heading" className="text-2xl font-semibold tracking-tight">
-                  Project folders
-                </h1>
-              </div>
-            </div>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-      <SidebarContent className="px-4 pb-4">
+      <SidebarContent className="p-4">
         <SidebarGroup className="p-0">
           <SidebarGroupContent>
             <OpenProjectByDirectoryForm shell={shell} />
@@ -367,7 +352,7 @@ function ProjectChatSidebar({
         </SidebarGroup>
         <SidebarGroup className="p-0">
           <SidebarGroupContent>
-            <nav aria-label="Project folders">
+            <nav aria-label="Projects">
               <SidebarMenu className="gap-2">
                 {shell.emptyMessage ? (
                   <SidebarMenuItem>
