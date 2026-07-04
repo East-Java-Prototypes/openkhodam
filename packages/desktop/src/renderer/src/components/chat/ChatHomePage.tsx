@@ -97,8 +97,11 @@ export function ChatHomePage({
 }: ChatHomePageProps): JSX.Element {
   const projectSidebarPanelRef = useRef<PanelImperativeHandle | null>(null)
   const [isProjectSidebarOpen, setProjectSidebarOpen] = useState(true)
+  const [areActiveProjectSessionsVisible, setActiveProjectSessionsVisible] = useState(true)
   const [isActionPaneOpen, setActionPaneOpen] = useState(true)
   const [isActionPaneAvailable, setActionPaneAvailable] = useState(false)
+  const activeProjectId = project?.selectedProject?.id ?? null
+  const previousActiveProjectIdRef = useRef<string | null>(activeProjectId)
 
   const actionPaneControls = useMemo<ActionPaneControlsContextValue>(
     () => ({
@@ -139,6 +142,13 @@ export function ChatHomePage({
     syncProjectSidebarPanel(isProjectSidebarOpen)
   }, [isProjectSidebarOpen, syncProjectSidebarPanel])
 
+  useEffect(() => {
+    if (previousActiveProjectIdRef.current === activeProjectId) return
+
+    previousActiveProjectIdRef.current = activeProjectId
+    setActiveProjectSessionsVisible(true)
+  }, [activeProjectId])
+
   const toggleProjectSidebar = useCallback((): void => {
     handleProjectSidebarOpenChange(!isProjectSidebarOpen)
   }, [handleProjectSidebarOpenChange, isProjectSidebarOpen])
@@ -147,9 +157,26 @@ export function ChatHomePage({
     setActionPaneOpen((open) => !open)
   }, [])
 
+  const handleProjectClick = useCallback((isActive: boolean): void => {
+    if (isActive) {
+      setActiveProjectSessionsVisible((isVisible) => !isVisible)
+      return
+    }
+
+    setActiveProjectSessionsVisible(true)
+  }, [])
+
   let projectSidebarPane: ReactNode
   if (isProjectSidebarOpen) {
-    projectSidebarPane = <ProjectChatSidebar shell={shell} project={project} session={session} />
+    projectSidebarPane = (
+      <ProjectChatSidebar
+        shell={shell}
+        project={project}
+        session={session}
+        areActiveProjectSessionsVisible={areActiveProjectSessionsVisible}
+        onProjectClick={handleProjectClick}
+      />
+    )
   } else {
     projectSidebarPane = (
       <CollapsedProjectSidebarRail onRestore={() => handleProjectSidebarOpenChange(true)} />
@@ -302,11 +329,15 @@ function useActionPaneControls(): ActionPaneControlsContextValue {
 function ProjectChatSidebar({
   shell,
   project,
-  session
+  session,
+  areActiveProjectSessionsVisible,
+  onProjectClick
 }: {
   shell: OpenCodeChatShellState
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  areActiveProjectSessionsVisible: boolean
+  onProjectClick: (isActive: boolean) => void
 }): JSX.Element {
   return (
     <Sidebar
@@ -355,6 +386,8 @@ function ProjectChatSidebar({
                     project={chatProject}
                     routeProject={project}
                     session={session}
+                    areActiveProjectSessionsVisible={areActiveProjectSessionsVisible}
+                    onProjectClick={onProjectClick}
                   />
                 ))}
               </SidebarMenu>
@@ -508,10 +541,12 @@ function OpenedProjectDetails({
 
 function ProjectButton({
   project,
-  isActive
+  isActive,
+  onProjectClick
 }: {
   project: ChatProject
   isActive: boolean
+  onProjectClick: () => void
 }): JSX.Element {
   return (
     <SidebarMenuButton
@@ -522,7 +557,7 @@ function ProjectButton({
       variant={isActive ? 'outline' : 'default'}
       className="h-auto px-3 py-2"
     >
-      <Link to="/projects/$projectId" params={{ projectId: project.id }}>
+      <Link to="/projects/$projectId" params={{ projectId: project.id }} onClick={onProjectClick}>
         <span className="flex min-w-0 flex-1 flex-col items-stretch gap-1 text-left">
           <span className="truncate text-sm font-medium">{project.name}</span>
           {project.subtitle ? (
@@ -539,17 +574,27 @@ function ProjectButton({
 function ProjectWithSessions({
   project,
   routeProject,
-  session
+  session,
+  areActiveProjectSessionsVisible,
+  onProjectClick
 }: {
   project: ChatProject
   routeProject?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  areActiveProjectSessionsVisible: boolean
+  onProjectClick: (isActive: boolean) => void
 }): JSX.Element {
   const isActive = project.subtitle === routeProject?.selectedDirectory
   return (
     <SidebarMenuItem>
-      <ProjectButton project={project} isActive={isActive} />
-      {isActive ? <SelectedProjectSessions project={routeProject} session={session} /> : null}
+      <ProjectButton
+        project={project}
+        isActive={isActive}
+        onProjectClick={() => onProjectClick(isActive)}
+      />
+      {isActive && areActiveProjectSessionsVisible ? (
+        <SelectedProjectSessions project={routeProject} session={session} />
+      ) : null}
     </SidebarMenuItem>
   )
 }

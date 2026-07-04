@@ -19,6 +19,8 @@ const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
 const projectSidebar = (page: Page): Locator =>
   page.getByRole('complementary', { name: 'Project folders' })
+const collapsedProjectSidebarRail = (page: Page): Locator =>
+  page.getByRole('complementary', { name: 'Collapsed project sidebar' })
 const projectSidebarHeader = (page: Page): Locator =>
   projectSidebar(page).locator('[data-slot="sidebar-header"]')
 const projectSidebarFooter = (page: Page): Locator =>
@@ -520,6 +522,40 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
   await expect(projectSettingsLink(appWindow)).toBeVisible()
   await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
   await expect(resizeHandle).toBeVisible()
+})
+
+test('toggles active project sessions without collapsing the project sidebar', async ({
+  appWindow
+}) => {
+  await waitForChatShell(appWindow)
+
+  const fakeProjectLink = projectChatLink(appWindow).filter({ hasText: 'Fake Project' })
+  await expect(fakeProjectLink).toBeVisible()
+
+  await fakeProjectLink.click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/[^/]+$/
+  )
+  await expectOpenedProjectRouteResolved(appWindow)
+  await expect(projectSidebar(appWindow)).toBeVisible()
+  await expect(collapsedProjectSidebarRail(appWindow)).toHaveCount(0)
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
+  await expect(
+    sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' })
+  ).toBeVisible()
+
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expect(projectSidebar(appWindow)).toBeVisible()
+  await expect(collapsedProjectSidebarRail(appWindow)).toHaveCount(0)
+  await expect(selectedProjectSessions(appWindow)).toHaveCount(0)
+
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expect(projectSidebar(appWindow)).toBeVisible()
+  await expect(collapsedProjectSidebarRail(appWindow)).toHaveCount(0)
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
+  await expect(
+    sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' })
+  ).toBeVisible()
 })
 
 test('resizes and collapses/restores the chat action pane', async ({ appWindow, electronApp }) => {
