@@ -365,26 +365,24 @@ function ProjectChatSidebar({
       <SidebarFooter className="border-t p-4">
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="flex items-center justify-between gap-3 px-2 py-1">
-              <div className="flex shrink-0 flex-wrap gap-2">
-                <Button
-                  nativeButton={false}
-                  render={<Link to="/" role="link" />}
-                  size="xs"
-                  variant="outline"
-                >
-                  Home
-                </Button>
-                <Button
-                  nativeButton={false}
-                  render={<Link to="/settings" role="link" />}
-                  size="xs"
-                  variant="outline"
-                >
-                  Settings
-                </Button>
-              </div>
+            <div className="flex flex-wrap items-center gap-2 px-2 py-1">
               <SidebarHeartbeat status={shell.heartbeatStatus} />
+              <Button
+                nativeButton={false}
+                render={<Link to="/" role="link" />}
+                size="xs"
+                variant="outline"
+              >
+                Home
+              </Button>
+              <Button
+                nativeButton={false}
+                render={<Link to="/settings" role="link" />}
+                size="xs"
+                variant="outline"
+              >
+                Settings
+              </Button>
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -405,12 +403,7 @@ function SidebarHeartbeat({ status }: { status: OpenCodeHeartbeatStatus }): JSX.
           tabIndex={0}
           aria-label={status.ariaLabel}
           title={status.title}
-          className={cn(
-            'inline-flex size-7 shrink-0 items-center justify-center rounded-full border p-0 outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring',
-            status.connected
-              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-              : 'border-destructive/40 bg-destructive/10 text-destructive'
-          )}
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-full p-0 outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring"
         >
           <span
             data-slot="sidebar-heartbeat-dot"
