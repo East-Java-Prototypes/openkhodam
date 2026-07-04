@@ -65,7 +65,7 @@ async function elementBox(locator: Locator, description: string): Promise<Elemen
   return box
 }
 
-async function expectFooterHeartbeat(locator: Locator): Promise<void> {
+async function expectFooterHeartbeat(page: Page, locator: Locator): Promise<void> {
   await expect(locator).toBeVisible()
   await expect(locator).toHaveAttribute('role', 'img')
   await expect(locator).toHaveAttribute(
@@ -92,6 +92,45 @@ async function expectFooterHeartbeat(locator: Locator): Promise<void> {
       { message: 'footer heartbeat dot should match its connected/disconnected state' }
     )
     .toMatch(/^(connected|disconnected)$/)
+
+  await expect
+    .poll(
+      () =>
+        locator.evaluate((element) => {
+          const visibleTextNodes = Array.from(element.querySelectorAll<HTMLElement>('*'))
+            .filter((child) => {
+              const text = child.textContent?.replace(/\s+/g, ' ').trim()
+              if (!text || child.classList.contains('sr-only')) return false
+
+              const style = window.getComputedStyle(child)
+              const rect = child.getBoundingClientRect()
+              return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1
+            })
+            .map((child) => child.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+
+          return visibleTextNodes
+        }),
+      { message: 'footer heartbeat should not visibly print a time/status label' }
+    )
+    .toEqual([])
+
+  const heartbeatBox = await elementBox(locator, 'project footer heartbeat')
+  expect(
+    heartbeatBox.width,
+    'footer heartbeat should remain a compact dot indicator'
+  ).toBeLessThanOrEqual(32)
+
+  const tooltipText = await locator.getAttribute('aria-label')
+  expect(tooltipText, 'footer heartbeat should expose details for the tooltip').not.toBeNull()
+  if (!tooltipText) throw new Error('Footer heartbeat should expose details for the tooltip.')
+
+  const tooltip = page.getByRole('tooltip')
+  await locator.hover()
+  await expect(tooltip).toContainText(tooltipText)
+  await page.mouse.move(0, 0)
+  await expect(tooltip).toBeHidden()
+  await locator.focus()
+  await expect(tooltip).toContainText(tooltipText)
 }
 
 async function remToPixels(page: Page, rem: number): Promise<number> {
@@ -361,7 +400,7 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   await expect(
     projectSidebarHeader(appWindow).getByText(/^(Live( · .*)?|Events paused)$/)
   ).toHaveCount(0)
-  await expectFooterHeartbeat(projectHeartbeatStatus(appWindow))
+  await expectFooterHeartbeat(appWindow, projectHeartbeatStatus(appWindow))
   const footerBox = await elementBox(projectSidebarFooter(appWindow), 'project sidebar footer')
   const settingsBox = await elementBox(
     projectSettingsLink(appWindow),
@@ -951,7 +990,7 @@ test('shows the real live events footer heartbeat without fake SSE data', async 
   await expect(
     projectSidebarHeader(appWindow).getByText(/^(Live( · .*)?|Events paused)$/)
   ).toHaveCount(0)
-  await expectFooterHeartbeat(projectHeartbeatStatus(appWindow))
+  await expectFooterHeartbeat(appWindow, projectHeartbeatStatus(appWindow))
 })
 
 test('shows the real OpenCode sidecar settings surface', async ({ appWindow, electronApp }) => {

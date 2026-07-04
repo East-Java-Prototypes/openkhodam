@@ -42,7 +42,6 @@ type TimeValue = string | number | null
 
 export type OpenCodeHeartbeatStatus = {
   connected: boolean
-  displayLabel: string
   ariaLabel: string
   title: string
 }
@@ -561,7 +560,6 @@ function getHeartbeatStatus(
 
   return {
     connected,
-    displayLabel: events.lastEventAt ? formatTime(events.lastEventAt) : connected ? 'Live' : 'Off',
     ariaLabel: detail,
     title: detail
   }
