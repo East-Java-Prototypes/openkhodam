@@ -44,6 +44,7 @@ const sourceGoogleWorkspacePluginPath = join(
 const toolName = 'openkhodam_plugin_ping'
 const googleDriveToolName = 'google_drive_search_files'
 const googleDocsReadToolName = 'google_docs_read'
+const googleDocsEditToolName = 'google_docs_edit'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 
@@ -65,6 +66,32 @@ type OpenKhodamPocPlugin = {
 
 type GoogleWorkspacePlugin = {
   tool: {
+    google_docs_edit: {
+      description: string
+      execute: (
+        args: {
+          documentId?: string
+          operation?: {
+            match?: string
+            occurrence?: number | string
+            text?: string
+            type?: string
+          }
+        },
+        context: {
+          abort?: AbortSignal
+          ask?: (input: {
+            always: string[]
+            metadata: Record<string, unknown>
+            patterns: string[]
+            permission: string
+          }) => Promise<void>
+          directory?: string
+          sessionID?: string
+          worktree?: string
+        }
+      ) => Promise<string>
+    }
     google_docs_read: {
       description: string
       execute: (
@@ -1076,6 +1103,717 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
   }
 })
 
+test('asks approval before semantic Google Docs insert edits and returns a bounded reread preview', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-edit-insert-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const events: string[] = []
+  const rawInsertedText = '\\n\\nApproved edit'
+  const normalizedInsertedText = '\n\nApproved edit'
+  const updatedText = 'Intro this is nice\nAgain this is nice\n\nApproved edit'
+  let batchAuthorization: string | null = null
+  let batchBody: unknown = null
+  let batchUrl: URL | null = null
+  let docsGets = 0
+  let permissionRequest: Record<string, unknown> | null = null
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'edit-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-edit:batchUpdate')) {
+      events.push('batchUpdate')
+      batchUrl = new URL(url)
+      batchAuthorization = new Headers(init?.headers).get('authorization')
+      expect(new Headers(init?.headers).get('content-type')).toBe('application/json')
+      batchBody = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+      return new Response(
+        JSON.stringify({
+          documentId: 'doc-edit',
+          writeControl: { targetRevisionId: 'rev-batch-edit' }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-edit')) {
+      docsGets += 1
+      events.push(`documents.get:${docsGets}`)
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer edit-access-token')
+      const body =
+        docsGets === 1
+          ? {
+              body: {
+                content: [
+                  {
+                    startIndex: 1,
+                    endIndex: 20,
+                    paragraph: {
+                      elements: [
+                        {
+                          startIndex: 1,
+                          endIndex: 20,
+                          textRun: { content: 'Intro this is nice\n' }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    startIndex: 20,
+                    endIndex: 39,
+                    paragraph: {
+                      elements: [
+                        {
+                          startIndex: 20,
+                          endIndex: 39,
+                          textRun: { content: 'Again this is nice\n' }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              documentId: 'doc-edit',
+              revisionId: 'rev-before-edit',
+              title: 'Edit Target'
+            }
+          : {
+              body: {
+                content: [
+                  {
+                    paragraph: {
+                      elements: [{ textRun: { content: 'Intro this is nice\n' } }]
+                    }
+                  },
+                  {
+                    paragraph: {
+                      elements: [{ textRun: { content: 'Again this is nice\n\nApproved edit\n' } }]
+                    }
+                  }
+                ]
+              },
+              documentId: 'doc-edit',
+              revisionId: 'rev-after-edit',
+              title: 'Edited Target'
+            }
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    expect(plugin.tool.google_docs_edit.description).toContain('semantic operations')
+    expect(plugin.tool.google_docs_edit.description).toContain('bounded')
+    expect((plugin.tool as Record<string, unknown>).google_docs_append_text).toBeUndefined()
+
+    const output = JSON.parse(
+      await plugin.tool.google_docs_edit.execute(
+        {
+          documentId: 'doc-edit',
+          operation: {
+            match: 'this is nice',
+            text: rawInsertedText,
+            type: 'insert_after_text'
+          }
+        },
+        {
+          ask: async (input) => {
+            events.push('ask')
+            permissionRequest = input
+          }
+        }
+      )
+    ) as {
+      document: Record<string, unknown>
+      edit: Record<string, unknown>
+    }
+
+    expect(events).toEqual(['documents.get:1', 'ask', 'batchUpdate', 'documents.get:2'])
+    expect(permissionRequest).toEqual({
+      always: ['google-docs:doc-edit'],
+      metadata: {
+        action: 'insert_after_text',
+        characterCount: normalizedInsertedText.length,
+        documentId: 'doc-edit',
+        documentTitle: 'Edit Target',
+        link: 'https://docs.google.com/document/d/doc-edit/edit',
+        matchCharacterCount: 'this is nice'.length,
+        matchPreview: 'this is nice',
+        occurrence: 'last',
+        textPreview: 'Approved edit'
+      },
+      patterns: ['google-docs:doc-edit'],
+      permission: 'google_docs_edit'
+    })
+    expect(batchUrl?.pathname).toBe('/v1/documents/doc-edit:batchUpdate')
+    expect(batchAuthorization).toBe('Bearer edit-access-token')
+    expect(batchBody).toEqual({
+      requests: [
+        {
+          insertText: {
+            location: { index: 38 },
+            text: normalizedInsertedText
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'rev-before-edit' }
+    })
+    expect(output.edit).toEqual({
+      documentId: 'doc-edit',
+      insertedTextLength: normalizedInsertedText.length,
+      link: 'https://docs.google.com/document/d/doc-edit/edit',
+      ok: true,
+      operation: 'insert_after_text',
+      revision: 'rev-after-edit',
+      title: 'Edited Target'
+    })
+    expect(output.document).toMatchObject({
+      id: 'doc-edit',
+      link: 'https://docs.google.com/document/d/doc-edit/edit',
+      preview: {
+        truncated: false,
+        totalTextLength: updatedText.length,
+        totalBlockCount: 2,
+        includedBlockCount: 2
+      },
+      revision: 'rev-after-edit',
+      text: updatedText,
+      title: 'Edited Target',
+      type: 'google.doc.document'
+    })
+
+    const outputText = JSON.stringify(output)
+    expect(outputText).not.toContain('edit-access-token')
+    expect(outputText).not.toContain('refresh-token')
+    expect(outputText).not.toContain('startIndex')
+    expect(outputText).not.toContain('endIndex')
+    expect(outputText).not.toContain('markdown')
+    expect(outputText).not.toContain('38')
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('refreshes full Google Docs artifacts after successful append_text edits', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-edit-artifact-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documentId = 'doc-edit-artifact?:unsafe'
+  const encodedDocumentUrl = `https://docs.googleapis.com/v1/documents/${encodeURIComponent(documentId)}`
+  const events: string[] = []
+  const appendedText = '\nAppended after write'
+  const updatedText = 'Before\nAppended after write'
+  let batchBody: unknown = null
+  let docsGets = 0
+
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'edit-artifact-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith(`${encodedDocumentUrl}:batchUpdate`)) {
+      events.push('batchUpdate')
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer edit-artifact-access-token'
+      )
+      batchBody = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+      return new Response(
+        JSON.stringify({
+          documentId,
+          writeControl: { targetRevisionId: 'rev-artifact-batch' }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith(encodedDocumentUrl)) {
+      docsGets += 1
+      events.push(`documents.get:${docsGets}`)
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer edit-artifact-access-token'
+      )
+      const body =
+        docsGets === 1
+          ? {
+              body: {
+                content: [
+                  {
+                    startIndex: 1,
+                    endIndex: 8,
+                    paragraph: {
+                      elements: [{ startIndex: 1, endIndex: 8, textRun: { content: 'Before\n' } }]
+                    }
+                  }
+                ]
+              },
+              documentId,
+              revisionId: 'rev-artifact-before',
+              title: 'Artifact Target'
+            }
+          : {
+              body: {
+                content: createGoogleDocParagraphs([`${updatedText}\n`])
+              },
+              documentId,
+              revisionId: 'rev-artifact-after',
+              title: 'Edited Artifact Target'
+            }
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await plugin.tool.google_docs_edit.execute(
+        {
+          documentId,
+          operation: { text: appendedText, type: 'append_text' }
+        },
+        {
+          ask: async (input) => {
+            events.push('ask')
+            expect(input).toMatchObject({
+              metadata: {
+                action: 'append_text',
+                characterCount: appendedText.length,
+                documentId,
+                documentTitle: 'Artifact Target',
+                textPreview: 'Appended after write'
+              },
+              permission: 'google_docs_edit'
+            })
+          },
+          directory: projectPath,
+          sessionID: 'session-edit'
+        }
+      )
+    ) as {
+      document: Record<string, unknown>
+      edit: Record<string, unknown>
+    }
+
+    expect(events).toEqual(['documents.get:1', 'ask', 'batchUpdate', 'documents.get:2'])
+    expect(batchBody).toEqual({
+      requests: [
+        {
+          insertText: {
+            location: { index: 7 },
+            text: appendedText
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'rev-artifact-before' }
+    })
+    expect(output.edit).toMatchObject({
+      documentId,
+      insertedTextLength: appendedText.length,
+      operation: 'append_text',
+      revision: 'rev-artifact-after',
+      title: 'Edited Artifact Target'
+    })
+    expect(output.document).toMatchObject({
+      id: documentId,
+      preview: {
+        truncated: false,
+        totalTextLength: updatedText.length,
+        totalBlockCount: 1,
+        includedBlockCount: 1
+      },
+      revision: 'rev-artifact-after',
+      text: updatedText,
+      title: 'Edited Artifact Target'
+    })
+
+    const fullArtifactPath = expectedGoogleDocArtifactAbsolutePath(projectPath, documentId)
+    const fullArtifact = JSON.parse(await readFile(fullArtifactPath, 'utf8')) as {
+      body: { blocks: Array<{ text: string }> }
+      cachedAt: unknown
+      id: string
+      revision: string
+      schemaVersion: unknown
+      text: string
+      title: string
+    }
+    expect(fullArtifact).toMatchObject({
+      id: documentId,
+      revision: 'rev-artifact-after',
+      schemaVersion: 1,
+      text: updatedText,
+      title: 'Edited Artifact Target'
+    })
+    expect(typeof fullArtifact.cachedAt).toBe('number')
+    expect(fullArtifact.body.blocks[0]?.text).toBe(`${updatedText}\n`)
+
+    const artifacts = JSON.parse(
+      await readFile(join(projectPath, '.openkhodam', 'artifacts.json'), 'utf8')
+    ) as {
+      sessions: Record<string, Array<Record<string, unknown>>>
+    }
+    expect(artifacts.sessions['session-edit']).toHaveLength(1)
+    expect(artifacts.sessions['session-edit']?.[0]).toMatchObject({
+      artifactPath: expectedGoogleDocArtifactPath(documentId),
+      id: documentId,
+      listed: true,
+      title: 'Edited Artifact Target',
+      url: `https://docs.google.com/document/d/${encodeURIComponent(documentId)}/edit`
+    })
+    expect(String(artifacts.sessions['session-edit']?.[0]?.artifactPath)).not.toContain(documentId)
+    expect(JSON.stringify(fullArtifact)).not.toContain('markdown')
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('does not call the Google Docs write API when edit approval is denied', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-edit-denied-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const events: string[] = []
+  let docsGets = 0
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'denied-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-denied:batchUpdate')) {
+      events.push('batchUpdate')
+      throw new Error('Batch update should not be called when edit approval is denied.')
+    }
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-denied')) {
+      docsGets += 1
+      events.push(`documents.get:${docsGets}`)
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: [
+              {
+                startIndex: 1,
+                endIndex: 6,
+                paragraph: {
+                  elements: [{ startIndex: 1, endIndex: 6, textRun: { content: 'Body\n' } }]
+                }
+              }
+            ]
+          },
+          documentId: 'doc-denied',
+          revisionId: 'rev-denied',
+          title: 'Denied Target'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_docs_edit.execute(
+        {
+          documentId: 'doc-denied',
+          operation: { text: 'Denied append', type: 'append_text' }
+        },
+        {
+          ask: async () => {
+            events.push('ask')
+            throw new Error('Permission denied')
+          }
+        }
+      )
+    ).rejects.toThrow('Permission denied')
+    expect(events).toEqual(['documents.get:1', 'ask'])
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('rejects unsupported insert_after_text matches before approval or batchUpdate', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-edit-unsupported-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const events: string[] = []
+  let docsGets = 0
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'unsupported-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-mixed-match:batchUpdate')) {
+      events.push('batchUpdate')
+      throw new Error('Batch update should not be called for an unsupported selected match.')
+    }
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-mixed-match')) {
+      docsGets += 1
+      events.push(`documents.get:${docsGets}`)
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: [
+              {
+                startIndex: 1,
+                endIndex: 20,
+                paragraph: {
+                  elements: [
+                    { startIndex: 1, endIndex: 20, textRun: { content: 'Intro this is nice\n' } }
+                  ]
+                }
+              },
+              {
+                startIndex: 20,
+                endIndex: 39,
+                paragraph: {
+                  elements: [{ textRun: { content: 'Again this is nice\n' } }]
+                }
+              }
+            ]
+          },
+          documentId: 'doc-mixed-match',
+          revisionId: 'rev-before-mixed-match',
+          title: 'Mixed Match Target'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_docs_edit.execute(
+        {
+          documentId: 'doc-mixed-match',
+          operation: {
+            match: 'this is nice',
+            text: 'Should not write',
+            type: 'insert_after_text'
+          }
+        },
+        {
+          ask: async () => {
+            events.push('ask')
+            throw new Error('Approval should not be requested for unsupported selected match.')
+          }
+        }
+      )
+    ).rejects.toThrow(
+      'Google Docs insert_after_text matched text in an unsupported paragraph structure.'
+    )
+    expect(events).toEqual(['documents.get:1'])
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('logs sanitized Google Docs batchUpdate failures after approved append_text edits', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-edit-batch-failure-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const events: string[] = []
+  const warnings: unknown[][] = []
+  let batchBody: unknown = null
+  let docsGets = 0
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'conflict-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-conflict:batchUpdate')) {
+      events.push('batchUpdate')
+      batchBody = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 409,
+            errors: [{ reason: 'failedPrecondition' }],
+            message: 'Revision changed.',
+            status: 'ABORTED'
+          },
+          requestBody: 'should-not-log'
+        }),
+        { status: 409, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-conflict')) {
+      docsGets += 1
+      events.push(`documents.get:${docsGets}`)
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: [
+              {
+                startIndex: 1,
+                endIndex: 15,
+                paragraph: {
+                  elements: [
+                    { startIndex: 1, endIndex: 15, textRun: { content: 'Existing body\n' } }
+                  ]
+                }
+              }
+            ]
+          },
+          documentId: 'doc-conflict',
+          revisionId: 'rev-before-conflict',
+          title: 'Conflict Target'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_docs_edit.execute(
+        {
+          documentId: 'doc-conflict',
+          operation: { text: 'Sensitive inserted text', type: 'append_text' }
+        },
+        {
+          ask: async () => {
+            events.push('ask')
+          }
+        }
+      )
+    ).rejects.toThrow(
+      'Google Docs documents.batchUpdate failed (HTTP 409, ABORTED, failedPrecondition): Revision changed.'
+    )
+
+    expect(events).toEqual(['documents.get:1', 'ask', 'batchUpdate'])
+    expect(batchBody).toEqual({
+      requests: [
+        {
+          insertText: {
+            location: { index: 14 },
+            text: 'Sensitive inserted text'
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'rev-before-conflict' }
+    })
+    expect(warnings).toEqual([
+      [
+        'Google Workspace API request failed',
+        {
+          code: 'ABORTED',
+          message: 'Revision changed.',
+          operation: 'Google Docs documents.batchUpdate',
+          reason: 'failedPrecondition',
+          status: 409
+        }
+      ]
+    ])
+
+    const warningText = JSON.stringify(warnings)
+    expect(warningText).not.toContain('conflict-access-token')
+    expect(warningText).not.toContain('refresh-token')
+    expect(warningText).not.toContain('Sensitive inserted text')
+    expect(warningText).not.toContain('should-not-log')
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
 test('bounds Google Docs read previews while persisting the full normalized artifact', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-preview-'))
   const userDataPath = join(tempRoot, 'user-data')
@@ -1943,6 +2681,8 @@ async function expectOpenCodeLoadsPlugins(pluginPaths: string[]): Promise<void> 
     expect(JSON.parse(body) as string[]).toContain(toolName)
     expect(JSON.parse(body) as string[]).toContain(googleDriveToolName)
     expect(JSON.parse(body) as string[]).toContain(googleDocsReadToolName)
+    expect(JSON.parse(body) as string[]).toContain(googleDocsEditToolName)
+    expect(JSON.parse(body) as string[]).not.toContain('google_docs_append_text')
     expect(server.logs()).not.toMatch(/failed to load plugin/i)
   } finally {
     await server.stop()
