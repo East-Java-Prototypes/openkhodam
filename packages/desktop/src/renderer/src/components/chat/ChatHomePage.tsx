@@ -12,6 +12,7 @@ import {
   type CSSProperties,
   type JSX,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode
 } from 'react'
 import type { PanelImperativeHandle, PanelSize } from 'react-resizable-panels'
@@ -75,6 +76,8 @@ type ChatHomePageProps = {
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
   activePane?: ReactNode
+  areActiveProjectSessionsVisible?: boolean
+  onActiveProjectSessionsToggle?: () => void
 }
 
 type ActionPaneControlsContextValue = {
@@ -87,20 +90,20 @@ const ActionPaneControlsContext = createContext<ActionPaneControlsContextValue |
 
 const emptyChatMessages: ChatMessage[] = []
 const emptyLinkedDocs: LinkedGoogleDoc[] = []
+const noop = (): void => {}
 
 export function ChatHomePage({
   shell,
   project,
   session,
-  activePane
+  activePane,
+  areActiveProjectSessionsVisible = true,
+  onActiveProjectSessionsToggle = noop
 }: ChatHomePageProps): JSX.Element {
   const projectSidebarPanelRef = useRef<PanelImperativeHandle | null>(null)
   const [isProjectSidebarOpen, setProjectSidebarOpen] = useState(true)
-  const [areActiveProjectSessionsVisible, setActiveProjectSessionsVisible] = useState(true)
   const [isActionPaneOpen, setActionPaneOpen] = useState(true)
   const [isActionPaneAvailable, setActionPaneAvailable] = useState(false)
-  const activeProjectId = project?.selectedProject?.id ?? null
-  const previousActiveProjectIdRef = useRef<string | null>(activeProjectId)
 
   const actionPaneControls = useMemo<ActionPaneControlsContextValue>(
     () => ({
@@ -141,28 +144,12 @@ export function ChatHomePage({
     syncProjectSidebarPanel(isProjectSidebarOpen)
   }, [isProjectSidebarOpen, syncProjectSidebarPanel])
 
-  useEffect(() => {
-    if (previousActiveProjectIdRef.current === activeProjectId) return
-
-    previousActiveProjectIdRef.current = activeProjectId
-    setActiveProjectSessionsVisible(true)
-  }, [activeProjectId])
-
   const toggleProjectSidebar = useCallback((): void => {
     handleProjectSidebarOpenChange(!isProjectSidebarOpen)
   }, [handleProjectSidebarOpenChange, isProjectSidebarOpen])
 
   const toggleActionPane = useCallback((): void => {
     setActionPaneOpen((open) => !open)
-  }, [])
-
-  const handleProjectClick = useCallback((isActive: boolean): void => {
-    if (isActive) {
-      setActiveProjectSessionsVisible((isVisible) => !isVisible)
-      return
-    }
-
-    setActiveProjectSessionsVisible(true)
   }, [])
 
   let projectSidebarPane: ReactNode
@@ -173,7 +160,7 @@ export function ChatHomePage({
         project={project}
         session={session}
         areActiveProjectSessionsVisible={areActiveProjectSessionsVisible}
-        onProjectClick={handleProjectClick}
+        onActiveProjectSessionsToggle={onActiveProjectSessionsToggle}
       />
     )
   } else {
@@ -330,13 +317,13 @@ function ProjectChatSidebar({
   project,
   session,
   areActiveProjectSessionsVisible,
-  onProjectClick
+  onActiveProjectSessionsToggle
 }: {
   shell: OpenCodeChatShellState
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
   areActiveProjectSessionsVisible: boolean
-  onProjectClick: (isActive: boolean) => void
+  onActiveProjectSessionsToggle: () => void
 }): JSX.Element {
   return (
     <Sidebar
@@ -386,7 +373,7 @@ function ProjectChatSidebar({
                     routeProject={project}
                     session={session}
                     areActiveProjectSessionsVisible={areActiveProjectSessionsVisible}
-                    onProjectClick={onProjectClick}
+                    onActiveProjectSessionsToggle={onActiveProjectSessionsToggle}
                   />
                 ))}
               </SidebarMenu>
@@ -541,12 +528,22 @@ function OpenedProjectDetails({
 function ProjectButton({
   project,
   isActive,
-  onProjectClick
+  onActiveProjectSessionsToggle
 }: {
   project: ChatProject
   isActive: boolean
-  onProjectClick: () => void
+  onActiveProjectSessionsToggle: () => void
 }): JSX.Element {
+  const handleClick = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>): void => {
+      if (!isActive) return
+
+      event.preventDefault()
+      onActiveProjectSessionsToggle()
+    },
+    [isActive, onActiveProjectSessionsToggle]
+  )
+
   return (
     <SidebarMenuButton
       asChild
@@ -556,7 +553,12 @@ function ProjectButton({
       variant={isActive ? 'outline' : 'default'}
       className="h-auto px-3 py-2"
     >
-      <Link to="/projects/$projectId" params={{ projectId: project.id }} onClick={onProjectClick}>
+      <Link
+        to="/projects/$projectId"
+        params={{ projectId: project.id }}
+        search={{}}
+        onClick={handleClick}
+      >
         <span className="flex min-w-0 flex-1 flex-col items-stretch gap-1 text-left">
           <span className="truncate text-sm font-medium">{project.name}</span>
           {project.subtitle ? (
@@ -575,13 +577,13 @@ function ProjectWithSessions({
   routeProject,
   session,
   areActiveProjectSessionsVisible,
-  onProjectClick
+  onActiveProjectSessionsToggle
 }: {
   project: ChatProject
   routeProject?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
   areActiveProjectSessionsVisible: boolean
-  onProjectClick: (isActive: boolean) => void
+  onActiveProjectSessionsToggle: () => void
 }): JSX.Element {
   const isActive = project.subtitle === routeProject?.selectedDirectory
   return (
@@ -589,7 +591,7 @@ function ProjectWithSessions({
       <ProjectButton
         project={project}
         isActive={isActive}
-        onProjectClick={() => onProjectClick(isActive)}
+        onActiveProjectSessionsToggle={onActiveProjectSessionsToggle}
       />
       {isActive && areActiveProjectSessionsVisible ? (
         <SelectedProjectSessions project={routeProject} session={session} />
@@ -672,6 +674,7 @@ function ProjectChatListItem({
             <Link
               to="/projects/$projectId/sessions/$sessionId"
               params={{ projectId, sessionId: chat.id }}
+              search={true}
               role="link"
             />
           }
