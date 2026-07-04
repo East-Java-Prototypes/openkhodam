@@ -56,6 +56,7 @@ import {
   SidebarProvider,
   SidebarRail
 } from '@/components/ui/sidebar'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
@@ -395,30 +396,36 @@ function ProjectChatSidebar({
 
 function SidebarHeartbeat({ status }: { status: OpenCodeHeartbeatStatus }): JSX.Element {
   return (
-    <div
-      data-slot="sidebar-heartbeat"
-      data-state={status.connected ? 'connected' : 'disconnected'}
-      role="img"
-      aria-label={status.ariaLabel}
-      title={status.title}
-      className={cn(
-        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[11px] leading-none font-medium tabular-nums',
-        status.connected
-          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-          : 'border-destructive/40 bg-destructive/10 text-destructive'
-      )}
-    >
-      <span
-        data-slot="sidebar-heartbeat-dot"
-        aria-hidden="true"
-        className={cn(
-          'size-2 rounded-full',
-          status.connected ? 'bg-emerald-500' : 'bg-destructive'
-        )}
-      />
-      <span aria-hidden="true">{status.displayLabel}</span>
-      <span className="sr-only">{status.ariaLabel}</span>
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild data-slot="sidebar-heartbeat" delay={0}>
+        <div
+          data-slot="sidebar-heartbeat"
+          data-state={status.connected ? 'connected' : 'disconnected'}
+          role="img"
+          tabIndex={0}
+          aria-label={status.ariaLabel}
+          title={status.title}
+          className={cn(
+            'inline-flex size-7 shrink-0 items-center justify-center rounded-full border p-0 outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+            status.connected
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+              : 'border-destructive/40 bg-destructive/10 text-destructive'
+          )}
+        >
+          <span
+            data-slot="sidebar-heartbeat-dot"
+            aria-hidden="true"
+            className={cn(
+              'size-2 rounded-full',
+              status.connected ? 'bg-emerald-500' : 'bg-destructive'
+            )}
+          />
+        </div>
+      </TooltipTrigger>
+      <TooltipContent role="tooltip" side="top" align="end" sideOffset={8}>
+        {status.title}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
