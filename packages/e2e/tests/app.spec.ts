@@ -18,7 +18,7 @@ const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
 const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
 const projectSidebar = (page: Page): Locator =>
-  page.getByRole('complementary', { name: 'Project folders' })
+  page.getByRole('complementary', { name: 'Projects' })
 const collapsedProjectSidebarRail = (page: Page): Locator =>
   page.getByRole('complementary', { name: 'Collapsed project sidebar' })
 const projectSidebarHeader = (page: Page): Locator =>
@@ -29,7 +29,7 @@ const projectHeartbeatStatus = (page: Page): Locator =>
   projectSidebarFooter(page).locator('[data-slot="sidebar-heartbeat"]')
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 const projectChatLink = (page: Page): Locator =>
-  page.getByRole('navigation', { name: 'Project folders' }).getByRole('link')
+  page.getByRole('navigation', { name: 'Projects' }).getByRole('link')
 const projectSettingsLink = (page: Page): Locator =>
   projectSidebar(page).getByRole('link', { name: 'Settings', exact: true })
 const projectHomeLink = (page: Page): Locator =>
@@ -183,10 +183,9 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(projectSettingsLink(page)).toBeVisible()
   await expect(projectHeartbeatStatus(page)).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Project sessions' })).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: 'Project folders' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
-  await expect(page.getByRole('navigation', { name: 'Project folders' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Projects' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toHaveCount(0)
@@ -473,7 +472,7 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
   await setResizeTestViewport(electronApp, appWindow)
   await waitForChatShell(appWindow)
 
-  const sidebar = appWindow.getByRole('complementary', { name: 'Project folders' })
+  const sidebar = appWindow.getByRole('complementary', { name: 'Projects' })
   const resizeHandle = appWindow.getByRole('separator', { name: 'Resize project sidebar' })
   const titlebar = paneControls(appWindow)
   const collapseSidebarButton = titlebar.getByRole('button', { name: 'Collapse project sidebar' })
@@ -1246,10 +1245,9 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/\/settings$/)
   await expect(projectHomeLink(appWindow)).toBeVisible()
   await expect(projectSettingsLink(appWindow)).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Project folders' })).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toHaveCount(0)
   await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
-  await expect(appWindow.getByRole('navigation', { name: 'Project folders' })).toBeVisible()
+  await expect(appWindow.getByRole('navigation', { name: 'Projects' })).toBeVisible()
   await expect(appWindow.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(chatActionPane(appWindow)).toHaveCount(0)
   await expect(appWindow.getByRole('heading', { name: 'OpenCode Server' })).toBeVisible()
