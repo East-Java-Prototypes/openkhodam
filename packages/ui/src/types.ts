@@ -67,6 +67,41 @@ export type LinkedGoogleDocRecord = {
   url?: string | null
 }
 
+export type GoogleDocBodyBlock = {
+  id: string
+  ordinal: number
+  type: 'paragraph'
+  text: string
+}
+
+export type GoogleDocDocumentArtifact = {
+  type: 'google.doc.document'
+  id: string
+  title: string | null
+  revision: string | null
+  text: string
+  link: string | null
+  body: {
+    blocks: GoogleDocBodyBlock[]
+  }
+}
+
+export type GoogleDocDocumentPreviewMetadata = {
+  truncated: boolean
+  totalTextLength: number
+  totalBlockCount: number
+  includedBlockCount: number
+}
+
+export type GoogleDocDocumentPreviewArtifact = GoogleDocDocumentArtifact & {
+  preview: GoogleDocDocumentPreviewMetadata
+}
+
+export type PersistedGoogleDocDocumentArtifact = GoogleDocDocumentArtifact & {
+  schemaVersion: 1
+  cachedAt: number
+}
+
 export type ProjectArtifactsConfig = {
   version: 1
   sessions: Record<string, LinkedGoogleDoc[]>
