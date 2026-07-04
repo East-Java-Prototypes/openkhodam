@@ -25,7 +25,8 @@ function ProjectIndexRoute(): JSX.Element {
             )
             void navigate({
               to: '/projects/$projectId/sessions/$sessionId',
-              params: { projectId, sessionId: sessionID }
+              params: { projectId, sessionId: sessionID },
+              search: true
             })
           })
       }}

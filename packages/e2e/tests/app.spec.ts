@@ -534,7 +534,10 @@ test('toggles active project sessions without collapsing the project sidebar', a
 
   await fakeProjectLink.click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/[^/]+$/
+    /\/projects\/[^/?]+$/
+  )
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
+    'showActiveProjectSessions'
   )
   await expectOpenedProjectRouteResolved(appWindow)
   await expect(projectSidebar(appWindow)).toBeVisible()
@@ -545,17 +548,69 @@ test('toggles active project sessions without collapsing the project sidebar', a
   ).toBeVisible()
 
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expect
+    .poll(() => appWindow.evaluate(() => window.location.hash))
+    .toMatch(/\/projects\/[^/?]+\?showActiveProjectSessions=false$/)
   await expect(projectSidebar(appWindow)).toBeVisible()
   await expect(collapsedProjectSidebarRail(appWindow)).toHaveCount(0)
   await expect(selectedProjectSessions(appWindow)).toHaveCount(0)
 
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/[^/?]+$/
+  )
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
+    'showActiveProjectSessions'
+  )
   await expect(projectSidebar(appWindow)).toBeVisible()
   await expect(collapsedProjectSidebarRail(appWindow)).toHaveCount(0)
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
   await expect(
     sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' })
   ).toBeVisible()
+
+  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/fake-project\/sessions\/seeded-session$/
+  )
+  await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expect
+    .poll(() => appWindow.evaluate(() => window.location.hash))
+    .toMatch(/\/projects\/fake-project\/sessions\/seeded-session\?showActiveProjectSessions=false$/)
+  await expect(projectSidebar(appWindow)).toBeVisible()
+  await expect(collapsedProjectSidebarRail(appWindow)).toHaveCount(0)
+  await expect(selectedProjectSessions(appWindow)).toHaveCount(0)
+  await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/fake-project\/sessions\/seeded-session$/
+  )
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
+    'showActiveProjectSessions'
+  )
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+
+  await appWindow.evaluate(() => {
+    window.location.hash = '#/projects/other-project?showActiveProjectSessions=false'
+  })
+  await expect
+    .poll(() => appWindow.evaluate(() => window.location.hash))
+    .toMatch(/\/projects\/other-project\?showActiveProjectSessions=false$/)
+  await expect(projectSidebar(appWindow)).toBeVisible()
+  await expect(collapsedProjectSidebarRail(appWindow)).toHaveCount(0)
+
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/fake-project$/
+  )
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
+    'showActiveProjectSessions'
+  )
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
 })
 
 test('resizes and collapses/restores the chat action pane', async ({ appWindow, electronApp }) => {
