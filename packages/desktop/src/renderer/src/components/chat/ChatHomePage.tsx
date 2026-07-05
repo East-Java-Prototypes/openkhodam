@@ -63,6 +63,8 @@ import { ChatActionPane } from './ChatActionPane'
 import { ChatMessageParts } from './ChatMessageParts'
 import type {
   OpenCodeChatShellState,
+  OpenCodeAgentOption,
+  OpenCodeModelEffortOption,
   OpenCodeHeartbeatStatus,
   OpenCodeModelOption,
   OpenCodeProjectRouteState,
@@ -779,9 +781,16 @@ export function ActiveChatPanel({
                 canSendPrompt={session.canSendPrompt}
                 isSending={session.isSending}
                 modelOptions={session.modelOptions}
+                agentOptions={session.agentOptions}
+                effortOptions={session.effortOptions}
                 selectedModelID={session.selectedModelID}
                 setSelectedModelID={session.setSelectedModelID}
+                selectedAgentID={session.selectedAgentID}
+                setSelectedAgentID={session.setSelectedAgentID}
+                selectedEffortID={session.selectedEffortID}
+                setSelectedEffortID={session.setSelectedEffortID}
                 isLoadingModels={session.isLoadingModels}
+                isLoadingAgents={session.isLoadingAgents}
               />
             ) : null)}
         </section>
@@ -848,9 +857,16 @@ export function ProjectRouteActivePane({
             canSendPrompt={startConversation.canSendPrompt}
             isSending={startConversation.isSending}
             modelOptions={startConversation.modelOptions}
+            agentOptions={startConversation.agentOptions}
+            effortOptions={startConversation.effortOptions}
             selectedModelID={startConversation.selectedModelID}
             setSelectedModelID={startConversation.setSelectedModelID}
+            selectedAgentID={startConversation.selectedAgentID}
+            setSelectedAgentID={startConversation.setSelectedAgentID}
+            selectedEffortID={startConversation.selectedEffortID}
+            setSelectedEffortID={startConversation.setSelectedEffortID}
             isLoadingModels={startConversation.isLoadingModels}
+            isLoadingAgents={startConversation.isLoadingAgents}
             helperText="Start a new conversation in this project."
             modelHelperText={startConversation.modelHelperText}
           />
@@ -1013,9 +1029,16 @@ function ChatPromptComposer({
   canSendPrompt,
   isSending,
   modelOptions,
+  agentOptions,
+  effortOptions,
   selectedModelID,
   setSelectedModelID,
+  selectedAgentID,
+  setSelectedAgentID,
+  selectedEffortID,
+  setSelectedEffortID,
   isLoadingModels,
+  isLoadingAgents,
   helperText = 'Send to the selected session.',
   modelHelperText
 }: {
@@ -1025,9 +1048,16 @@ function ChatPromptComposer({
   canSendPrompt: boolean
   isSending: boolean
   modelOptions: OpenCodeModelOption[]
+  agentOptions: OpenCodeAgentOption[]
+  effortOptions: OpenCodeModelEffortOption[]
   selectedModelID: string | null
   setSelectedModelID: (value: string | null) => void
+  selectedAgentID: string | null
+  setSelectedAgentID: (value: string | null) => void
+  selectedEffortID: string | null
+  setSelectedEffortID: (value: string | null) => void
   isLoadingModels: boolean
+  isLoadingAgents: boolean
   helperText?: string
   modelHelperText?: string
 }): JSX.Element {
@@ -1059,34 +1089,105 @@ function ChatPromptComposer({
       <label className="sr-only" htmlFor="chat-prompt">
         Message OpenKhodam
       </label>
-      <div className="flex flex-col gap-2 md:flex-row md:items-start">
-        <ModelPickerCombobox
-          options={modelOptions}
-          selectedModelID={selectedModelID}
-          setSelectedModelID={setSelectedModelID}
-          disabled={isSending || isLoadingModels || modelOptions.length === 0}
+      <InputGroup className="h-auto min-w-0 bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100">
+        <InputGroupTextarea
+          id="chat-prompt"
+          className="min-h-24 text-sm"
+          placeholder="Ask about this project..."
+          value={promptText}
+          onChange={(event) => setPromptText(event.currentTarget.value)}
+          onKeyDown={handlePromptKeyDown}
+          disabled={isSending}
         />
-        <InputGroup className="h-auto min-w-0 flex-1 bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100">
-          <InputGroupTextarea
-            id="chat-prompt"
-            className="min-h-11 text-sm"
-            placeholder="Ask about this project..."
-            value={promptText}
-            onChange={(event) => setPromptText(event.currentTarget.value)}
-            onKeyDown={handlePromptKeyDown}
-            disabled={isSending}
-          />
-          <InputGroupAddon align="block-end" className="justify-end border-t">
-            <InputGroupButton type="submit" disabled={!canSendPrompt}>
-              {isSending ? 'Sending…' : 'Send'}
-            </InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
-      </div>
+        <InputGroupAddon align="block-end" className="flex-wrap justify-between gap-2 border-t">
+          <div
+            className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {agentOptions.length > 0 ? (
+              <AgentPickerCombobox
+                options={agentOptions}
+                selectedAgentID={selectedAgentID}
+                setSelectedAgentID={setSelectedAgentID}
+                disabled={isSending || isLoadingAgents}
+              />
+            ) : null}
+            {modelOptions.length > 0 ? (
+              <ModelPickerCombobox
+                options={modelOptions}
+                selectedModelID={selectedModelID}
+                setSelectedModelID={setSelectedModelID}
+                disabled={isSending || isLoadingModels}
+              />
+            ) : null}
+            {effortOptions.length > 0 ? (
+              <EffortPickerCombobox
+                options={effortOptions}
+                selectedEffortID={selectedEffortID}
+                setSelectedEffortID={setSelectedEffortID}
+                disabled={isSending || isLoadingModels}
+              />
+            ) : null}
+          </div>
+          <InputGroupButton type="submit" disabled={!canSendPrompt}>
+            {isSending ? 'Sending…' : 'Send'}
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
       <p className="text-muted-foreground mt-2 text-xs">
         {helperText} {modelText}
       </p>
     </form>
+  )
+}
+
+function AgentPickerCombobox({
+  options,
+  selectedAgentID,
+  setSelectedAgentID,
+  disabled
+}: {
+  options: OpenCodeAgentOption[]
+  selectedAgentID: string | null
+  setSelectedAgentID: (value: string | null) => void
+  disabled: boolean
+}): JSX.Element {
+  const selected = options.find((option) => option.id === selectedAgentID) ?? null
+  return (
+    <div className="min-w-32 flex-1 sm:max-w-40 sm:flex-none">
+      <label className="sr-only" htmlFor="opencode-agent-picker">
+        OpenCode agent
+      </label>
+      <Combobox
+        items={options}
+        value={selected}
+        onValueChange={(option) => setSelectedAgentID(option?.id ?? null)}
+        itemToStringValue={(option) => option?.label ?? ''}
+      >
+        <ComboboxInput
+          id="opencode-agent-picker"
+          className="w-full bg-card"
+          placeholder="Select agent"
+          disabled={disabled}
+          aria-label="OpenCode agent"
+        />
+        <ComboboxContent className="w-64">
+          <ComboboxEmpty>No agents found.</ComboboxEmpty>
+          <ComboboxList>
+            {(option) => (
+              <ComboboxItem key={option.id} value={option}>
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="truncate font-medium">{option.label}</span>
+                  {option.description ? (
+                    <span className="truncate text-muted-foreground">{option.description}</span>
+                  ) : null}
+                </span>
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    </div>
   )
 }
 
@@ -1103,7 +1204,7 @@ function ModelPickerCombobox({
 }): JSX.Element {
   const selected = options.find((option) => option.id === selectedModelID) ?? null
   return (
-    <div className="min-w-0 md:w-64">
+    <div className="min-w-48 flex-[2] sm:max-w-72 sm:flex-none">
       <label className="sr-only" htmlFor="opencode-model-picker">
         OpenCode model
       </label>
@@ -1129,6 +1230,51 @@ function ModelPickerCombobox({
                   <span className="truncate font-medium">{option.modelName}</span>
                   <span className="truncate text-muted-foreground">{option.providerName}</span>
                 </span>
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    </div>
+  )
+}
+
+function EffortPickerCombobox({
+  options,
+  selectedEffortID,
+  setSelectedEffortID,
+  disabled
+}: {
+  options: OpenCodeModelEffortOption[]
+  selectedEffortID: string | null
+  setSelectedEffortID: (value: string | null) => void
+  disabled: boolean
+}): JSX.Element {
+  const selected = options.find((option) => option.value === selectedEffortID) ?? null
+  return (
+    <div className="min-w-32 flex-1 sm:max-w-40 sm:flex-none">
+      <label className="sr-only" htmlFor="opencode-effort-picker">
+        OpenCode effort
+      </label>
+      <Combobox
+        items={options}
+        value={selected}
+        onValueChange={(option) => setSelectedEffortID(option?.value ?? null)}
+        itemToStringValue={(option) => option?.label ?? ''}
+      >
+        <ComboboxInput
+          id="opencode-effort-picker"
+          className="w-full bg-card"
+          placeholder="Default effort"
+          disabled={disabled}
+          aria-label="OpenCode effort"
+        />
+        <ComboboxContent className="w-48">
+          <ComboboxEmpty>No effort options found.</ComboboxEmpty>
+          <ComboboxList>
+            {(option) => (
+              <ComboboxItem key={option.id} value={option}>
+                <span className="truncate font-medium">{option.label}</span>
               </ComboboxItem>
             )}
           </ComboboxList>
