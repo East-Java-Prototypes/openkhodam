@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 import type { ElectronApplication } from '@playwright/test'
 import { expect, test, type Locator, type Page } from '../fixtures/electron'
@@ -30,6 +30,10 @@ const projectHeartbeatStatus = (page: Page): Locator =>
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Projects' }).getByRole('link')
+const projectNewConversationLink = (page: Page, projectName: string): Locator =>
+  page
+    .getByRole('navigation', { name: 'Projects' })
+    .getByRole('link', { name: `Start new conversation in ${projectName}`, exact: true })
 const projectSettingsLink = (page: Page): Locator =>
   projectSidebar(page).getByRole('link', { name: 'Settings', exact: true })
 const projectHomeLink = (page: Page): Locator =>
@@ -466,6 +470,79 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
       .or(appWindow.getByText('No OpenCode projects found.'))
       .first()
   ).toBeVisible()
+})
+
+test('renders basename project labels and opens the project new-conversation shell from the plus affordance', async ({
+  appWindow
+}) => {
+  const fallbackProjectName = basename(fakeProjectDirectory)
+  await appWindow.route('**/project', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue()
+      return
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'fallback-project',
+          worktree: fakeProjectDirectory,
+          time: { created: Date.now(), updated: Date.now() },
+          sandboxes: []
+        }
+      ])
+    })
+  })
+
+  await appWindow.reload()
+  await waitForChatShell(appWindow)
+
+  const projectNavigation = appWindow.getByRole('navigation', { name: 'Projects' })
+  const fallbackProjectLink = projectNavigation.getByRole('link', {
+    name: fallbackProjectName,
+    exact: true
+  })
+  const newConversationLink = projectNewConversationLink(appWindow, fallbackProjectName)
+
+  await expect(fallbackProjectLink).toBeVisible()
+  await expect(projectNavigation.getByText(fakeProjectDirectory, { exact: true })).toHaveCount(0)
+  await expect(newConversationLink).toBeVisible()
+  await expect(newConversationLink).toHaveText('+')
+  const newConversationBox = await elementBox(
+    newConversationLink,
+    'project new-conversation affordance'
+  )
+  const fallbackProjectBox = await elementBox(fallbackProjectLink, 'project row link')
+  expect(newConversationBox.width).toBeGreaterThanOrEqual(40)
+  expect(newConversationBox.height).toBeGreaterThanOrEqual(40)
+  expect(newConversationBox.x).toBeGreaterThanOrEqual(
+    fallbackProjectBox.x + fallbackProjectBox.width
+  )
+
+  await fallbackProjectLink.click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/fallback-project$/
+  )
+  await expectOpenedProjectRouteResolved(appWindow)
+  await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/fallback-project\/sessions\/seeded-session$/
+  )
+  await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+
+  await newConversationLink.click()
+  await expect
+    .poll(() => appWindow.evaluate(() => window.location.hash))
+    .toMatch(/\/projects\/fallback-project$/)
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
+    'showActiveProjectSessions'
+  )
+  await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
+  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+  await expect(appWindow.getByText('Start a new conversation in this project.')).toBeVisible()
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
 })
 
 test('resizes and collapses/restores the project sidebar', async ({ appWindow, electronApp }) => {
