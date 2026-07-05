@@ -546,14 +546,34 @@ function ProjectButton({
       >
         <span className="flex min-w-0 flex-1 flex-col items-stretch gap-1 text-left">
           <span className="truncate text-sm font-medium">{project.name}</span>
-          {project.subtitle ? (
-            <span className="text-muted-foreground line-clamp-2 text-xs leading-5 whitespace-normal break-words">
-              {project.subtitle}
-            </span>
-          ) : null}
         </span>
       </Link>
     </SidebarMenuButton>
+  )
+}
+
+function ProjectNewConversationLink({ project }: { project: ChatProject }): JSX.Element {
+  const label = `Start new conversation in ${project.name}`
+
+  return (
+    <Button
+      nativeButton={false}
+      render={
+        <Link
+          to="/projects/$projectId"
+          params={{ projectId: project.id }}
+          search={{}}
+          role="link"
+          aria-label={label}
+          title={label}
+        />
+      }
+      size="icon"
+      variant="ghost"
+      className="size-10 shrink-0 text-base leading-none"
+    >
+      +
+    </Button>
   )
 }
 
@@ -570,14 +590,19 @@ function ProjectWithSessions({
   areActiveProjectSessionsVisible: boolean
   onActiveProjectSessionsToggle: () => void
 }): JSX.Element {
-  const isActive = project.subtitle === routeProject?.selectedDirectory
+  const isActive = project.id === routeProject?.selectedProject?.id
   return (
     <SidebarMenuItem>
-      <ProjectButton
-        project={project}
-        isActive={isActive}
-        onActiveProjectSessionsToggle={onActiveProjectSessionsToggle}
-      />
+      <div className="flex min-w-0 items-start gap-1">
+        <div className="min-w-0 flex-1">
+          <ProjectButton
+            project={project}
+            isActive={isActive}
+            onActiveProjectSessionsToggle={onActiveProjectSessionsToggle}
+          />
+        </div>
+        <ProjectNewConversationLink project={project} />
+      </div>
       {isActive && areActiveProjectSessionsVisible ? (
         <SelectedProjectSessions project={routeProject} session={session} />
       ) : null}

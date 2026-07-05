@@ -492,8 +492,7 @@ function mapSessionsToChats(sessions: OpenCodeSession[]): ProjectChat[] {
 function mapProject(project: OpenCodeProject, index: number): ChatProject {
   return {
     id: getProjectRouteId(project, index),
-    name: projectLabel(project, index),
-    subtitle: project.worktree
+    name: projectLabel(project, index)
   }
 }
 
@@ -633,7 +632,14 @@ function formatUnknownError(error: unknown): string {
   }
 }
 function projectLabel(project: OpenCodeProject, index: number): string {
-  return project.name ?? project.worktree ?? project.id ?? `Project ${index + 1}`
+  return project.name || basename(project.worktree) || project.id || `Project ${index + 1}`
+}
+function basename(path: string | undefined): string | null {
+  if (!path) return null
+  const trimmed = path.replace(/[\\/]+$/, '')
+  if (!trimmed) return null
+  const parts = trimmed.split(/[\\/]/)
+  return parts[parts.length - 1] || null
 }
 function getSessionId(session: OpenCodeSession | OpenCodeSessionDetails): string | null {
   return getStringFromRecord(session, 'id') ?? getStringFromRecord(session, 'sessionID')
