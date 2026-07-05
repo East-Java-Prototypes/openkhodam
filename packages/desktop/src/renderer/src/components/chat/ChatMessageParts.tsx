@@ -2,48 +2,50 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
-import type { ChatMessagePart } from '../../hooks/useChatInterfaceData'
+import type { ChatMessage, ChatMessagePart } from '../../hooks/useChatInterfaceData'
+import { MarkdownText } from './MarkdownText'
 
-type PartComponentMap = {
-  [K in ChatMessagePart['type']]: (props: {
-    part: Extract<ChatMessagePart, { type: K }>
-  }) => JSX.Element
-}
+type ChatMessageAuthor = ChatMessage['author']
 
-const PART_COMPONENTS = {
-  text: TextPart,
-  reasoning: ReasoningPart,
-  status: StatusPart,
-  tool: ToolPart as unknown as PartComponentMap['tool'],
-  unknown: UnknownPart
-} satisfies PartComponentMap
-
-export function ChatMessageParts({ parts }: { parts: ChatMessagePart[] }): JSX.Element {
+export function ChatMessageParts({
+  author,
+  parts
+}: {
+  author: ChatMessageAuthor
+  parts: ChatMessagePart[]
+}): JSX.Element {
   return (
     <div className="flex flex-col gap-3">
       {parts.map((part) => (
-        <div key={part.id}>{renderPart(part)}</div>
+        <div key={part.id}>{renderPart(part, author)}</div>
       ))}
     </div>
   )
 }
 
-function renderPart(part: ChatMessagePart): JSX.Element {
+function renderPart(part: ChatMessagePart, author: ChatMessageAuthor): JSX.Element {
   switch (part.type) {
     case 'text':
-      return <PART_COMPONENTS.text part={part} />
+      return <TextPart author={author} part={part} />
     case 'reasoning':
-      return <PART_COMPONENTS.reasoning part={part} />
+      return <ReasoningPart part={part} />
     case 'status':
-      return <PART_COMPONENTS.status part={part} />
+      return <StatusPart part={part} />
     case 'tool':
-      return <PART_COMPONENTS.tool part={part} />
+      return <ToolPart part={part} />
     case 'unknown':
-      return <PART_COMPONENTS.unknown part={part} />
+      return <UnknownPart part={part} />
   }
 }
 
-function TextPart({ part }: { part: Extract<ChatMessagePart, { type: 'text' }> }): JSX.Element {
+function TextPart({
+  author,
+  part
+}: {
+  author: ChatMessageAuthor
+  part: Extract<ChatMessagePart, { type: 'text' }>
+}): JSX.Element {
+  if (author === 'assistant') return <MarkdownText text={part.text} />
   return <p className="whitespace-pre-wrap break-words leading-7">{part.text}</p>
 }
 

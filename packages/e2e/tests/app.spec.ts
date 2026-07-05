@@ -1099,7 +1099,7 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
   await expect(transcript.locator('[data-slot="message-scroller-item"]')).toHaveCount(4)
   await expect(appWindow.getByText('Structured fixture user prompt')).toBeVisible()
   await expect(appWindow.getByText('Inspecting project files.')).toBeVisible()
-  await expect(appWindow.getByText('Need file context before responding.')).toBeVisible()
+  await expect(appWindow.getByText('Need **file context** before responding.')).toBeVisible()
   await expect(appWindow.getByText('Hidden v1 step start marker')).toHaveCount(0)
   await expect(appWindow.getByText('Hidden v1 step finish marker')).toHaveCount(0)
   await expect(appWindow.getByText('Hidden v2 step start marker')).toHaveCount(0)
@@ -1129,6 +1129,54 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
   await expect(bashTool).not.toContainText('V2 fixture tool output')
   await expect(bashTool).toContainText('bash')
   await expect(appWindow.getByText('Unsupported part: future-content')).toBeVisible()
+})
+
+test('renders assistant markdown without changing user, reasoning, or tool text', async ({
+  appWindow
+}) => {
+  await openStructuredFixtureChat(appWindow)
+  const transcript = messageTranscript(appWindow)
+  const markdownArticle = transcript
+    .getByRole('article', { name: /assistant message at/ })
+    .filter({ hasText: 'Assistant markdown fixture' })
+  const userArticle = transcript
+    .getByRole('article', { name: /user message at/ })
+    .filter({ hasText: 'literal user markdown' })
+
+  await expect(
+    markdownArticle.locator('strong').filter({ hasText: 'bold assistant phrase' })
+  ).toBeVisible()
+  await expect(markdownArticle.locator('ul').first().locator('li')).toHaveText([
+    'first list item',
+    'second list item'
+  ])
+  const fixtureDocsLink = markdownArticle.getByRole('link', { name: 'fixture docs' })
+  await expect(fixtureDocsLink).toHaveAttribute('href', 'https://example.test/markdown')
+  await expect(fixtureDocsLink).toHaveAttribute('target', '_blank')
+  await expect(fixtureDocsLink).toHaveAttribute('rel', 'noopener noreferrer')
+  await expect(markdownArticle.locator('code').filter({ hasText: 'inlineToken' })).toBeVisible()
+  await expect(markdownArticle.locator('pre code')).toContainText('pnpm test:e2e')
+  await expect(markdownArticle).not.toContainText('**bold assistant phrase**')
+  await expect(markdownArticle).not.toContainText('```')
+  await expect(
+    markdownArticle.locator(
+      'img, h1, h2, h3, h4, h5, h6, blockquote, table, thead, tbody, tr, th, td, input[type="checkbox"]'
+    )
+  ).toHaveCount(0)
+
+  await expect(userArticle).toContainText('**literal user markdown**')
+  await expect(userArticle.locator('strong')).toHaveCount(0)
+
+  const reasoning = markdownArticle.locator('section').filter({
+    hasText: 'Need **file context** before responding.'
+  })
+  await expect(reasoning).toBeVisible()
+  await expect(reasoning.locator('strong')).toHaveCount(0)
+
+  const readTool = appWindow.locator('[aria-label="Tool read"]')
+  await readTool.getByRole('button', { name: 'Toggle details for tool read' }).click()
+  await expect(readTool).toContainText('**literal tool markdown**')
+  await expect(readTool.locator('strong')).toHaveCount(0)
 })
 
 test('shows one assistant header for repeated assistant/tool messages in a turn', async ({

@@ -1048,7 +1048,7 @@ function ChatMessageBubble({
                 : 'border-border bg-card text-card-foreground'
             )}
           >
-            <ChatMessageParts parts={message.parts} />
+            <ChatMessageParts author={message.author} parts={message.parts} />
           </div>
           <MessageFooter className="px-0">
             <time>{message.createdAt}</time>
