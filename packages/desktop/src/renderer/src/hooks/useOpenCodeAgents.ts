@@ -38,7 +38,8 @@ export function useOpenCodeAgents(directory: string | null | undefined) {
   })
 
   const options = useMemo(() => normalizeAgentOptions(agentsQuery.data), [agentsQuery.data])
-  const selectedAgent = options.find((option) => option.id === selectedAgentID) ?? options[0] ?? null
+  const selectedAgent =
+    options.find((option) => option.id === selectedAgentID) ?? options[0] ?? null
   const effectiveSelectedAgentID = selectedAgent?.id ?? null
 
   useEffect(() => {

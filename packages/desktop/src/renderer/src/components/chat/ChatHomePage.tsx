@@ -885,8 +885,6 @@ export function ProjectRouteActivePane({
             setSelectedEffortID={startConversation.setSelectedEffortID}
             isLoadingModels={startConversation.isLoadingModels}
             isLoadingAgents={startConversation.isLoadingAgents}
-            helperText="Start a new conversation in this project."
-            modelHelperText={startConversation.modelHelperText}
           />
         ) : null
       }
@@ -1077,9 +1075,7 @@ function ChatPromptComposer({
   selectedEffortID,
   setSelectedEffortID,
   isLoadingModels,
-  isLoadingAgents,
-  helperText = 'Send to the selected session.',
-  modelHelperText
+  isLoadingAgents
 }: {
   promptText: string
   setPromptText: (value: string) => void
@@ -1097,10 +1093,7 @@ function ChatPromptComposer({
   setSelectedEffortID: (value: string | null) => void
   isLoadingModels: boolean
   isLoadingAgents: boolean
-  helperText?: string
-  modelHelperText?: string
 }): JSX.Element {
-  const modelText = modelHelperText ?? 'Select a connected OpenCode model before sending.'
   const submitPrompt = (): void => {
     if (!canSendPrompt) return
     sendPrompt()
@@ -1173,9 +1166,6 @@ function ChatPromptComposer({
           </InputGroupButton>
         </InputGroupAddon>
       </InputGroup>
-      <p className="text-muted-foreground mt-2 text-xs">
-        {helperText} {modelText}
-      </p>
     </form>
   )
 }
