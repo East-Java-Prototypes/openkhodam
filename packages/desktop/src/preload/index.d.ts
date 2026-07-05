@@ -1,10 +1,12 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
+  GetOpenCodeModelSelectionInput,
   GoogleWorkspaceIntegrationStatus,
   LinkedGoogleArtifact,
   LinkedGoogleDoc,
   OpenProjectFolderInput,
   OpenCodeConnection,
+  OpenCodeModelSelection,
   OpenCodeSidecarStatus,
   OpenedProjectFolder,
   ProjectArtifactsConfig,
@@ -15,15 +17,18 @@ import type {
   RecordLinkedGoogleDocInput,
   RemoveProjectFolderInput,
   UpdateLinkedGoogleArtifactListingInput,
+  SetOpenCodeModelSelectionInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 import type { ThemeMode } from '../theme'
 
 export type {
+  GetOpenCodeModelSelectionInput,
   GoogleWorkspaceIntegrationStatus,
   LinkedGoogleArtifact,
   LinkedGoogleDoc,
   OpenCodeConnection,
+  OpenCodeModelSelection,
   OpenCodeSidecarStatus
 } from '@openkhodam/ui/types'
 
@@ -35,6 +40,12 @@ export type OpenKhodamAPI = {
   getOpenCodeStatus: () => Promise<OpenCodeSidecarStatus>
   restartOpenCode: () => Promise<OpenCodeSidecarStatus>
   setNativeTheme: (mode: ThemeMode) => Promise<void>
+  getOpenCodeModelSelection: (
+    input: GetOpenCodeModelSelectionInput
+  ) => Promise<OpenCodeModelSelection | null>
+  setOpenCodeModelSelection: (
+    input: SetOpenCodeModelSelectionInput
+  ) => Promise<OpenCodeModelSelection | null>
   getGoogleWorkspaceStatus: () => Promise<GoogleWorkspaceIntegrationStatus>
   connectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
   cancelGoogleWorkspaceConnect: () => Promise<GoogleWorkspaceIntegrationStatus>

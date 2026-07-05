@@ -14,6 +14,19 @@ export type OpenCodeSidecarStatus = {
   updatedAt: number
 }
 
+export type OpenCodeModelSelection = {
+  providerID: string
+  modelID: string
+}
+
+export type GetOpenCodeModelSelectionInput = {
+  projectDirectory: string
+}
+
+export type SetOpenCodeModelSelectionInput = GetOpenCodeModelSelectionInput & {
+  model: OpenCodeModelSelection | null
+}
+
 export type RendererHttpHealthState = 'waiting' | 'checking' | 'connected' | 'error'
 
 export type RendererHttpHealthSnapshot = {
