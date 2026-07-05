@@ -496,6 +496,34 @@ test('rejects project artifact symlinks before reading or writing', async () => 
       ]
     }
   }
+  const fullSheet = {
+    type: 'google.sheet.spreadsheet' as const,
+    id: 'sheet-1',
+    title: 'Launch Sheet',
+    link: 'https://docs.google.com/spreadsheets/d/sheet-1/edit',
+    sheets: [
+      {
+        id: 1,
+        title: 'Summary',
+        index: 0,
+        hidden: false,
+        sheetType: 'GRID',
+        rowCount: 10,
+        columnCount: 5
+      }
+    ],
+    ranges: [
+      {
+        range: 'Summary!A1:B2',
+        majorDimension: 'ROWS',
+        values: [['Name', 'Amount']],
+        rowCount: 1,
+        columnCount: 2,
+        cellCount: 2,
+        truncated: false
+      }
+    ]
+  }
 
   try {
     await mkdir(projectPath, { recursive: true })
@@ -514,6 +542,9 @@ test('rejects project artifact symlinks before reading or writing', async () => 
     await expect(parentSymlinkStore.persistGoogleDocDocumentArtifact(fullDoc)).rejects.toThrow(
       /must not be a symlink/
     )
+    await expect(
+      parentSymlinkStore.persistGoogleSheetSpreadsheetArtifact(fullSheet)
+    ).rejects.toThrow(/must not be a symlink/)
     await expect(stat(join(outsideParentTarget, 'artifacts.json'))).rejects.toThrow()
 
     await rm(join(projectPath, '.openkhodam'), { force: true })
@@ -524,7 +555,11 @@ test('rejects project artifact symlinks before reading or writing', async () => 
     await expect(nestedSymlinkStore.persistGoogleDocDocumentArtifact(fullDoc)).rejects.toThrow(
       /\.openkhodam\/artifacts must not be a symlink/
     )
+    await expect(
+      nestedSymlinkStore.persistGoogleSheetSpreadsheetArtifact(fullSheet)
+    ).rejects.toThrow(/\.openkhodam\/artifacts must not be a symlink/)
     await expect(stat(join(outsideParentTarget, 'google-docs'))).rejects.toThrow()
+    await expect(stat(join(outsideParentTarget, 'google-sheets'))).rejects.toThrow()
 
     await rm(join(projectPath, '.openkhodam', 'artifacts'), { force: true })
     await writeFile(outsideFileTarget, 'outside target', 'utf8')
@@ -540,6 +575,109 @@ test('rejects project artifact symlinks before reading or writing', async () => 
       })
     ).rejects.toThrow(/artifacts\.json must not be a symlink/)
     await expect(readFile(outsideFileTarget, 'utf8')).resolves.toBe('outside target')
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('persists Google Workspace artifact files with stable product paths', async () => {
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-workspace-artifact-files-'))
+  const projectPath = join(tempRoot, 'project')
+  const documentId = 'doc/path?:unsafe'
+  const spreadsheetId = 'sheet/path?:unsafe'
+
+  try {
+    await mkdir(projectPath, { recursive: true })
+    const store = new ProjectArtifactsFileStore(projectPath, { now: () => 12_345 })
+
+    const persistedDoc = await store.persistGoogleDocDocumentArtifact({
+      type: 'google.doc.document',
+      id: documentId,
+      title: 'Shared Docs Artifact',
+      revision: 'rev-1',
+      text: 'Hello shared Docs',
+      link: `https://docs.google.com/document/d/${encodeURIComponent(documentId)}/edit`,
+      body: {
+        blocks: [
+          {
+            id: 'body-block-1',
+            ordinal: 1,
+            type: 'paragraph',
+            text: 'Hello shared Docs\n'
+          }
+        ]
+      }
+    })
+    const persistedSheet = await store.persistGoogleSheetSpreadsheetArtifact({
+      type: 'google.sheet.spreadsheet',
+      id: spreadsheetId,
+      title: 'Shared Sheets Artifact',
+      link: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`,
+      sheets: [
+        {
+          id: 7,
+          title: 'Summary',
+          index: 0,
+          hidden: false,
+          sheetType: 'GRID',
+          rowCount: 10,
+          columnCount: 3
+        }
+      ],
+      ranges: [
+        {
+          range: 'Summary!A1:C2',
+          majorDimension: 'ROWS',
+          values: [
+            ['Name', 'Amount'],
+            ['Launch', 42]
+          ],
+          rowCount: 2,
+          columnCount: 2,
+          cellCount: 4,
+          truncated: false
+        }
+      ]
+    })
+
+    expect(persistedDoc).toEqual({
+      artifactPath: expectedGoogleDocArtifactPath(documentId),
+      created: true
+    })
+    expect(persistedSheet).toEqual({
+      artifactPath: expectedGoogleSheetArtifactPath(spreadsheetId),
+      created: true
+    })
+    expect(
+      JSON.parse(
+        await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
+      )
+    ).toMatchObject({
+      id: documentId,
+      schemaVersion: 1,
+      cachedAt: 12_345,
+      title: 'Shared Docs Artifact',
+      type: 'google.doc.document'
+    })
+    expect(
+      JSON.parse(
+        await readFile(expectedGoogleSheetArtifactAbsolutePath(projectPath, spreadsheetId), 'utf8')
+      )
+    ).toMatchObject({
+      id: spreadsheetId,
+      schemaVersion: 1,
+      cachedAt: 12_345,
+      title: 'Shared Sheets Artifact',
+      type: 'google.sheet.spreadsheet'
+    })
+    expect(persistedDoc.artifactPath).toContain('.openkhodam/artifacts/google-docs')
+    expect(persistedSheet.artifactPath).toContain('.openkhodam/artifacts/google-sheets')
+    expect(persistedDoc.artifactPath).not.toContain(documentId)
+    expect(persistedSheet.artifactPath).not.toContain(spreadsheetId)
+    await expect(stat(join(projectPath, '.openkhodam', 'artifacts.json'))).rejects.toThrow()
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }

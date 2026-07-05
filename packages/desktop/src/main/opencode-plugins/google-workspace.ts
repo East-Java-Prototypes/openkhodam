@@ -52,6 +52,16 @@ type GoogleWorkspaceToolContext = {
   worktree?: string
 }
 
+type GoogleWorkspaceArtifactSessionContext = {
+  projectDirectory: string
+  sessionId: string
+}
+
+type PersistedReadGoogleWorkspaceArtifact = GoogleWorkspaceArtifactSessionContext & {
+  artifactPath: string
+  created: boolean
+}
+
 type GoogleDriveSearchFilesToolDefinition = {
   args: {
     limit: {
@@ -358,54 +368,45 @@ async function recordReadGoogleDocArtifact(
   context: GoogleWorkspaceToolContext,
   document: GoogleDocDocumentArtifact
 ): Promise<void> {
-  const projectDirectory = nonEmptyString(context.directory)
-  const sessionId = nonEmptyString(context.sessionID)
-  if (!projectDirectory || !sessionId) return
-
-  let artifactPath: string | null = null
-  let createdArtifact = false
-
-  try {
-    const persisted = await persistGoogleDocDocumentArtifact({
-      document,
-      projectDirectory
-    })
-    artifactPath = persisted.artifactPath
-    createdArtifact = persisted.created
-  } catch {
-    console.warn('Failed to persist Google Doc artifact', {
+  const persisted = await persistReadGoogleWorkspaceArtifact({
+    context,
+    failureDetails: {
       docId: document.id,
       reason: 'artifact_persist_failed'
-    })
-    return
-  }
+    },
+    failureMessage: 'Failed to persist Google Doc artifact',
+    persist: (projectDirectory) =>
+      persistGoogleDocDocumentArtifact({
+        document,
+        projectDirectory
+      })
+  })
+  if (!persisted) return
 
   try {
     await getOrCreateLinkedGoogleDoc({
       doc: {
-        artifactPath,
+        artifactPath: persisted.artifactPath,
         id: document.id,
         title: document.title,
         url: document.link
       },
-      projectDirectory,
-      sessionId
+      projectDirectory: persisted.projectDirectory,
+      sessionId: persisted.sessionId
     })
   } catch {
-    const artifactCleanedUp = artifactPath
-      ? await cleanupCreatedGoogleDocArtifact({
-          artifactPath,
-          createdArtifact,
-          docId: document.id,
-          projectDirectory,
-          sessionId
-        })
-      : null
+    const artifactCleanedUp = await cleanupCreatedGoogleDocArtifact({
+      artifactPath: persisted.artifactPath,
+      createdArtifact: persisted.created,
+      docId: document.id,
+      projectDirectory: persisted.projectDirectory,
+      sessionId: persisted.sessionId
+    })
     console.warn('Failed to record linked Google Doc artifact', {
       artifactCleanedUp,
       docId: document.id,
       reason: 'artifact_record_failed',
-      sessionId
+      sessionId: persisted.sessionId
     })
   }
 }
@@ -414,21 +415,50 @@ async function recordReadGoogleSheetArtifact(
   context: GoogleWorkspaceToolContext,
   spreadsheet: GoogleSheetSpreadsheetArtifact
 ): Promise<void> {
-  const projectDirectory = nonEmptyString(context.directory)
-  const sessionId = nonEmptyString(context.sessionID)
-  if (!projectDirectory || !sessionId) return
-
-  try {
-    await persistGoogleSheetSpreadsheetArtifact({
-      projectDirectory,
-      spreadsheet
-    })
-  } catch {
-    console.warn('Failed to persist Google Sheet artifact', {
+  await persistReadGoogleWorkspaceArtifact({
+    context,
+    failureDetails: {
       reason: 'artifact_persist_failed',
       spreadsheetId: spreadsheet.id
-    })
+    },
+    failureMessage: 'Failed to persist Google Sheet artifact',
+    persist: (projectDirectory) =>
+      persistGoogleSheetSpreadsheetArtifact({
+        projectDirectory,
+        spreadsheet
+      })
+  })
+}
+
+async function persistReadGoogleWorkspaceArtifact(input: {
+  context: GoogleWorkspaceToolContext
+  failureDetails: Record<string, string>
+  failureMessage: string
+  persist: (projectDirectory: string) => Promise<{ artifactPath: string; created: boolean }>
+}): Promise<PersistedReadGoogleWorkspaceArtifact | null> {
+  const artifactContext = getGoogleWorkspaceArtifactSessionContext(input.context)
+  if (!artifactContext) return null
+
+  try {
+    const persisted = await input.persist(artifactContext.projectDirectory)
+    return {
+      ...artifactContext,
+      ...persisted
+    }
+  } catch {
+    console.warn(input.failureMessage, input.failureDetails)
+    return null
   }
+}
+
+function getGoogleWorkspaceArtifactSessionContext(
+  context: GoogleWorkspaceToolContext
+): GoogleWorkspaceArtifactSessionContext | null {
+  const projectDirectory = nonEmptyString(context.directory)
+  const sessionId = nonEmptyString(context.sessionID)
+  if (!projectDirectory || !sessionId) return null
+
+  return { projectDirectory, sessionId }
 }
 
 async function cleanupCreatedGoogleDocArtifact({
