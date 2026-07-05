@@ -2,7 +2,6 @@ import type { GoogleDocDocumentArtifact } from '../integrations/google-workspace
 import {
   createGoogleDocDocumentPreview,
   editGoogleDocDocument,
-  type GoogleDocsEditApprovalOperation,
   type GoogleDocsEditOperation,
   type GoogleDocsTextOccurrence,
   readGoogleDocDocument,
@@ -35,12 +34,6 @@ type GoogleDocsEditToolArgs = {
 
 type GoogleWorkspaceToolContext = {
   abort?: AbortSignal
-  ask?: (input: {
-    always: string[]
-    metadata: Record<string, unknown>
-    patterns: string[]
-    permission: string
-  }) => Promise<void>
   directory?: string
   sessionID?: string
   worktree?: string
@@ -158,7 +151,7 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
     },
     google_docs_edit: {
       description:
-        'Edit a Google Docs document using semantic operations with the Google Workspace account connected in OpenKhodam Settings. Supports append_text, insert_after_text, insert_before_text, replace_text, and delete_text; requires OpenCode permission approval before writing; and returns a bounded updated-document preview.',
+        'Edit a Google Docs document using semantic operations with the Google Workspace account connected in OpenKhodam Settings. Supports append_text, insert_after_text, insert_before_text, replace_text, and delete_text; writes directly with the connected account after resolving semantic targets; and returns a bounded updated-document preview.',
       args: {
         documentId: {
           description: 'The Google Docs document ID to edit.',
@@ -193,7 +186,7 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
             },
             text: {
               description:
-                'Text to append, insert, or use as replacement text. Literal newline escapes like \\n are normalized before approval and writing. Not required for delete_text.',
+                'Text to append, insert, or use as replacement text. Literal newline escapes like \\n are normalized before writing. Not required for delete_text.',
               type: 'string'
             }
           },
@@ -204,11 +197,6 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
       async execute(args, context) {
         const documentId = stringArg(args.documentId)
         const result = await editGoogleDocDocument({
-          approve: ({ document, operation }) =>
-            askForEditApproval(context, {
-              document,
-              operation
-            }),
           documentId,
           operation: toGoogleDocsEditOperation(args.operation),
           signal: context.abort
@@ -274,50 +262,6 @@ function occurrenceArg(value: unknown): GoogleDocsTextOccurrence | undefined {
   if (typeof value === 'number') return value
   if (typeof value === 'string') return Number(value.trim())
   return Number.NaN
-}
-
-async function askForEditApproval(
-  context: GoogleWorkspaceToolContext,
-  input: {
-    document: GoogleDocDocumentArtifact
-    operation: GoogleDocsEditApprovalOperation
-  }
-): Promise<void> {
-  if (typeof context.ask !== 'function') {
-    throw new Error(
-      'Google Docs edit requires OpenCode permission approval, but approval is unavailable. Try again from an OpenCode session.'
-    )
-  }
-
-  const metadata: Record<string, unknown> = {
-    action: input.operation.type,
-    documentId: input.document.id,
-    documentTitle: input.document.title,
-    link: input.document.link
-  }
-
-  if ('text' in input.operation) {
-    metadata.characterCount = input.operation.text.length
-    metadata.textPreview = previewText(input.operation.text)
-  }
-
-  if ('match' in input.operation) {
-    metadata.matchPreview = previewText(input.operation.match)
-    metadata.matchCharacterCount = input.operation.match.length
-    metadata.occurrence = input.operation.occurrence
-  }
-
-  await context.ask({
-    always: [`google-docs:${input.document.id}`],
-    metadata,
-    patterns: [`google-docs:${input.document.id}`],
-    permission: 'google_docs_edit'
-  })
-}
-
-function previewText(text: string): string {
-  const singleLine = text.replace(/\s+/g, ' ').trim()
-  return singleLine.length > 120 ? `${singleLine.slice(0, 117)}...` : singleLine
 }
 
 async function recordReadGoogleDocArtifact(
