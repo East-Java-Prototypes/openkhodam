@@ -113,6 +113,65 @@ export type PersistedGoogleDocDocumentArtifact = GoogleDocDocumentArtifact & {
   cachedAt: number
 }
 
+export type GoogleSheetCellValue = string | number | boolean | null
+
+export type GoogleSheetSheetArtifact = {
+  id: number | null
+  title: string
+  index: number | null
+  hidden: boolean
+  sheetType: string | null
+  rowCount: number | null
+  columnCount: number | null
+}
+
+export type GoogleSheetRangeArtifact = {
+  range: string
+  majorDimension: string | null
+  values: GoogleSheetCellValue[][]
+  rowCount: number
+  columnCount: number
+  cellCount: number
+  truncated: boolean
+}
+
+export type GoogleSheetSpreadsheetArtifact = {
+  type: 'google.sheet.spreadsheet'
+  id: string
+  title: string | null
+  link: string | null
+  sheets: GoogleSheetSheetArtifact[]
+  ranges: GoogleSheetRangeArtifact[]
+}
+
+export type GoogleSheetRangePreviewMetadata = {
+  range: string
+  truncated: boolean
+  totalRowCount: number
+  totalColumnCount: number
+  totalCellCount: number
+  totalTextLength: number
+  includedRowCount: number
+  includedCellCount: number
+  includedTextLength: number
+}
+
+export type GoogleSheetSpreadsheetPreviewMetadata = {
+  truncated: boolean
+  totalRangeCount: number
+  includedRangeCount: number
+  ranges: GoogleSheetRangePreviewMetadata[]
+}
+
+export type GoogleSheetSpreadsheetPreviewArtifact = GoogleSheetSpreadsheetArtifact & {
+  preview: GoogleSheetSpreadsheetPreviewMetadata
+}
+
+export type PersistedGoogleSheetSpreadsheetArtifact = GoogleSheetSpreadsheetArtifact & {
+  schemaVersion: 1
+  cachedAt: number
+}
+
 export type ProjectArtifactsConfig = {
   version: 1
   sessions: Record<string, LinkedGoogleDoc[]>

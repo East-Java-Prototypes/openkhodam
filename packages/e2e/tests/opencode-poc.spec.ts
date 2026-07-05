@@ -45,8 +45,10 @@ const toolName = 'openkhodam_plugin_ping'
 const googleDriveToolName = 'google_drive_search_files'
 const googleDocsReadToolName = 'google_docs_read'
 const googleDocsEditToolName = 'google_docs_edit'
+const googleSheetsReadToolName = 'google_sheets_read'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
+const googleSheetsSpreadsheetsScope = 'https://www.googleapis.com/auth/spreadsheets.readonly'
 
 type OpenKhodamPocPlugin = {
   'experimental.chat.system.transform': (
@@ -103,6 +105,23 @@ type GoogleWorkspacePlugin = {
       execute: (
         args: { limit?: number; query?: string },
         context: { abort?: AbortSignal }
+      ) => Promise<string>
+    }
+    google_sheets_read: {
+      args: {
+        ranges: Record<string, unknown>
+        spreadsheetId: Record<string, unknown>
+        valueRenderOption: Record<string, unknown>
+      }
+      description: string
+      execute: (
+        args: { ranges?: string[]; spreadsheetId?: string; valueRenderOption?: string },
+        context: {
+          abort?: AbortSignal
+          directory?: string
+          sessionID?: string
+          worktree?: string
+        }
       ) => Promise<string>
     }
   }
@@ -745,6 +764,24 @@ test('keeps the packaged plugin copy target aligned with the runtime path', asyn
   expect(builderConfig).toContain('to: opencode-plugins/google-workspace.mjs')
 })
 
+test('requests the Google Sheets OAuth scope in the Workspace connect flow', async () => {
+  const runtimeSource = await readFile(
+    join(desktopDirectory, 'src', 'main', 'integrations', 'google-workspace-runtime.ts'),
+    'utf8'
+  )
+  const integrationSource = await readFile(
+    join(desktopDirectory, 'src', 'main', 'integrations', 'google-workspace.ts'),
+    'utf8'
+  )
+
+  expect(runtimeSource).toContain('export const GOOGLE_SHEETS_SPREADSHEETS_SCOPE')
+  expect(runtimeSource).toContain(`'${googleSheetsSpreadsheetsScope}'`)
+  expect(integrationSource).toContain('GOOGLE_SHEETS_SPREADSHEETS_SCOPE')
+  expect(integrationSource).toContain('GOOGLE_SCOPES = [')
+  expect(integrationSource).toContain('GOOGLE_SHEETS_SPREADSHEETS_SCOPE')
+  expect(integrationSource).toContain("authUrl.searchParams.set('scope', GOOGLE_SCOPES.join(' '))")
+})
+
 test('loads the ESM bundled plugin with the OpenCode loader-compatible module shape', async () => {
   const pluginModule = (await import(pathToFileURL(builtPluginPath).href)) as Record<
     string,
@@ -1099,6 +1136,458 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_ID', originalClientId)
     restoreEnv('OPENKHODAM_GOOGLE_OAUTH_CLIENT_SECRET', originalClientSecret)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('registers only the read Google Sheets tool with bounded A1 schema', async () => {
+  const plugin = await loadGoogleWorkspacePlugin()
+
+  expect(plugin.tool.google_sheets_read.description).toContain('google.sheet.spreadsheet')
+  expect(plugin.tool.google_sheets_read.description).toContain('Read-only')
+  expect(plugin.tool.google_sheets_read.args.spreadsheetId).toMatchObject({ type: 'string' })
+  expect(plugin.tool.google_sheets_read.args.ranges).toMatchObject({
+    items: { type: 'string' },
+    maxItems: 5,
+    type: 'array'
+  })
+  expect(plugin.tool.google_sheets_read.args.valueRenderOption).toMatchObject({
+    default: 'FORMATTED_VALUE',
+    enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'],
+    type: 'string'
+  })
+  expect((plugin.tool as Record<string, unknown>).google_sheets_edit).toBeUndefined()
+})
+
+test('reads explicit Google Sheets ranges through Sheets API and persists a spreadsheet artifact', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-read-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const spreadsheetId = 'sheet/read?:unsafe'
+  const encodedSpreadsheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`
+  const events: string[] = []
+  let metadataAuthorization: string | null = null
+  let metadataUrl: URL | null = null
+  let valuesAuthorization: string | null = null
+  let valuesUrl: URL | null = null
+
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleSheetsSpreadsheetsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-sheets-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith(encodedSpreadsheetUrl) && !url.includes('/values:batchGet')) {
+      events.push('spreadsheets.get')
+      metadataUrl = new URL(url)
+      metadataAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          spreadsheetId,
+          spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`,
+          properties: { title: 'Sheets Plan' },
+          owners: [{ emailAddress: 'owner@example.com' }],
+          sheets: [
+            {
+              properties: {
+                sheetId: 11,
+                title: 'Summary',
+                index: 0,
+                sheetType: 'GRID',
+                gridProperties: { rowCount: 1000, columnCount: 40 }
+              }
+            },
+            {
+              properties: {
+                sheetId: 22,
+                title: 'Hidden',
+                index: 1,
+                hidden: true,
+                sheetType: 'GRID',
+                gridProperties: { rowCount: 5, columnCount: 5 }
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith(`${encodedSpreadsheetUrl}/values:batchGet`)) {
+      events.push('values.batchGet')
+      valuesUrl = new URL(url)
+      valuesAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          spreadsheetId,
+          refreshToken: 'should-not-leak',
+          valueRanges: [
+            {
+              range: 'Summary!A1:C3',
+              majorDimension: 'ROWS',
+              values: [
+                ['Name', 'Amount', 'Formula'],
+                ['Launch', 42, '=SUM(B2:B2)'],
+                ['Done', true, null]
+              ]
+            },
+            {
+              range: "'Data Sheet'!B2:D4",
+              majorDimension: 'ROWS',
+              values: [['North', 'South', 'West']]
+            }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await plugin.tool.google_sheets_read.execute(
+        {
+          spreadsheetId: ` ${spreadsheetId} `,
+          ranges: [' Summary!A1:C3 ', "'Data Sheet'!B2:D4"],
+          valueRenderOption: 'FORMULA'
+        },
+        { directory: projectPath, sessionID: 'session-sheets' }
+      )
+    ) as {
+      spreadsheet: Record<string, unknown>
+    }
+
+    expect(events).toEqual(['spreadsheets.get', 'values.batchGet'])
+    expect(metadataAuthorization).toBe('Bearer valid-sheets-access-token')
+    expect(valuesAuthorization).toBe('Bearer valid-sheets-access-token')
+    expect(metadataUrl?.origin).toBe('https://sheets.googleapis.com')
+    expect(metadataUrl?.pathname).toBe(`/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`)
+    expect(metadataUrl?.searchParams.get('fields')).toBe(
+      'spreadsheetId,properties(title),spreadsheetUrl,sheets(properties(sheetId,title,index,sheetType,hidden,gridProperties(rowCount,columnCount)))'
+    )
+    expect(valuesUrl?.origin).toBe('https://sheets.googleapis.com')
+    expect(valuesUrl?.pathname).toBe(
+      `/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchGet`
+    )
+    expect(valuesUrl?.searchParams.getAll('ranges')).toEqual([
+      'Summary!A1:C3',
+      "'Data Sheet'!B2:D4"
+    ])
+    expect(valuesUrl?.searchParams.get('valueRenderOption')).toBe('FORMULA')
+    expect(valuesUrl?.searchParams.get('fields')).toBe(
+      'spreadsheetId,valueRanges(range,majorDimension,values)'
+    )
+    expect(output.spreadsheet).toEqual({
+      type: 'google.sheet.spreadsheet',
+      id: spreadsheetId,
+      title: 'Sheets Plan',
+      link: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`,
+      sheets: [
+        {
+          id: 11,
+          title: 'Summary',
+          index: 0,
+          hidden: false,
+          sheetType: 'GRID',
+          rowCount: 1000,
+          columnCount: 40
+        },
+        {
+          id: 22,
+          title: 'Hidden',
+          index: 1,
+          hidden: true,
+          sheetType: 'GRID',
+          rowCount: 5,
+          columnCount: 5
+        }
+      ],
+      ranges: [
+        {
+          range: 'Summary!A1:C3',
+          majorDimension: 'ROWS',
+          values: [
+            ['Name', 'Amount', 'Formula'],
+            ['Launch', 42, '=SUM(B2:B2)'],
+            ['Done', true, null]
+          ],
+          rowCount: 3,
+          columnCount: 3,
+          cellCount: 9,
+          truncated: false
+        },
+        {
+          range: "'Data Sheet'!B2:D4",
+          majorDimension: 'ROWS',
+          values: [['North', 'South', 'West']],
+          rowCount: 1,
+          columnCount: 3,
+          cellCount: 3,
+          truncated: false
+        }
+      ],
+      preview: {
+        truncated: false,
+        totalRangeCount: 2,
+        includedRangeCount: 2,
+        ranges: [
+          {
+            range: 'Summary!A1:C3',
+            truncated: false,
+            totalRowCount: 3,
+            totalColumnCount: 3,
+            totalCellCount: 9,
+            totalTextLength: 44,
+            includedRowCount: 3,
+            includedCellCount: 9,
+            includedTextLength: 44
+          },
+          {
+            range: "'Data Sheet'!B2:D4",
+            truncated: false,
+            totalRowCount: 1,
+            totalColumnCount: 3,
+            totalCellCount: 3,
+            totalTextLength: 14,
+            includedRowCount: 1,
+            includedCellCount: 3,
+            includedTextLength: 14
+          }
+        ]
+      }
+    })
+
+    const fullArtifactPath = expectedGoogleSheetArtifactAbsolutePath(projectPath, spreadsheetId)
+    const fullArtifact = JSON.parse(await readFile(fullArtifactPath, 'utf8')) as Record<
+      string,
+      unknown
+    >
+    expect(fullArtifact).toMatchObject({
+      type: 'google.sheet.spreadsheet',
+      id: spreadsheetId,
+      schemaVersion: 1,
+      title: 'Sheets Plan'
+    })
+    expect(typeof fullArtifact.cachedAt).toBe('number')
+    expect(fullArtifact).not.toHaveProperty('preview')
+    expect(String(fullArtifactPath)).toContain('.openkhodam/artifacts/google-sheets')
+    expect(String(fullArtifactPath)).not.toContain(spreadsheetId)
+    await expect(stat(join(projectPath, '.openkhodam', 'artifacts.json'))).rejects.toThrow()
+
+    const outputText = JSON.stringify(output)
+    expect(outputText).not.toContain('valid-sheets-access-token')
+    expect(outputText).not.toContain('refresh-token')
+    expect(outputText).not.toContain('should-not-leak')
+    expect(outputText).not.toContain('owner@example.com')
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('derives bounded default visible-sheet ranges for Google Sheets reads', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-default-ranges-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const requestedRanges: string[] = []
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleSheetsSpreadsheetsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'default-sheets-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (
+      url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/default-sheet/values:batchGet')
+    ) {
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer default-sheets-access-token'
+      )
+      const parsed = new URL(url)
+      requestedRanges.push(...parsed.searchParams.getAll('ranges'))
+      return new Response(
+        JSON.stringify({
+          spreadsheetId: 'default-sheet',
+          valueRanges: requestedRanges.map((range) => ({
+            range,
+            majorDimension: 'ROWS',
+            values: [[range]]
+          }))
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/default-sheet')) {
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer default-sheets-access-token'
+      )
+      return new Response(
+        JSON.stringify({
+          spreadsheetId: 'default-sheet',
+          properties: { title: 'Default Ranges' },
+          sheets: [
+            { properties: { title: 'First', index: 0, sheetType: 'GRID' } },
+            { properties: { title: 'Hidden', index: 1, hidden: true, sheetType: 'GRID' } },
+            { properties: { title: "Bob's Sheet", index: 2, sheetType: 'GRID' } },
+            { properties: { title: 'Chart', index: 3, sheetType: 'OBJECT' } },
+            { properties: { title: 'Third', index: 4, sheetType: 'GRID' } },
+            { properties: { title: 'Fourth', index: 5, sheetType: 'GRID' } },
+            { properties: { title: 'Fifth', index: 6, sheetType: 'GRID' } },
+            { properties: { title: 'Sixth', index: 7, sheetType: 'GRID' } }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await plugin.tool.google_sheets_read.execute({ spreadsheetId: 'default-sheet' }, {})
+    ) as {
+      spreadsheet: { ranges: Array<{ range: string; values: string[][] }> }
+    }
+
+    expect(requestedRanges).toEqual([
+      "'First'!A1:Z200",
+      "'Bob''s Sheet'!A1:Z200",
+      "'Third'!A1:Z200",
+      "'Fourth'!A1:Z200",
+      "'Fifth'!A1:Z200"
+    ])
+    expect(output.spreadsheet.ranges.map((range) => range.range)).toEqual(requestedRanges)
+    expect(output.spreadsheet.ranges[0]?.values).toEqual([["'First'!A1:Z200"]])
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('logs sanitized Google Sheets API failures without request bodies or cell contents', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-failure-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+  let sheetsAuthorization: string | null = null
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleSheetsSpreadsheetsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'failure-sheets-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (
+      url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/sheet-denied/values:batchGet')
+    ) {
+      sheetsAuthorization = new Headers(init?.headers).get('authorization')
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 403,
+            errors: [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }],
+            message: 'Sheets permission denied.',
+            status: 'PERMISSION_DENIED'
+          },
+          requestBody: 'request-body-should-not-log',
+          valueRanges: [{ values: [['sensitive-cell-should-not-log']] }]
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/sheet-denied')) {
+      return new Response(
+        JSON.stringify({
+          spreadsheetId: 'sheet-denied',
+          properties: { title: 'Denied Sheet' },
+          sheets: [{ properties: { title: 'Summary', index: 0, sheetType: 'GRID' } }]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_sheets_read.execute({ spreadsheetId: 'sheet-denied' }, {})
+    ).rejects.toThrow(
+      'Google Sheets values.batchGet failed (HTTP 403, PERMISSION_DENIED, ACCESS_TOKEN_SCOPE_INSUFFICIENT): Sheets permission denied.'
+    )
+
+    expect(sheetsAuthorization).toBe('Bearer failure-sheets-access-token')
+    expect(warnings).toEqual([
+      [
+        'Google Workspace API request failed',
+        {
+          code: 'PERMISSION_DENIED',
+          message: 'Sheets permission denied.',
+          operation: 'Google Sheets values.batchGet',
+          reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
+          status: 403
+        }
+      ]
+    ])
+    const warningText = JSON.stringify(warnings)
+    expect(warningText).not.toContain('failure-sheets-access-token')
+    expect(warningText).not.toContain('refresh-token')
+    expect(warningText).not.toContain('request-body-should-not-log')
+    expect(warningText).not.toContain('sensitive-cell-should-not-log')
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(userDataPath, { recursive: true, force: true })
   }
 })
@@ -3014,6 +3503,44 @@ test('returns a clear reconnect error when the Google Docs scope is missing', as
   }
 })
 
+test('returns a clear reconnect error when the Google Sheets scope is missing', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-missing-scope-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: [
+      'email',
+      googleDriveMetadataReadonlyScope,
+      googleDocsDocumentsScope,
+      'openid',
+      'profile'
+    ],
+    token: {
+      accessToken: 'valid-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_sheets_read.execute({ spreadsheetId: 'sheet-1' }, {})
+    ).rejects.toThrow(
+      'Google Sheets access is not enabled. Reconnect Google Workspace in Settings with Sheets access enabled.'
+    )
+  } finally {
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
 async function loadGoogleWorkspacePlugin(): Promise<GoogleWorkspacePlugin> {
   const pluginModule = (await import(pathToFileURL(builtGoogleWorkspacePluginPath).href)) as Record<
     string,
@@ -3081,6 +3608,21 @@ function expectedGoogleDocArtifactFileName(documentId: string): string {
   return `encoded-${Buffer.from(documentId, 'utf8').toString('base64url')}.json`
 }
 
+function expectedGoogleSheetArtifactAbsolutePath(
+  projectPath: string,
+  spreadsheetId: string
+): string {
+  return join(projectPath, ...expectedGoogleSheetArtifactPath(spreadsheetId).split('/'))
+}
+
+function expectedGoogleSheetArtifactPath(spreadsheetId: string): string {
+  return `.openkhodam/artifacts/google-sheets/${expectedGoogleSheetArtifactFileName(spreadsheetId)}`
+}
+
+function expectedGoogleSheetArtifactFileName(spreadsheetId: string): string {
+  return `encoded-${Buffer.from(spreadsheetId, 'utf8').toString('base64url')}.json`
+}
+
 function readFetchedGoogleDocsDocumentId(url: string): string | null {
   const parsed = new URL(url)
   const prefix = '/v1/documents/'
@@ -3136,7 +3678,9 @@ async function expectOpenCodeLoadsPlugins(pluginPaths: string[]): Promise<void> 
     expect(JSON.parse(body) as string[]).toContain(googleDriveToolName)
     expect(JSON.parse(body) as string[]).toContain(googleDocsReadToolName)
     expect(JSON.parse(body) as string[]).toContain(googleDocsEditToolName)
+    expect(JSON.parse(body) as string[]).toContain(googleSheetsReadToolName)
     expect(JSON.parse(body) as string[]).not.toContain('google_docs_append_text')
+    expect(JSON.parse(body) as string[]).not.toContain('google_sheets_edit')
     expect(server.logs()).not.toMatch(/failed to load plugin/i)
   } finally {
     await server.stop()

@@ -2,7 +2,14 @@ import type {
   GoogleDocBodyBlock,
   GoogleDocDocumentArtifact,
   GoogleDocDocumentPreviewArtifact,
-  GoogleDocDocumentPreviewMetadata
+  GoogleDocDocumentPreviewMetadata,
+  GoogleSheetCellValue,
+  GoogleSheetRangeArtifact,
+  GoogleSheetRangePreviewMetadata,
+  GoogleSheetSheetArtifact,
+  GoogleSheetSpreadsheetArtifact,
+  GoogleSheetSpreadsheetPreviewArtifact,
+  GoogleSheetSpreadsheetPreviewMetadata
 } from '@openkhodam/ui/types'
 
 import type { GoogleWorkspaceTokenConfig } from './openkhodam-config'
@@ -12,21 +19,44 @@ export type {
   GoogleDocBodyBlock,
   GoogleDocDocumentArtifact,
   GoogleDocDocumentPreviewArtifact,
-  GoogleDocDocumentPreviewMetadata
+  GoogleDocDocumentPreviewMetadata,
+  GoogleSheetCellValue,
+  GoogleSheetRangeArtifact,
+  GoogleSheetRangePreviewMetadata,
+  GoogleSheetSheetArtifact,
+  GoogleSheetSpreadsheetArtifact,
+  GoogleSheetSpreadsheetPreviewArtifact,
+  GoogleSheetSpreadsheetPreviewMetadata
 }
 
 export const GOOGLE_DRIVE_METADATA_READONLY_SCOPE =
   'https://www.googleapis.com/auth/drive.metadata.readonly'
 export const GOOGLE_DOCS_DOCUMENTS_SCOPE = 'https://www.googleapis.com/auth/documents'
+export const GOOGLE_SHEETS_SPREADSHEETS_SCOPE =
+  'https://www.googleapis.com/auth/spreadsheets.readonly'
 
 const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
 const GOOGLE_DOCS_DOCUMENTS_URL = 'https://docs.googleapis.com/v1/documents'
+const GOOGLE_SHEETS_SPREADSHEETS_URL = 'https://sheets.googleapis.com/v4/spreadsheets'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const DEFAULT_DRIVE_SEARCH_LIMIT = 10
 const MAX_DRIVE_SEARCH_LIMIT = 20
 const TOKEN_EXPIRY_SKEW_MS = 60 * 1000
 const GOOGLE_DOCS_READ_PREVIEW_BLOCK_LIMIT = 20
 const GOOGLE_DOCS_READ_PREVIEW_TEXT_LIMIT = 12_000
+const GOOGLE_SHEETS_DEFAULT_RANGE_A1 = 'A1:Z200'
+const GOOGLE_SHEETS_MAX_READ_RANGES = 5
+const GOOGLE_SHEETS_MAX_RANGE_ROWS = 200
+const GOOGLE_SHEETS_MAX_RANGE_COLUMNS = 26
+const GOOGLE_SHEETS_MAX_CELL_TEXT_LENGTH = 2_000
+const GOOGLE_SHEETS_MAX_ARTIFACT_TEXT_LENGTH = 120_000
+const GOOGLE_SHEETS_PREVIEW_ROW_LIMIT = 50
+const GOOGLE_SHEETS_PREVIEW_TEXT_LIMIT = 12_000
+const GOOGLE_SHEETS_VALUE_RENDER_OPTIONS = [
+  'FORMATTED_VALUE',
+  'UNFORMATTED_VALUE',
+  'FORMULA'
+] as const
 
 type Fetch = typeof fetch
 
@@ -77,6 +107,26 @@ type GoogleDocsBatchUpdateResponse = GoogleDocsApiResponse & {
   }
 }
 
+type GoogleSheetsApiResponse = {
+  error?: GoogleApiErrorBody
+}
+
+type GoogleSheetsSpreadsheetResponse = GoogleSheetsApiResponse & {
+  properties?: {
+    title?: string
+  }
+  sheets?: unknown[]
+  spreadsheetId?: string
+  spreadsheetUrl?: string
+}
+
+type GoogleSheetsValuesBatchGetResponse = GoogleSheetsApiResponse & {
+  spreadsheetId?: string
+  valueRanges?: unknown[]
+}
+
+export type GoogleSheetsValueRenderOption = 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' | 'FORMULA'
+
 export type GoogleDriveFileMetadata = {
   id: string
   mimeType: string
@@ -106,6 +156,19 @@ export type GoogleDocsReadDocumentInput = {
   documentId: string
   fetch?: Fetch
   signal?: AbortSignal
+}
+
+export type GoogleSheetsReadSpreadsheetResult = {
+  spreadsheet: GoogleSheetSpreadsheetArtifact
+}
+
+export type GoogleSheetsReadSpreadsheetInput = {
+  configPath?: string
+  fetch?: Fetch
+  ranges?: string[]
+  signal?: AbortSignal
+  spreadsheetId: string
+  valueRenderOption?: GoogleSheetsValueRenderOption
 }
 
 export type GoogleDocsEditDocumentInput = {
@@ -314,6 +377,61 @@ export async function readGoogleDocDocument({
   return { document: result.document }
 }
 
+export async function readGoogleSheetSpreadsheet({
+  configPath = process.env.OPENKHODAM_CONFIG_PATH,
+  fetch: fetchImpl = fetch,
+  ranges,
+  signal,
+  spreadsheetId,
+  valueRenderOption
+}: GoogleSheetsReadSpreadsheetInput): Promise<GoogleSheetsReadSpreadsheetResult> {
+  const resolvedSpreadsheetId = normalizeSpreadsheetId(spreadsheetId)
+  const resolvedValueRenderOption = normalizeGoogleSheetsValueRenderOption(valueRenderOption)
+  const { token } = await getGoogleWorkspaceAccessToken({
+    configPath,
+    disconnectedToolName: 'google_sheets_read',
+    expiredMessage:
+      'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Google Sheets access.',
+    fetch: fetchImpl,
+    missingScopeMessage: sheetsMissingScopeMessage(),
+    requiredScope: GOOGLE_SHEETS_SPREADSHEETS_SCOPE,
+    signal
+  })
+
+  const metadata = await fetchGoogleSheetSpreadsheetMetadata({
+    fetch: fetchImpl,
+    signal,
+    spreadsheetId: resolvedSpreadsheetId,
+    token
+  })
+  const resolvedRanges = normalizeGoogleSheetsReadRanges(
+    ranges,
+    createDefaultGoogleSheetsReadRanges(metadata)
+  )
+  const values = resolvedRanges.length
+    ? await fetchGoogleSheetSpreadsheetValues({
+        fetch: fetchImpl,
+        ranges: resolvedRanges,
+        signal,
+        spreadsheetId: resolvedSpreadsheetId,
+        token,
+        valueRenderOption: resolvedValueRenderOption
+      })
+    : ({
+        spreadsheetId: resolvedSpreadsheetId,
+        valueRanges: []
+      } satisfies GoogleSheetsValuesBatchGetResponse)
+
+  return {
+    spreadsheet: toSafeGoogleSheetSpreadsheet(
+      metadata,
+      values,
+      resolvedSpreadsheetId,
+      resolvedRanges
+    )
+  }
+}
+
 export async function editGoogleDocDocument({
   configPath = process.env.OPENKHODAM_CONFIG_PATH,
   documentId,
@@ -422,6 +540,35 @@ export function createDocsBatchUpdateUrl(documentId: string): URL {
   return new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}:batchUpdate`)
 }
 
+export function createSheetsSpreadsheetMetadataUrl(spreadsheetId: string): URL {
+  const url = new URL(`${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(spreadsheetId)}`)
+  url.searchParams.set(
+    'fields',
+    'spreadsheetId,properties(title),spreadsheetUrl,sheets(properties(sheetId,title,index,sheetType,hidden,gridProperties(rowCount,columnCount)))'
+  )
+  return url
+}
+
+export function createSheetsValuesBatchGetUrl({
+  ranges,
+  spreadsheetId,
+  valueRenderOption
+}: {
+  ranges: string[]
+  spreadsheetId: string
+  valueRenderOption: GoogleSheetsValueRenderOption
+}): URL {
+  const url = new URL(
+    `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(spreadsheetId)}/values:batchGet`
+  )
+  for (const range of ranges.slice(0, GOOGLE_SHEETS_MAX_READ_RANGES)) {
+    url.searchParams.append('ranges', range)
+  }
+  url.searchParams.set('valueRenderOption', valueRenderOption)
+  url.searchParams.set('fields', 'spreadsheetId,valueRanges(range,majorDimension,values)')
+  return url
+}
+
 export function createGoogleDocDocumentPreview(
   document: GoogleDocDocumentArtifact
 ): GoogleDocDocumentPreviewArtifact {
@@ -446,10 +593,103 @@ export function createGoogleDocDocumentPreview(
   }
 }
 
+export function createGoogleSheetSpreadsheetPreview(
+  spreadsheet: GoogleSheetSpreadsheetArtifact
+): GoogleSheetSpreadsheetPreviewArtifact {
+  const rangePreviews: GoogleSheetRangeArtifact[] = []
+  const previewRanges: GoogleSheetRangePreviewMetadata[] = []
+  let remainingTextLength = GOOGLE_SHEETS_PREVIEW_TEXT_LIMIT
+
+  for (const range of spreadsheet.ranges) {
+    const preview = limitGoogleSheetRangeForPreview(range, remainingTextLength)
+    rangePreviews.push(preview.range)
+    previewRanges.push(preview.metadata)
+    remainingTextLength = Math.max(0, remainingTextLength - preview.metadata.includedTextLength)
+  }
+
+  const preview: GoogleSheetSpreadsheetPreviewMetadata = {
+    truncated: previewRanges.some((range) => range.truncated),
+    totalRangeCount: spreadsheet.ranges.length,
+    includedRangeCount: rangePreviews.length,
+    ranges: previewRanges
+  }
+
+  return {
+    ...spreadsheet,
+    ranges: rangePreviews,
+    preview
+  }
+}
+
 function normalizeDocumentId(documentId: string): string {
   const trimmed = documentId.trim()
   if (!trimmed) throw new Error('Google Docs document ID is required.')
   return trimmed
+}
+
+function normalizeSpreadsheetId(spreadsheetId: string): string {
+  const trimmed = spreadsheetId.trim()
+  if (!trimmed) throw new Error('Google Sheets spreadsheet ID is required.')
+  return trimmed
+}
+
+async function fetchGoogleSheetSpreadsheetMetadata({
+  fetch: fetchImpl,
+  signal,
+  spreadsheetId,
+  token
+}: {
+  fetch: Fetch
+  signal?: AbortSignal
+  spreadsheetId: string
+  token: GoogleWorkspaceTokenConfig
+}): Promise<GoogleSheetsSpreadsheetResponse> {
+  const response = await fetchImpl(createSheetsSpreadsheetMetadataUrl(spreadsheetId), {
+    headers: {
+      authorization: `Bearer ${token.accessToken}`
+    },
+    signal
+  })
+
+  const body = (await response.json().catch(() => ({}))) as GoogleSheetsSpreadsheetResponse
+  if (!response.ok) {
+    throwGoogleApiFailure('Google Sheets spreadsheets.get', response.status, body)
+  }
+
+  return body
+}
+
+async function fetchGoogleSheetSpreadsheetValues({
+  fetch: fetchImpl,
+  ranges,
+  signal,
+  spreadsheetId,
+  token,
+  valueRenderOption
+}: {
+  fetch: Fetch
+  ranges: string[]
+  signal?: AbortSignal
+  spreadsheetId: string
+  token: GoogleWorkspaceTokenConfig
+  valueRenderOption: GoogleSheetsValueRenderOption
+}): Promise<GoogleSheetsValuesBatchGetResponse> {
+  const response = await fetchImpl(
+    createSheetsValuesBatchGetUrl({ ranges, spreadsheetId, valueRenderOption }),
+    {
+      headers: {
+        authorization: `Bearer ${token.accessToken}`
+      },
+      signal
+    }
+  )
+
+  const body = (await response.json().catch(() => ({}))) as GoogleSheetsValuesBatchGetResponse
+  if (!response.ok) {
+    throwGoogleApiFailure('Google Sheets values.batchGet', response.status, body)
+  }
+
+  return body
 }
 
 async function fetchGoogleDocDocument({
@@ -799,6 +1039,301 @@ function docsMissingScopeMessage(): string {
   return 'Google Docs access is not enabled. Reconnect Google Workspace in Settings to grant Google Docs read/write access.'
 }
 
+function sheetsMissingScopeMessage(): string {
+  return 'Google Sheets access is not enabled. Reconnect Google Workspace in Settings with Sheets access enabled.'
+}
+
+function normalizeGoogleSheetsValueRenderOption(value: unknown): GoogleSheetsValueRenderOption {
+  if (value === undefined || value === null || value === '') return 'FORMATTED_VALUE'
+  if (isGoogleSheetsValueRenderOption(value)) return value
+
+  throw new Error(
+    'Google Sheets valueRenderOption must be FORMATTED_VALUE, UNFORMATTED_VALUE, or FORMULA.'
+  )
+}
+
+function isGoogleSheetsValueRenderOption(value: unknown): value is GoogleSheetsValueRenderOption {
+  return (
+    typeof value === 'string' &&
+    (GOOGLE_SHEETS_VALUE_RENDER_OPTIONS as readonly string[]).includes(value)
+  )
+}
+
+function normalizeGoogleSheetsReadRanges(
+  ranges: string[] | undefined,
+  defaultRanges: string[]
+): string[] {
+  if (!Array.isArray(ranges) || ranges.length === 0) {
+    return defaultRanges.slice(0, GOOGLE_SHEETS_MAX_READ_RANGES)
+  }
+
+  const normalized = ranges.map((range) => (typeof range === 'string' ? range.trim() : ''))
+  if (normalized.some((range) => !range)) {
+    throw new Error('Google Sheets ranges must be non-empty A1 notation strings.')
+  }
+
+  return normalized.slice(0, GOOGLE_SHEETS_MAX_READ_RANGES)
+}
+
+function createDefaultGoogleSheetsReadRanges(metadata: GoogleSheetsSpreadsheetResponse): string[] {
+  return extractGoogleSheetSheetArtifacts(metadata)
+    .filter((sheet) => !sheet.hidden)
+    .filter((sheet) => sheet.sheetType === null || sheet.sheetType === 'GRID')
+    .sort(
+      (left, right) =>
+        (left.index ?? Number.MAX_SAFE_INTEGER) - (right.index ?? Number.MAX_SAFE_INTEGER)
+    )
+    .slice(0, GOOGLE_SHEETS_MAX_READ_RANGES)
+    .map((sheet) => `${quoteGoogleSheetTitleForA1(sheet.title)}!${GOOGLE_SHEETS_DEFAULT_RANGE_A1}`)
+}
+
+function quoteGoogleSheetTitleForA1(title: string): string {
+  return `'${title.replace(/'/g, "''")}'`
+}
+
+function toSafeGoogleSheetSpreadsheet(
+  metadata: GoogleSheetsSpreadsheetResponse,
+  values: GoogleSheetsValuesBatchGetResponse,
+  fallbackSpreadsheetId: string,
+  requestedRanges: string[]
+): GoogleSheetSpreadsheetArtifact {
+  const id =
+    typeof metadata.spreadsheetId === 'string' && metadata.spreadsheetId
+      ? metadata.spreadsheetId
+      : typeof values.spreadsheetId === 'string' && values.spreadsheetId
+        ? values.spreadsheetId
+        : fallbackSpreadsheetId
+
+  return {
+    type: 'google.sheet.spreadsheet',
+    id,
+    title: normalizeOptionalGoogleApiString(metadata.properties?.title),
+    link: normalizeOptionalGoogleApiString(metadata.spreadsheetUrl) ?? createGoogleSheetLink(id),
+    sheets: extractGoogleSheetSheetArtifacts(metadata),
+    ranges: extractGoogleSheetRangeArtifacts(values, requestedRanges)
+  }
+}
+
+function extractGoogleSheetSheetArtifacts(
+  metadata: GoogleSheetsSpreadsheetResponse
+): GoogleSheetSheetArtifact[] {
+  const sheets = Array.isArray(metadata.sheets) ? metadata.sheets : []
+  return sheets.flatMap((sheet) => {
+    if (!sheet || typeof sheet !== 'object') return []
+
+    const properties = (sheet as Record<string, unknown>).properties
+    if (!properties || typeof properties !== 'object') return []
+
+    const propertyRecord = properties as Record<string, unknown>
+    const title = normalizeOptionalGoogleApiString(propertyRecord.title)
+    if (!title) return []
+
+    const gridProperties = isRecord(propertyRecord.gridProperties)
+      ? propertyRecord.gridProperties
+      : {}
+
+    return [
+      {
+        id: finiteNumberOrNull(propertyRecord.sheetId),
+        title,
+        index: finiteNumberOrNull(propertyRecord.index),
+        hidden: propertyRecord.hidden === true,
+        sheetType: normalizeOptionalGoogleApiString(propertyRecord.sheetType),
+        rowCount: finiteNumberOrNull(gridProperties.rowCount),
+        columnCount: finiteNumberOrNull(gridProperties.columnCount)
+      }
+    ]
+  })
+}
+
+function extractGoogleSheetRangeArtifacts(
+  values: GoogleSheetsValuesBatchGetResponse,
+  requestedRanges: string[]
+): GoogleSheetRangeArtifact[] {
+  const valueRanges = Array.isArray(values.valueRanges) ? values.valueRanges : []
+  return requestedRanges
+    .slice(0, GOOGLE_SHEETS_MAX_READ_RANGES)
+    .map((requestedRange, index) =>
+      toSafeGoogleSheetRangeArtifact(valueRanges[index], requestedRange)
+    )
+}
+
+function toSafeGoogleSheetRangeArtifact(
+  value: unknown,
+  fallbackRange: string
+): GoogleSheetRangeArtifact {
+  const valueRange = isRecord(value) ? value : {}
+  const range = normalizeOptionalGoogleApiString(valueRange.range) ?? fallbackRange
+  const rawValues = Array.isArray(valueRange.values) ? valueRange.values : []
+  const normalized = normalizeGoogleSheetValues(rawValues)
+
+  return {
+    range,
+    majorDimension: normalizeOptionalGoogleApiString(valueRange.majorDimension),
+    values: normalized.values,
+    rowCount: normalized.values.length,
+    columnCount: maxFiniteNumber(normalized.values.map((row) => row.length)) ?? 0,
+    cellCount: normalized.values.reduce((count, row) => count + row.length, 0),
+    truncated: normalized.truncated
+  }
+}
+
+function normalizeGoogleSheetValues(values: unknown[]): {
+  truncated: boolean
+  values: GoogleSheetCellValue[][]
+} {
+  const normalizedValues: GoogleSheetCellValue[][] = []
+  let remainingTextLength = GOOGLE_SHEETS_MAX_ARTIFACT_TEXT_LENGTH
+  let truncated = values.length > GOOGLE_SHEETS_MAX_RANGE_ROWS
+
+  for (const row of values.slice(0, GOOGLE_SHEETS_MAX_RANGE_ROWS)) {
+    if (!Array.isArray(row)) continue
+    const normalizedRow: GoogleSheetCellValue[] = []
+    if (row.length > GOOGLE_SHEETS_MAX_RANGE_COLUMNS) truncated = true
+
+    for (const cell of row.slice(0, GOOGLE_SHEETS_MAX_RANGE_COLUMNS)) {
+      const normalizedCell = normalizeGoogleSheetCellValue(cell, remainingTextLength)
+      normalizedRow.push(normalizedCell.value)
+      remainingTextLength = Math.max(0, remainingTextLength - normalizedCell.textLength)
+      if (normalizedCell.truncated) truncated = true
+    }
+
+    normalizedValues.push(normalizedRow)
+  }
+
+  return { values: normalizedValues, truncated }
+}
+
+function normalizeGoogleSheetCellValue(
+  value: unknown,
+  remainingTextLength: number
+): { textLength: number; truncated: boolean; value: GoogleSheetCellValue } {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return { textLength: String(value).length, truncated: false, value }
+  }
+  if (typeof value === 'boolean') {
+    return { textLength: String(value).length, truncated: false, value }
+  }
+  if (value === null || value === undefined) {
+    return { textLength: 0, truncated: false, value: null }
+  }
+
+  const text = typeof value === 'string' ? value : String(value)
+  const maxLength = Math.min(GOOGLE_SHEETS_MAX_CELL_TEXT_LENGTH, Math.max(0, remainingTextLength))
+  const normalizedText = text.slice(0, maxLength)
+  return {
+    textLength: normalizedText.length,
+    truncated: normalizedText.length < text.length,
+    value: normalizedText
+  }
+}
+
+function limitGoogleSheetRangeForPreview(
+  range: GoogleSheetRangeArtifact,
+  remainingTextLength: number
+): {
+  metadata: GoogleSheetRangePreviewMetadata
+  range: GoogleSheetRangeArtifact
+} {
+  const values: GoogleSheetCellValue[][] = []
+  const totalTextLength = getGoogleSheetValuesTextLength(range.values)
+  let includedTextLength = 0
+  let truncated = range.truncated || range.values.length > GOOGLE_SHEETS_PREVIEW_ROW_LIMIT
+
+  const rowsForPreview = range.values.slice(0, GOOGLE_SHEETS_PREVIEW_ROW_LIMIT)
+  for (let rowIndex = 0; rowIndex < rowsForPreview.length; rowIndex += 1) {
+    const row = rowsForPreview[rowIndex]
+    if (remainingTextLength <= 0) {
+      truncated = true
+      break
+    }
+
+    const previewRow: GoogleSheetCellValue[] = []
+    for (let cellIndex = 0; cellIndex < row.length; cellIndex += 1) {
+      const cell = row[cellIndex]
+      const previewCell = limitGoogleSheetCellForPreview(cell, remainingTextLength)
+      previewRow.push(previewCell.value)
+      remainingTextLength = Math.max(0, remainingTextLength - previewCell.textLength)
+      includedTextLength += previewCell.textLength
+      if (previewCell.truncated) truncated = true
+      if (remainingTextLength <= 0) {
+        if (
+          previewCell.textLength < getGoogleSheetCellTextLength(cell) ||
+          cellIndex < row.length - 1 ||
+          rowIndex < rowsForPreview.length - 1 ||
+          range.values.length > rowsForPreview.length
+        ) {
+          truncated = true
+        }
+        break
+      }
+    }
+    values.push(previewRow)
+  }
+
+  const previewRange = {
+    ...range,
+    values,
+    rowCount: values.length,
+    columnCount: maxFiniteNumber(values.map((row) => row.length)) ?? 0,
+    cellCount: values.reduce((count, row) => count + row.length, 0),
+    truncated
+  }
+
+  return {
+    range: previewRange,
+    metadata: {
+      range: range.range,
+      truncated,
+      totalRowCount: range.rowCount,
+      totalColumnCount: range.columnCount,
+      totalCellCount: range.cellCount,
+      totalTextLength,
+      includedRowCount: previewRange.rowCount,
+      includedCellCount: previewRange.cellCount,
+      includedTextLength
+    }
+  }
+}
+
+function limitGoogleSheetCellForPreview(
+  value: GoogleSheetCellValue,
+  remainingTextLength: number
+): { textLength: number; truncated: boolean; value: GoogleSheetCellValue } {
+  if (typeof value !== 'string') {
+    return {
+      textLength: getGoogleSheetCellTextLength(value),
+      truncated: false,
+      value
+    }
+  }
+
+  const normalizedText = value.slice(0, Math.max(0, remainingTextLength))
+  return {
+    textLength: normalizedText.length,
+    truncated: normalizedText.length < value.length,
+    value: normalizedText
+  }
+}
+
+function getGoogleSheetValuesTextLength(values: GoogleSheetCellValue[][]): number {
+  return values.reduce<number>(
+    (total, row) =>
+      total +
+      row.reduce<number>((rowTotal, cell) => rowTotal + getGoogleSheetCellTextLength(cell), 0),
+    0
+  )
+}
+
+function getGoogleSheetCellTextLength(value: GoogleSheetCellValue): number {
+  if (value === null) return 0
+  return String(value).length
+}
+
+function normalizeOptionalGoogleApiString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
 function toSafeDriveFileMetadata(value: unknown): GoogleDriveFileMetadata | null {
   if (!value || typeof value !== 'object') return null
 
@@ -1112,6 +1647,10 @@ function finiteNumberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 function minFiniteNumber(values: Array<number | null>): number | null {
   const finite = values.filter((value): value is number => value !== null)
   return finite.length ? Math.min(...finite) : null
@@ -1125,7 +1664,7 @@ function maxFiniteNumber(values: Array<number | null>): number | null {
 function throwGoogleApiFailure(
   operation: string,
   status: number,
-  body: GoogleDocsApiResponse | GoogleDriveFilesResponse
+  body: GoogleDocsApiResponse | GoogleDriveFilesResponse | GoogleSheetsApiResponse
 ): never {
   const diagnostics = toGoogleApiFailureDiagnostics(operation, status, body.error)
   console.warn('Google Workspace API request failed', diagnostics)
@@ -1179,5 +1718,11 @@ function sanitizeDiagnosticText(value: unknown): string | null {
 function createGoogleDocLink(documentId: string): string | null {
   return documentId
     ? `https://docs.google.com/document/d/${encodeURIComponent(documentId)}/edit`
+    : null
+}
+
+function createGoogleSheetLink(spreadsheetId: string): string | null {
+  return spreadsheetId
+    ? `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`
     : null
 }
