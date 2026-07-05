@@ -1103,7 +1103,7 @@ test('shows optimistic prompt before delayed stable message projection', async (
   await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toHaveCount(1)
 })
 
-test('sends the chat composer with CommandOrControl+Enter while Enter stays multiline', async ({
+test('sends the chat composer with Enter while Shift+Enter stays multiline', async ({
   appWindow
 }) => {
   await openSeededDeterministicChat(appWindow)
@@ -1112,29 +1112,57 @@ test('sends the chat composer with CommandOrControl+Enter while Enter stays mult
   const sendButton = appWindow.getByRole('button', { name: 'Send' })
   await expect(sendButton).toBeDisabled()
 
-  await promptInput.press('ControlOrMeta+Enter')
+  await promptInput.press('Enter')
   await expect(promptInput).toHaveValue('')
   await expect(appWindow.getByRole('article')).toHaveCount(2)
 
   await promptInput.fill('Line one')
-  await promptInput.press('Enter')
+  await promptInput.press('Shift+Enter')
   await expect(promptInput).toHaveValue('Line one\n')
   await promptInput.pressSequentially('Line two')
   await expect(promptInput).toHaveValue('Line one\nLine two')
   await expect(appWindow.getByRole('article')).toHaveCount(2)
 
-  const shortcutPrompt = 'Shortcut lifecycle prompt'
-  await promptInput.fill(shortcutPrompt)
+  const composingPrompt = 'IME composing prompt'
+  await promptInput.fill(composingPrompt)
   await expect(sendButton).toBeEnabled()
-  await promptInput.press('ControlOrMeta+Enter')
+  const composingKeydown = await promptInput.evaluate((element) => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+      isComposing: true
+    })
 
-  await expect(appWindow.getByText(shortcutPrompt, { exact: true })).toBeVisible()
+    return {
+      dispatchResult: element.dispatchEvent(event),
+      defaultPrevented: event.defaultPrevented,
+      isComposing: event.isComposing
+    }
+  })
+  expect(composingKeydown).toEqual({
+    dispatchResult: true,
+    defaultPrevented: false,
+    isComposing: true
+  })
+  await expect(promptInput).toHaveValue(composingPrompt)
+  await expect(appWindow.getByRole('article')).toHaveCount(2)
   await expect(
-    appWindow.locator('[data-pending="true"]').filter({ hasText: shortcutPrompt })
+    appWindow.locator('[data-pending="true"]').filter({ hasText: composingPrompt })
+  ).toHaveCount(0)
+
+  const enterPrompt = 'Enter lifecycle prompt'
+  await promptInput.fill(enterPrompt)
+  await expect(sendButton).toBeEnabled()
+  await promptInput.press('Enter')
+
+  await expect(appWindow.getByText(enterPrompt, { exact: true })).toBeVisible()
+  await expect(
+    appWindow.locator('[data-pending="true"]').filter({ hasText: enterPrompt })
   ).toBeVisible()
-  await expect(appWindow.getByText(`Fake response for: ${shortcutPrompt}`)).toBeVisible()
+  await expect(appWindow.getByText(`Fake response for: ${enterPrompt}`)).toBeVisible()
   await expect(
-    appWindow.locator('[data-pending="true"]').filter({ hasText: shortcutPrompt })
+    appWindow.locator('[data-pending="true"]').filter({ hasText: enterPrompt })
   ).toHaveCount(0)
 })
 

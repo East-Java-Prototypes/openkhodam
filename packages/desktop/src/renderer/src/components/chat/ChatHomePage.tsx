@@ -1039,8 +1039,8 @@ function ChatPromptComposer({
 
   const handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.key !== 'Enter') return
-    if (!event.metaKey && !event.ctrlKey) return
     if (event.nativeEvent.isComposing) return
+    if (event.shiftKey) return
 
     event.preventDefault()
     submitPrompt()
