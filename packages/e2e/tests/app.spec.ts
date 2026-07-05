@@ -13,6 +13,8 @@ const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
 const emptyOpenedProjectsMessage = 'No opened project folders yet.'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
+const googleSheetsSpreadsheetsReadonlyScope =
+  'https://www.googleapis.com/auth/spreadsheets.readonly'
 const fixtureLinkedDocUrl = 'https://docs.google.com/document/d/fixture-linked-doc/edit'
 const arbitraryLinkedDocUrl = 'https://example.test/document/d/arbitrary-linked-doc/edit'
 const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
@@ -510,7 +512,14 @@ async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplicati
         return originalFetch(input, init)
       }
     },
-    ['openid', 'email', 'profile', googleDriveMetadataReadonlyScope, googleDocsDocumentsScope]
+    [
+      'openid',
+      'email',
+      'profile',
+      googleDriveMetadataReadonlyScope,
+      googleDocsDocumentsScope,
+      googleSheetsSpreadsheetsReadonlyScope
+    ]
   )
 }
 
@@ -1842,6 +1851,7 @@ test.describe('Google Workspace connect cancellation', () => {
         'email',
         googleDocsDocumentsScope,
         googleDriveMetadataReadonlyScope,
+        googleSheetsSpreadsheetsReadonlyScope,
         'openid',
         'profile'
       ].sort()
@@ -1884,6 +1894,7 @@ test.describe('Google Workspace connect cancellation', () => {
         'email',
         googleDocsDocumentsScope,
         googleDriveMetadataReadonlyScope,
+        googleSheetsSpreadsheetsReadonlyScope,
         'openid',
         'profile'
       ],
