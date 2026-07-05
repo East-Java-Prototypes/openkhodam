@@ -3,19 +3,22 @@ import type { ChatMessagePart } from '../useChatInterfaceData'
 export type NormalizedOpenCodeMessage = {
   id: string | null
   author: 'user' | 'assistant'
+  parentID: string | null
   createdAt: string | number | null
   content: string
   parts: ChatMessagePart[]
 }
 
-const NON_RENDERABLE_PART_TYPES = new Set(['step-start', 'step-finish'])
+const NON_RENDERABLE_PART_TYPES = new Set(['patch', 'step-start', 'step-finish'])
 
-export function normalizeOpenCodeMessage(message: unknown): NormalizedOpenCodeMessage {
+export function normalizeOpenCodeMessage(message: unknown): NormalizedOpenCodeMessage | null {
   const parts = normalizeParts(message)
-  const content = partsToText(parts) || getDirectText(message) || 'No text content.'
+  const content = partsToText(parts) || getDirectText(message) || ''
+  if (parts.length === 0 && !content) return null
   return {
     id: getMessageId(message),
     author: getMessageRole(message) === 'user' ? 'user' : 'assistant',
+    parentID: getMessageParentID(message),
     createdAt: getMessageTime(message),
     content,
     parts: parts.length ? parts : [{ id: 'fallback-text', type: 'text', text: content }]
@@ -190,6 +193,10 @@ function getMessageRole(message: unknown): string | null {
     getStringFromRecord(message, 'role') ??
     getStringFromRecord(message, 'type')
   )
+}
+function getMessageParentID(message: unknown): string | null {
+  const info = getRecordProperty(message, 'info')
+  return getStringFromRecord(info, 'parentID') ?? getStringFromRecord(message, 'parentID')
 }
 function getMessageTime(message: unknown): string | number | null {
   const info = getRecordProperty(message, 'info')

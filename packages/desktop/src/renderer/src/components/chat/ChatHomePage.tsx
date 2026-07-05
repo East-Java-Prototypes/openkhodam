@@ -712,14 +712,12 @@ export function ActiveChatPanel({
   project,
   session,
   linkedDocs = emptyLinkedDocs,
-  emptyMessage,
   composer,
   composerErrorMessage
 }: {
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
   linkedDocs?: LinkedGoogleDoc[]
-  emptyMessage?: string
   composer?: ReactNode
   composerErrorMessage?: string | null
 }): JSX.Element {
@@ -784,12 +782,8 @@ export function ActiveChatPanel({
           <Separator />
           <ChatMessageList
             messages={messages}
-            emptyMessage={
-              session?.emptyMessage ??
-              emptyMessage ??
-              (!project
-                ? 'Select a project to view sessions.'
-                : 'Select a session to view messages.')
+            transcriptStatusMessage={
+              session?.transcriptStatusMessage ?? project?.transcriptStatusMessage ?? null
             }
             isLoading={session?.isLoading ?? false}
             errorMessage={session?.errorMessage ?? composerErrorMessage ?? null}
@@ -863,7 +857,6 @@ export function ProjectRouteActivePane({
   return (
     <ActiveChatPanel
       project={project}
-      emptyMessage={project?.emptyMessage ?? 'Start a new conversation for this project.'}
       composer={
         startConversation ? (
           <ChatPromptComposer
@@ -898,13 +891,13 @@ export function SessionRouteActivePane({
 
 function ChatMessageList({
   messages,
-  emptyMessage,
+  transcriptStatusMessage,
   isLoading,
   errorMessage,
   successMessage
 }: {
   messages: ChatMessage[]
-  emptyMessage: string | null
+  transcriptStatusMessage: string | null
   isLoading: boolean
   errorMessage: string | null
   successMessage: string | null
@@ -916,9 +909,9 @@ function ChatMessageList({
       isLoading ? { key: 'loading', content: 'Loading OpenCode data…' } : null,
       errorMessage ? { key: 'error', content: errorMessage, tone: 'error' as const } : null,
       successMessage ? { key: 'success', content: successMessage } : null,
-      emptyMessage ? { key: 'empty', content: emptyMessage } : null
+      transcriptStatusMessage ? { key: 'route-status', content: transcriptStatusMessage } : null
     ],
-    [emptyMessage, errorMessage, isLoading, successMessage]
+    [errorMessage, isLoading, successMessage, transcriptStatusMessage]
   )
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -957,6 +950,8 @@ function ChatMessageList({
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const message = messages[virtualRow.index]
                   if (!message) return null
+                  const previousMessage = messages[virtualRow.index - 1] ?? null
+                  const showHeader = shouldShowMessageHeader(message, previousMessage)
                   return (
                     <MessageScrollerItem
                       key={message.id}
@@ -967,7 +962,7 @@ function ChatMessageList({
                       className="absolute start-0 top-0 w-full pb-4"
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
-                      <ChatMessageBubble message={message} />
+                      <ChatMessageBubble message={message} showHeader={showHeader} />
                     </MessageScrollerItem>
                   )
                 })}
@@ -979,6 +974,17 @@ function ChatMessageList({
       </MessageScroller>
     </MessageScrollerProvider>
   )
+}
+
+function shouldShowMessageHeader(
+  message: ChatMessage,
+  previousMessage: ChatMessage | null
+): boolean {
+  if (message.author === 'user') return true
+  if (!previousMessage || previousMessage.author !== 'assistant') return true
+  if (message.parentID && previousMessage.parentID)
+    return message.parentID !== previousMessage.parentID
+  return false
 }
 
 function StatusCard({
@@ -997,7 +1003,13 @@ function StatusCard({
   )
 }
 
-function ChatMessageBubble({ message }: { message: ChatMessage }): JSX.Element {
+function ChatMessageBubble({
+  message,
+  showHeader
+}: {
+  message: ChatMessage
+  showHeader: boolean
+}): JSX.Element {
   const isUser = message.author === 'user'
   const isPending = message.createdAt === 'Pending'
   return (
@@ -1008,7 +1020,9 @@ function ChatMessageBubble({ message }: { message: ChatMessage }): JSX.Element {
     >
       <Message align={isUser ? 'end' : 'start'}>
         <MessageContent className={cn(isUser ? 'items-end' : 'items-start')}>
-          <MessageHeader className="px-0 capitalize">{message.author}</MessageHeader>
+          {showHeader ? (
+            <MessageHeader className="px-0 capitalize">{message.author}</MessageHeader>
+          ) : null}
           <div
             data-slot="message-surface"
             className={cn(

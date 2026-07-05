@@ -1,6 +1,7 @@
 export type ChatMessage = {
   id: string
   author: 'user' | 'assistant'
+  parentID?: string
   content: string
   createdAt: string
   parts: ChatMessagePart[]

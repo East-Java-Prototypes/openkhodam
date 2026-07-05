@@ -152,20 +152,26 @@ function resetState(): void {
     parentID: seeded.id
   })
   sessions.set(seeded.id, seeded)
+  const seededUserID = stableMessageID()
   messages.set(seeded.id, [
-    userMessage(stableMessageID(), 'Seeded user prompt'),
-    assistantMessage(stableMessageID(), 'Seeded assistant response')
+    userMessage(seededUserID, 'Seeded user prompt'),
+    assistantMessage(stableMessageID(), 'Seeded assistant response', seededUserID)
   ])
   sessions.set(structured.id, structured)
+  const structuredUserID = stableMessageID()
   messages.set(structured.id, [
-    structuredV1AssistantMessage(stableMessageID()),
-    longCollapsedToolMessage(stableMessageID()),
-    structuredV2AssistantMessage(stableMessageID())
+    userMessage(structuredUserID, 'Structured fixture user prompt'),
+    structuredV1AssistantMessage(stableMessageID(), structuredUserID),
+    patchOnlyAssistantMessage(stableMessageID(), structuredUserID),
+    emptyAssistantMessage(stableMessageID(), structuredUserID),
+    longCollapsedToolMessage(stableMessageID(), structuredUserID),
+    structuredV2AssistantMessage(stableMessageID(), structuredUserID)
   ])
   sessions.set(child.id, child)
+  const childUserID = stableMessageID()
   messages.set(child.id, [
-    userMessage(stableMessageID(), 'Hidden subagent user prompt'),
-    assistantMessage(stableMessageID(), 'Hidden subagent assistant response')
+    userMessage(childUserID, 'Hidden subagent user prompt'),
+    assistantMessage(stableMessageID(), 'Hidden subagent assistant response', childUserID)
   ])
 }
 
@@ -182,7 +188,8 @@ function projectPendingMessages(sessionID: string): void {
       userMessage(prompt.id, prompt.text),
       assistantMessage(
         assistantMessageIDAfterPrompt(prompt.id),
-        `Fake response for: ${prompt.text}`
+        `Fake response for: ${prompt.text}`,
+        prompt.id
       )
     )
   }
@@ -265,11 +272,12 @@ function userMessage(id: string, text: string): unknown {
   }
 }
 
-function assistantMessage(id: string, text: string): unknown {
+function assistantMessage(id: string, text: string, parentID: string): unknown {
   return {
     info: {
       id,
       role: 'assistant',
+      parentID,
       agent: 'test',
       model: { id: 'fake', providerID: 'fake' },
       time: { created: Date.now() }
@@ -278,9 +286,9 @@ function assistantMessage(id: string, text: string): unknown {
   }
 }
 
-function structuredV1AssistantMessage(id: string): unknown {
+function structuredV1AssistantMessage(id: string, parentID: string): unknown {
   return {
-    info: { id, role: 'assistant', time: { created: Date.now() } },
+    info: { id, role: 'assistant', parentID, time: { created: Date.now() } },
     parts: [
       { id: `${id}-step-start`, type: 'step-start', text: 'Hidden v1 step start marker' },
       { id: `${id}-text`, type: 'text', text: 'Inspecting project files.' },
@@ -299,9 +307,30 @@ function structuredV1AssistantMessage(id: string): unknown {
   }
 }
 
-function longCollapsedToolMessage(id: string): unknown {
+function patchOnlyAssistantMessage(id: string, parentID: string): unknown {
   return {
-    info: { id, role: 'assistant', time: { created: Date.now() } },
+    info: { id, role: 'assistant', parentID, time: { created: Date.now() } },
+    parts: [
+      {
+        id: `${id}-patch`,
+        type: 'patch',
+        text: 'Hidden patch fixture marker',
+        patch: 'diff --git a/README.md b/README.md'
+      }
+    ]
+  }
+}
+
+function emptyAssistantMessage(id: string, parentID: string): unknown {
+  return {
+    info: { id, role: 'assistant', parentID, time: { created: Date.now() } },
+    parts: []
+  }
+}
+
+function longCollapsedToolMessage(id: string, parentID: string): unknown {
+  return {
+    info: { id, role: 'assistant', parentID, time: { created: Date.now() } },
     parts: [
       {
         id: `${id}-text`,
@@ -322,10 +351,11 @@ function longCollapsedToolMessage(id: string): unknown {
   }
 }
 
-function structuredV2AssistantMessage(id: string): unknown {
+function structuredV2AssistantMessage(id: string, parentID: string): unknown {
   return {
     id,
     type: 'assistant',
+    parentID,
     time: { created: Date.now() },
     content: [
       { type: 'step-start', text: 'Hidden v2 step start marker' },
