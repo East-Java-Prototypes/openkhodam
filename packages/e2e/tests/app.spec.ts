@@ -560,8 +560,7 @@ test('renders basename project labels and opens the project new-conversation she
     'showActiveProjectSessions'
   )
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
-  await expect(appWindow.getByText('Start a new conversation in this project.')).toBeVisible()
+  await expectChatComposerWithoutHelperCopy(appWindow)
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
 })
 
