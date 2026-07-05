@@ -1,11 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
+  GetOpenCodeModelSelectionInput,
   GoogleWorkspaceIntegrationStatus,
   LinkedGoogleArtifact,
   LinkedGoogleDoc,
   OpenProjectFolderInput,
   OpenCodeConnection,
+  OpenCodeModelSelection,
   OpenCodeSidecarStatus,
   OpenedProjectFolder,
   ProjectArtifactsConfig,
@@ -16,6 +18,7 @@ import type {
   RecordLinkedGoogleDocInput,
   RemoveProjectFolderInput,
   UpdateLinkedGoogleArtifactListingInput,
+  SetOpenCodeModelSelectionInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 import type { ThemeMode } from '../theme'
@@ -38,6 +41,14 @@ const api = {
   restartOpenCode: (): Promise<OpenCodeSidecarStatus> => ipcRenderer.invoke('opencode:restart'),
   setNativeTheme: (mode: ThemeMode): Promise<void> =>
     ipcRenderer.invoke('appearance:set-native-theme', mode),
+  getOpenCodeModelSelection: (
+    input: GetOpenCodeModelSelectionInput
+  ): Promise<OpenCodeModelSelection | null> =>
+    ipcRenderer.invoke('opencode:get-model-selection', input),
+  setOpenCodeModelSelection: (
+    input: SetOpenCodeModelSelectionInput
+  ): Promise<OpenCodeModelSelection | null> =>
+    ipcRenderer.invoke('opencode:set-model-selection', input),
   getGoogleWorkspaceStatus: (): Promise<GoogleWorkspaceIntegrationStatus> =>
     ipcRenderer.invoke('google-workspace:get-status'),
   connectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>

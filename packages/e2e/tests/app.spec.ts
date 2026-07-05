@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
 import type { ElectronApplication } from '@playwright/test'
@@ -1644,9 +1644,17 @@ test('keeps a long collapsed tool disclosure anchored when opening it', async ({
     .toBeLessThan(endScrollTop)
 })
 
-test('shows only connected OpenCode models in the composer picker', async ({ appWindow }) => {
+test('persists connected OpenCode model selection per project', async ({
+  appWindow,
+  electronApp
+}) => {
+  const userDataPath = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+  const appConfigPath = join(userDataPath, 'openkhodam-config.json')
+  const expectedProjectDirectory = await realpath(fakeProjectDirectory)
+
   await seedOpenedFakeProject(appWindow)
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expectOpenedProjectRouteResolved(appWindow)
 
   const modelPicker = appWindow.getByLabel('OpenCode model')
   await expect(modelPicker).toBeVisible()
@@ -1654,6 +1662,68 @@ test('shows only connected OpenCode models in the composer picker', async ({ app
   await modelPicker.click()
   await expect(appWindow.getByText('Connected Alternate Model')).toBeVisible()
   await expect(appWindow.getByText('Disconnected Hidden Model')).toHaveCount(0)
+  await appWindow.getByText('Connected Alternate Model').click()
+  await expect(modelPicker).toHaveValue('Connected Fake Provider · Connected Alternate Model')
+  await expect
+    .poll(async () => {
+      const rawConfig = await readOptionalFile(appConfigPath)
+      if (!rawConfig) return null
+
+      const config = JSON.parse(rawConfig) as {
+        preferences?: {
+          openCode?: {
+            modelSelectionsByDirectory?: Record<string, { providerID: string; modelID: string }>
+          }
+        }
+      }
+      return (
+        config.preferences?.openCode?.modelSelectionsByDirectory?.[expectedProjectDirectory] ?? null
+      )
+    })
+    .toEqual({ providerID: 'fake-provider', modelID: 'fake-alt-model' })
+
+  await appWindow.reload()
+  await expectOpenedProjectRouteResolved(appWindow)
+  await expect(modelPicker).toBeVisible()
+  await expect(modelPicker).toHaveValue('Connected Fake Provider · Connected Alternate Model')
+
+  await writeFile(
+    appConfigPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        projects: {
+          openedFolders: [{ directory: expectedProjectDirectory, lastOpenedAt: 1 }]
+        },
+        preferences: {
+          openCode: {
+            modelSelectionsByDirectory: {
+              [expectedProjectDirectory]: { providerID: 'fake-provider', modelID: 'stale-model' }
+            }
+          }
+        },
+        integrations: {
+          googleWorkspace: {
+            account: null,
+            scopes: [],
+            token: null,
+            updatedAt: null
+          }
+        }
+      },
+      null,
+      2
+    )}\n`,
+    'utf8'
+  )
+  await appWindow.reload()
+  await expectOpenedProjectRouteResolved(appWindow)
+  await expect(modelPicker).toHaveValue('Connected Fake Provider · Connected Fake Model')
+
+  await appWindow.getByLabel('Message OpenKhodam').fill('Fallback stale model prompt')
+  await expect(appWindow.getByRole('button', { name: 'Send' })).toBeEnabled()
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(appWindow.getByText('Fake response for: Fallback stale model prompt')).toBeVisible()
 })
 
 test('renders prompt input full-width with agent model and effort controls in the footer', async ({

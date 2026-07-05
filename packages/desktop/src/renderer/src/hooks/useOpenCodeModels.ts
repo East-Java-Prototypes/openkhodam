@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { OpenCodeModelSelection as SharedOpenCodeModelSelection } from '@openkhodam/ui/types'
 
 import { useOpenCodeSdk, type createOpenCodeClient } from './opencode/client'
 import { openCodeQueryKeys } from './opencode/sidecar'
@@ -9,10 +10,7 @@ type ProviderListResponse = NonNullable<
   Awaited<ReturnType<OpenCodeClient['provider']['list']>>['data']
 >
 
-export type OpenCodeModelSelection = {
-  providerID: string
-  modelID: string
-}
+export type OpenCodeModelSelection = SharedOpenCodeModelSelection
 
 export type OpenCodeModelOption = OpenCodeModelSelection & {
   id: string
@@ -36,14 +34,35 @@ const defaultEffortOption: OpenCodeModelEffortOption = {
 
 const knownVariantOrder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
+type OpenCodeModelSelectionSource = 'pending' | 'fallback' | 'restored' | 'user'
+
+type OpenCodeModelSelectionState = {
+  directory: string | null
+  selectedModelID: string | null
+  source: OpenCodeModelSelectionSource
+}
+
+const pendingModelSelection: OpenCodeModelSelectionState = {
+  directory: null,
+  selectedModelID: null,
+  source: 'pending'
+}
+
 export function modelOptionID(model: OpenCodeModelSelection): string {
   return `${model.providerID}/${model.modelID}`
 }
 
+function openCodeModelSelectionQueryKey(directory: string) {
+  return [...openCodeQueryKeys.all, 'model-selection', directory] as const
+}
+
 export function useOpenCodeModels(directory: string | null | undefined) {
   const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
-  const [selectedModelID, setSelectedModelID] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+  const [selectionState, setSelectionState] =
+    useState<OpenCodeModelSelectionState>(pendingModelSelection)
   const [selectedEffortID, setSelectedEffortID] = useState<string | null>(null)
+  const selectionDirectory = directory ?? null
 
   const modelsQuery = useQuery({
     queryKey: [
@@ -62,22 +81,133 @@ export function useOpenCodeModels(directory: string | null | undefined) {
     enabled: client !== null && Boolean(directory)
   })
 
+  const persistedSelectionQuery = useQuery({
+    queryKey: directory
+      ? openCodeModelSelectionQueryKey(directory)
+      : openCodeModelSelectionQueryKey(''),
+    queryFn: () => window.api.getOpenCodeModelSelection({ projectDirectory: directory! }),
+    enabled: Boolean(directory)
+  })
+
   const options = useMemo(() => normalizeModelOptions(modelsQuery.data), [modelsQuery.data])
+  const optionIDs = useMemo(() => new Set(options.map((option) => option.id)), [options])
   const defaultModelID = useMemo(
     () => getDefaultModelID(modelsQuery.data, options),
     [modelsQuery.data, options]
   )
+  const persistedModelID = useMemo(() => {
+    const selection = persistedSelectionQuery.data
+    if (!selection) return null
+
+    const id = modelOptionID(selection)
+    return optionIDs.has(id) ? id : null
+  }, [optionIDs, persistedSelectionQuery.data])
+  const preferenceLoaded =
+    !directory || persistedSelectionQuery.isSuccess || persistedSelectionQuery.isError
+  const selectedModelID =
+    selectionState.directory === selectionDirectory ? selectionState.selectedModelID : null
   const selectedModel = options.find((option) => option.id === selectedModelID) ?? null
   const effortOptions = useMemo(() => getEffortOptions(selectedModel), [selectedModel])
   const selectedEffort = effortOptions.find((option) => option.value === selectedEffortID) ?? null
   const effectiveSelectedEffortID = selectedEffort?.value ?? null
 
+  const setSelectedModelID = useCallback(
+    (value: string | null) => {
+      const selectedOption = options.find((option) => option.id === value) ?? null
+      const model = selectedOption
+        ? { providerID: selectedOption.providerID, modelID: selectedOption.modelID }
+        : null
+      const nextSelectedModelID = selectedOption?.id ?? null
+
+      setSelectionState({
+        directory: selectionDirectory,
+        selectedModelID: nextSelectedModelID,
+        source: 'user'
+      })
+
+      if (!directory) return
+
+      queryClient.setQueryData(openCodeModelSelectionQueryKey(directory), model)
+      void window.api
+        .setOpenCodeModelSelection({ projectDirectory: directory, model })
+        .then((storedModel) => {
+          queryClient.setQueryData(openCodeModelSelectionQueryKey(directory), storedModel)
+        })
+        .catch((error: unknown) => {
+          console.error('Failed to persist OpenCode model selection.', error)
+        })
+    },
+    [directory, options, queryClient, selectionDirectory]
+  )
+
   useEffect(() => {
-    setSelectedModelID((current) => {
-      if (current && options.some((option) => option.id === current)) return current
-      return defaultModelID ?? options[0]?.id ?? null
+    setSelectionState((current) => {
+      if (!selectionDirectory) {
+        if (
+          current.directory === null &&
+          current.selectedModelID === null &&
+          current.source === 'pending'
+        ) {
+          return current
+        }
+        return pendingModelSelection
+      }
+
+      const currentMatchesDirectory = current.directory === selectionDirectory
+      if (!preferenceLoaded) {
+        return currentMatchesDirectory
+          ? current
+          : { directory: selectionDirectory, selectedModelID: null, source: 'pending' }
+      }
+
+      if (
+        currentMatchesDirectory &&
+        current.source === 'user' &&
+        current.selectedModelID &&
+        optionIDs.has(current.selectedModelID)
+      ) {
+        return current
+      }
+
+      if (persistedModelID) {
+        if (
+          currentMatchesDirectory &&
+          current.selectedModelID === persistedModelID &&
+          current.source === 'restored'
+        ) {
+          return current
+        }
+        return {
+          directory: selectionDirectory,
+          selectedModelID: persistedModelID,
+          source: 'restored'
+        }
+      }
+
+      if (
+        currentMatchesDirectory &&
+        current.selectedModelID &&
+        optionIDs.has(current.selectedModelID)
+      ) {
+        return current
+      }
+
+      const fallbackModelID = defaultModelID ?? options[0]?.id ?? null
+      if (
+        currentMatchesDirectory &&
+        current.selectedModelID === fallbackModelID &&
+        current.source === 'fallback'
+      ) {
+        return current
+      }
+
+      return {
+        directory: selectionDirectory,
+        selectedModelID: fallbackModelID,
+        source: 'fallback'
+      }
     })
-  }, [defaultModelID, options])
+  }, [defaultModelID, optionIDs, options, persistedModelID, preferenceLoaded, selectionDirectory])
 
   useEffect(() => {
     setSelectedEffortID((current) => {
@@ -100,9 +230,13 @@ export function useOpenCodeModels(directory: string | null | undefined) {
     selectedEffort,
     selectedEffortID: effectiveSelectedEffortID,
     setSelectedEffortID,
-    isLoading: modelsQuery.isLoading,
+    isLoading: modelsQuery.isLoading || !preferenceLoaded,
     errorMessage: modelsQuery.error ? formatUnknownError(modelsQuery.error) : null,
-    helperText: getModelHelperText(modelsQuery.isLoading, options.length, selectedModel)
+    helperText: getModelHelperText(
+      modelsQuery.isLoading || !preferenceLoaded,
+      options.length,
+      selectedModel
+    )
   }
 }
 
@@ -186,6 +320,12 @@ function getDefaultModelID(
   if (!isRecord(data)) return null
   const connected = new Set(getStringArray(data.connected))
   const defaults = isRecord(data.default) ? data.default : {}
+  const directDefaultID = modelOptionID({
+    providerID: getString(defaults.providerID),
+    modelID: getString(defaults.modelID)
+  })
+  if (options.some((option) => option.id === directDefaultID)) return directDefaultID
+
   for (const providerID of connected) {
     const modelID = getString(defaults[providerID])
     if (!modelID) continue

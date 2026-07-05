@@ -95,6 +95,12 @@ app.whenReady().then(() => {
   ipcMain.handle('appearance:set-native-theme', (_event, mode: unknown) => {
     if (isThemeMode(mode)) setNativeTheme(mode)
   })
+  ipcMain.handle('opencode:get-model-selection', (_event, input) =>
+    openKhodamConfig.getOpenCodeModelSelection(input)
+  )
+  ipcMain.handle('opencode:set-model-selection', (_event, input) =>
+    openKhodamConfig.setOpenCodeModelSelection(input)
+  )
   ipcMain.handle('google-workspace:get-status', () => googleWorkspace.getStatus())
   ipcMain.handle('google-workspace:connect', () => googleWorkspace.connect())
   ipcMain.handle('google-workspace:cancel-connect', () => googleWorkspace.cancelConnect())

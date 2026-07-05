@@ -167,6 +167,11 @@ type OpenKhodamConfigFixture = {
   projects: {
     openedFolders: Array<{ directory: string; lastOpenedAt: number }>
   }
+  preferences: {
+    openCode: {
+      modelSelectionsByDirectory: Record<string, { providerID: string; modelID: string }>
+    }
+  }
   integrations: {
     googleWorkspace: {
       account: { email: string | null; name: string | null } | null
@@ -239,6 +244,11 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
       projects: {
         openedFolders: []
       },
+      preferences: {
+        openCode: {
+          modelSelectionsByDirectory: {}
+        }
+      },
       integrations: {
         googleWorkspace: {
           account: null,
@@ -262,6 +272,8 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
     )
 
     const appConfig = JSON.parse(await readFile(appConfigPath, 'utf8')) as OpenKhodamConfigFixture
+    expect(appConfig.projects.openedFolders).toEqual([])
+    expect(appConfig.preferences.openCode.modelSelectionsByDirectory).toEqual({})
     expect(appConfig.integrations.googleWorkspace.account).toEqual({
       email: 'fake@example.com',
       name: 'Fake User'
@@ -290,7 +302,108 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
   }
 })
 
-test('stores project session linked Google Workspace artifacts with stable path and dedupe timestamps', async () => {
+test('normalizes and stores per-directory OpenCode model selections in app config', async () => {
+  const { OpenKhodamConfigFileStore } = loadDesktopModule<OpenKhodamConfigModule>(
+    '../../desktop/src/main/integrations/openkhodam-config'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-model-selection-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const projectLinkPath = join(tempRoot, 'project-link')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+
+  try {
+    await mkdir(projectPath, { recursive: true })
+    await symlink(projectPath, projectLinkPath)
+    const expectedProjectDirectory = await realpath(projectPath)
+    await mkdir(userDataPath, { recursive: true })
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          projects: {
+            openedFolders: []
+          },
+          preferences: {
+            openCode: {
+              modelSelectionsByDirectory: {
+                [join(projectPath, '..', 'project')]: {
+                  providerID: ' fake-provider ',
+                  modelID: ' fake-model '
+                },
+                relative: { providerID: 'relative-provider', modelID: 'relative-model' },
+                [join(tempRoot, 'invalid-model')]: { providerID: '', modelID: 'missing-provider' },
+                [`${projectPath}\0bad`]: { providerID: 'bad-path', modelID: 'bad-model' }
+              }
+            }
+          },
+          integrations: {
+            googleWorkspace: {
+              account: { email: 'fake@example.com', name: 'Fake User' },
+              scopes: ['profile'],
+              token: {
+                accessToken: 'access-token',
+                expiresAt: 123,
+                idToken: null,
+                refreshToken: 'refresh-token',
+                tokenType: 'Bearer'
+              },
+              updatedAt: 456
+            }
+          }
+        } satisfies OpenKhodamConfigFixture,
+        null,
+        2
+      )}\n`,
+      'utf8'
+    )
+
+    const configStore = new OpenKhodamConfigFileStore(configPath)
+    await expect(
+      configStore.getOpenCodeModelSelection({ projectDirectory: projectLinkPath })
+    ).resolves.toEqual({ providerID: 'fake-provider', modelID: 'fake-model' })
+
+    await expect(
+      configStore.setOpenCodeModelSelection({
+        projectDirectory: projectLinkPath,
+        model: { providerID: 'fake-provider', modelID: 'fake-alt-model' }
+      })
+    ).resolves.toEqual({ providerID: 'fake-provider', modelID: 'fake-alt-model' })
+
+    const persisted = JSON.parse(await readFile(configPath, 'utf8')) as OpenKhodamConfigFixture
+    expect(persisted.projects.openedFolders).toEqual([])
+    expect(persisted.preferences.openCode.modelSelectionsByDirectory).toEqual({
+      [expectedProjectDirectory]: { providerID: 'fake-provider', modelID: 'fake-alt-model' }
+    })
+    expect(persisted.integrations.googleWorkspace).toMatchObject({
+      account: { email: 'fake@example.com', name: 'Fake User' },
+      scopes: ['profile'],
+      token: {
+        accessToken: 'access-token',
+        expiresAt: 123,
+        idToken: null,
+        refreshToken: 'refresh-token',
+        tokenType: 'Bearer'
+      },
+      updatedAt: 456
+    })
+
+    await expect(
+      configStore.setOpenCodeModelSelection({ projectDirectory: projectPath, model: null })
+    ).resolves.toBeNull()
+    await expect(
+      configStore.getOpenCodeModelSelection({ projectDirectory: projectPath })
+    ).resolves.toBeNull()
+    const cleared = JSON.parse(await readFile(configPath, 'utf8')) as OpenKhodamConfigFixture
+    expect(cleared.projects.openedFolders).toEqual([])
+    expect(cleared.preferences.openCode.modelSelectionsByDirectory).toEqual({})
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('stores project session linked Google Docs with stable path and dedupe timestamps', async () => {
   const { PROJECT_ARTIFACTS_CONFIG_VERSION, ProjectArtifactsFileStore } =
     loadDesktopModule<ProjectArtifactsModule>(
       '../../desktop/src/main/integrations/project-artifacts'
@@ -4766,6 +4879,11 @@ async function writeOpenKhodamConfig(
         version: 1,
         projects: {
           openedFolders: []
+        },
+        preferences: {
+          openCode: {
+            modelSelectionsByDirectory: {}
+          }
         },
         integrations: {
           googleWorkspace
