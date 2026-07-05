@@ -10,6 +10,8 @@ import { createProjectArtifactsIntegration } from './integrations/project-artifa
 const opencodeSidecar = createOpenCodeSidecar()
 const isE2e = process.env['OPENKHODAM_E2E'] === '1'
 
+app.setName('OpenKhodam')
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
