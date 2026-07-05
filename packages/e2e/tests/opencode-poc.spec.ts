@@ -1223,6 +1223,20 @@ test('asks approval before semantic Google Docs insert edits and returns a bound
     expect(plugin.tool.google_docs_edit.description).toContain('semantic operations')
     expect(plugin.tool.google_docs_edit.description).toContain('bounded')
     expect((plugin.tool as Record<string, unknown>).google_docs_append_text).toBeUndefined()
+    expect(plugin.tool.google_docs_edit.args.operation.required).toEqual(['type'])
+    expect(plugin.tool.google_docs_edit.args.operation.properties.type).toMatchObject({
+      enum: [
+        'append_text',
+        'insert_after_text',
+        'insert_before_text',
+        'replace_text',
+        'delete_text'
+      ]
+    })
+    const operationSchemaText = JSON.stringify(plugin.tool.google_docs_edit.args.operation)
+    expect(operationSchemaText).not.toContain('startIndex')
+    expect(operationSchemaText).not.toContain('endIndex')
+    expect(operationSchemaText).not.toContain('insertionIndex')
 
     const output = JSON.parse(
       await plugin.tool.google_docs_edit.execute(
@@ -1277,12 +1291,14 @@ test('asks approval before semantic Google Docs insert edits and returns a bound
       writeControl: { requiredRevisionId: 'rev-before-edit' }
     })
     expect(output.edit).toEqual({
+      deletedTextLength: 0,
       documentId: 'doc-edit',
       insertedTextLength: normalizedInsertedText.length,
       link: 'https://docs.google.com/document/d/doc-edit/edit',
       ok: true,
       operation: 'insert_after_text',
       revision: 'rev-after-edit',
+      textLengthDelta: normalizedInsertedText.length,
       title: 'Edited Target'
     })
     expect(output.document).toMatchObject({
@@ -1307,6 +1323,332 @@ test('asks approval before semantic Google Docs insert edits and returns a bound
     expect(outputText).not.toContain('endIndex')
     expect(outputText).not.toContain('markdown')
     expect(outputText).not.toContain('38')
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('supports semantic Google Docs insert-before, replace, and delete edits', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-edit-semantic-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const events: string[] = []
+  const batchBodies = new Map<string, unknown>()
+  const docsGets = new Map<string, number>()
+  const permissionRequests = new Map<string, Record<string, unknown>>()
+  const scenarios = [
+    {
+      afterBody: createGoogleDocParagraphs(['Alpha anchor\n', 'Beta before anchor\n']),
+      afterRevision: 'rev-insert-before-after',
+      afterText: 'Alpha anchor\nBeta before anchor',
+      afterTitle: 'Insert Before Edited',
+      beforeBody: [
+        {
+          startIndex: 1,
+          endIndex: 14,
+          paragraph: {
+            elements: [{ startIndex: 1, endIndex: 14, textRun: { content: 'Alpha anchor\n' } }]
+          }
+        },
+        {
+          startIndex: 14,
+          endIndex: 26,
+          paragraph: {
+            elements: [{ startIndex: 14, endIndex: 26, textRun: { content: 'Beta anchor\n' } }]
+          }
+        }
+      ],
+      beforeRevision: 'rev-insert-before-before',
+      beforeTitle: 'Insert Before Target',
+      documentId: 'doc-insert-before',
+      expectedBatch: {
+        requests: [
+          {
+            insertText: {
+              location: { index: 19 },
+              text: 'before '
+            }
+          }
+        ],
+        writeControl: { requiredRevisionId: 'rev-insert-before-before' }
+      },
+      expectedEdit: {
+        deletedTextLength: 0,
+        insertedTextLength: 'before '.length,
+        operation: 'insert_before_text',
+        textLengthDelta: 'before '.length
+      },
+      expectedMetadata: {
+        action: 'insert_before_text',
+        characterCount: 'before '.length,
+        documentId: 'doc-insert-before',
+        documentTitle: 'Insert Before Target',
+        link: 'https://docs.google.com/document/d/doc-insert-before/edit',
+        matchCharacterCount: 'anchor'.length,
+        matchPreview: 'anchor',
+        occurrence: 'last',
+        textPreview: 'before'
+      },
+      operation: { match: 'anchor', text: 'before ', type: 'insert_before_text' }
+    },
+    {
+      afterBody: createGoogleDocParagraphs([
+        'Intro helo this is nice\n',
+        'Again hello this is great\n'
+      ]),
+      afterRevision: 'rev-replace-after',
+      afterText: 'Intro helo this is nice\nAgain hello this is great',
+      afterTitle: 'Replace Edited',
+      beforeBody: [
+        {
+          startIndex: 1,
+          endIndex: 25,
+          paragraph: {
+            elements: [
+              { startIndex: 1, endIndex: 25, textRun: { content: 'Intro helo this is nice\n' } }
+            ]
+          }
+        },
+        {
+          startIndex: 25,
+          endIndex: 49,
+          paragraph: {
+            elements: [
+              { startIndex: 25, endIndex: 49, textRun: { content: 'Again helo this is nice\n' } }
+            ]
+          }
+        }
+      ],
+      beforeRevision: 'rev-replace-before',
+      beforeTitle: 'Replace Target',
+      documentId: 'doc-replace',
+      expectedBatch: {
+        requests: [
+          {
+            deleteContentRange: {
+              range: {
+                startIndex: 31,
+                endIndex: 48
+              }
+            }
+          },
+          {
+            insertText: {
+              location: { index: 31 },
+              text: 'hello this is great'
+            }
+          }
+        ],
+        writeControl: { requiredRevisionId: 'rev-replace-before' }
+      },
+      expectedEdit: {
+        deletedTextLength: 'helo this is nice'.length,
+        insertedTextLength: 'hello this is great'.length,
+        operation: 'replace_text',
+        textLengthDelta: 'hello this is great'.length - 'helo this is nice'.length
+      },
+      expectedMetadata: {
+        action: 'replace_text',
+        characterCount: 'hello this is great'.length,
+        documentId: 'doc-replace',
+        documentTitle: 'Replace Target',
+        link: 'https://docs.google.com/document/d/doc-replace/edit',
+        matchCharacterCount: 'helo this is nice'.length,
+        matchPreview: 'helo this is nice',
+        occurrence: 'last',
+        textPreview: 'hello this is great'
+      },
+      operation: {
+        match: 'helo this is nice',
+        text: 'hello this is great',
+        type: 'replace_text'
+      }
+    },
+    {
+      afterBody: createGoogleDocParagraphs(['Alpha  beta\n']),
+      afterRevision: 'rev-delete-after',
+      afterText: 'Alpha  beta',
+      afterTitle: 'Delete Edited',
+      beforeBody: [
+        {
+          startIndex: 1,
+          endIndex: 24,
+          paragraph: {
+            elements: [
+              { startIndex: 1, endIndex: 24, textRun: { content: 'Alpha remove this beta\n' } }
+            ]
+          }
+        }
+      ],
+      beforeRevision: 'rev-delete-before',
+      beforeTitle: 'Delete Target',
+      documentId: 'doc-delete',
+      expectedBatch: {
+        requests: [
+          {
+            deleteContentRange: {
+              range: {
+                startIndex: 7,
+                endIndex: 18
+              }
+            }
+          }
+        ],
+        writeControl: { requiredRevisionId: 'rev-delete-before' }
+      },
+      expectedEdit: {
+        deletedTextLength: 'remove this'.length,
+        insertedTextLength: 0,
+        operation: 'delete_text',
+        textLengthDelta: -'remove this'.length
+      },
+      expectedMetadata: {
+        action: 'delete_text',
+        documentId: 'doc-delete',
+        documentTitle: 'Delete Target',
+        link: 'https://docs.google.com/document/d/doc-delete/edit',
+        matchCharacterCount: 'remove this'.length,
+        matchPreview: 'remove this',
+        occurrence: 'first'
+      },
+      operation: { match: 'remove this', occurrence: 'first', type: 'delete_text' }
+    }
+  ]
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'semantic-edit-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const parsed = new URL(url)
+    const docsPathPrefix = '/v1/documents/'
+
+    if (
+      parsed.origin === 'https://docs.googleapis.com' &&
+      parsed.pathname.startsWith(docsPathPrefix) &&
+      parsed.pathname.endsWith(':batchUpdate')
+    ) {
+      const encodedDocumentId = parsed.pathname.slice(docsPathPrefix.length, -':batchUpdate'.length)
+      const documentId = decodeURIComponent(encodedDocumentId)
+      events.push(`${documentId}:batchUpdate`)
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer semantic-edit-access-token'
+      )
+      batchBodies.set(documentId, typeof init?.body === 'string' ? JSON.parse(init.body) : null)
+      return new Response(
+        JSON.stringify({
+          documentId,
+          writeControl: { targetRevisionId: `batch-${documentId}` }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    const documentId = readFetchedGoogleDocsDocumentId(url)
+    const scenario = scenarios.find((candidate) => candidate.documentId === documentId)
+    if (scenario) {
+      const getCount = (docsGets.get(scenario.documentId) ?? 0) + 1
+      docsGets.set(scenario.documentId, getCount)
+      events.push(`${scenario.documentId}:documents.get:${getCount}`)
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer semantic-edit-access-token'
+      )
+
+      const body =
+        getCount === 1
+          ? {
+              body: { content: scenario.beforeBody },
+              documentId: scenario.documentId,
+              revisionId: scenario.beforeRevision,
+              title: scenario.beforeTitle
+            }
+          : {
+              body: { content: scenario.afterBody },
+              documentId: scenario.documentId,
+              revisionId: scenario.afterRevision,
+              title: scenario.afterTitle
+            }
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    for (const scenario of scenarios) {
+      const output = JSON.parse(
+        await plugin.tool.google_docs_edit.execute(
+          {
+            documentId: scenario.documentId,
+            operation: scenario.operation
+          },
+          {
+            ask: async (input) => {
+              events.push(`${scenario.documentId}:ask`)
+              permissionRequests.set(scenario.documentId, input)
+            }
+          }
+        )
+      ) as {
+        document: Record<string, unknown>
+        edit: Record<string, unknown>
+      }
+
+      expect(permissionRequests.get(scenario.documentId)).toEqual({
+        always: [`google-docs:${scenario.documentId}`],
+        metadata: scenario.expectedMetadata,
+        patterns: [`google-docs:${scenario.documentId}`],
+        permission: 'google_docs_edit'
+      })
+      expect(batchBodies.get(scenario.documentId)).toEqual(scenario.expectedBatch)
+      expect(output.edit).toEqual({
+        documentId: scenario.documentId,
+        link: `https://docs.google.com/document/d/${scenario.documentId}/edit`,
+        ok: true,
+        revision: scenario.afterRevision,
+        title: scenario.afterTitle,
+        ...scenario.expectedEdit
+      })
+      expect(output.document).toMatchObject({
+        id: scenario.documentId,
+        preview: {
+          truncated: false,
+          totalTextLength: scenario.afterText.length,
+          totalBlockCount: scenario.afterBody.length,
+          includedBlockCount: scenario.afterBody.length
+        },
+        revision: scenario.afterRevision,
+        text: scenario.afterText,
+        title: scenario.afterTitle,
+        type: 'google.doc.document'
+      })
+    }
+
+    expect(events).toEqual(
+      scenarios.flatMap((scenario) => [
+        `${scenario.documentId}:documents.get:1`,
+        `${scenario.documentId}:ask`,
+        `${scenario.documentId}:batchUpdate`,
+        `${scenario.documentId}:documents.get:2`
+      ])
+    )
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
@@ -1513,7 +1855,28 @@ test('does not call the Google Docs write API when edit approval is denied', asy
   const originalFetch = globalThis.fetch
   const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
   const events: string[] = []
-  let docsGets = 0
+  const deniedCases = [
+    {
+      name: 'append_text',
+      operation: { text: 'Denied append', type: 'append_text' }
+    },
+    {
+      name: 'insert_after_text',
+      operation: { match: 'Body', text: 'Denied after', type: 'insert_after_text' }
+    },
+    {
+      name: 'insert_before_text',
+      operation: { match: 'Body', text: 'Denied before', type: 'insert_before_text' }
+    },
+    {
+      name: 'replace_text',
+      operation: { match: 'Body', text: 'Denied replacement', type: 'replace_text' }
+    },
+    {
+      name: 'delete_text',
+      operation: { match: 'Body', type: 'delete_text' }
+    }
+  ]
 
   await writeOpenKhodamConfig(configPath, {
     account: { email: 'fake@example.com', name: 'Fake User' },
@@ -1531,28 +1894,31 @@ test('does not call the Google Docs write API when edit approval is denied', asy
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input)
 
-    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-denied:batchUpdate')) {
+    if (
+      url.startsWith('https://docs.googleapis.com/v1/documents/') &&
+      url.includes(':batchUpdate')
+    ) {
       events.push('batchUpdate')
       throw new Error('Batch update should not be called when edit approval is denied.')
     }
 
-    if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-denied')) {
-      docsGets += 1
-      events.push(`documents.get:${docsGets}`)
+    const fetchedDocumentId = readFetchedGoogleDocsDocumentId(url)
+    if (fetchedDocumentId?.startsWith('doc-denied-')) {
+      events.push(`documents.get:${fetchedDocumentId}`)
       return new Response(
         JSON.stringify({
           body: {
             content: [
               {
                 startIndex: 1,
-                endIndex: 6,
+                endIndex: 13,
                 paragraph: {
-                  elements: [{ startIndex: 1, endIndex: 6, textRun: { content: 'Body\n' } }]
+                  elements: [{ startIndex: 1, endIndex: 13, textRun: { content: 'Body anchor\n' } }]
                 }
               }
             ]
           },
-          documentId: 'doc-denied',
+          documentId: fetchedDocumentId,
           revisionId: 'rev-denied',
           title: 'Denied Target'
         }),
@@ -1565,21 +1931,29 @@ test('does not call the Google Docs write API when edit approval is denied', asy
 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
-    await expect(
-      plugin.tool.google_docs_edit.execute(
-        {
-          documentId: 'doc-denied',
-          operation: { text: 'Denied append', type: 'append_text' }
-        },
-        {
-          ask: async () => {
-            events.push('ask')
-            throw new Error('Permission denied')
+    for (const deniedCase of deniedCases) {
+      await expect(
+        plugin.tool.google_docs_edit.execute(
+          {
+            documentId: `doc-denied-${deniedCase.name}`,
+            operation: deniedCase.operation
+          },
+          {
+            ask: async (input) => {
+              events.push(`ask:${deniedCase.name}`)
+              expect(input.metadata.action).toBe(deniedCase.name)
+              throw new Error(`Permission denied: ${deniedCase.name}`)
+            }
           }
-        }
-      )
-    ).rejects.toThrow('Permission denied')
-    expect(events).toEqual(['documents.get:1', 'ask'])
+        )
+      ).rejects.toThrow(`Permission denied: ${deniedCase.name}`)
+    }
+    expect(events).toEqual(
+      deniedCases.flatMap((deniedCase) => [
+        `documents.get:doc-denied-${deniedCase.name}`,
+        `ask:${deniedCase.name}`
+      ])
+    )
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
