@@ -17,6 +17,11 @@ const arbitraryLinkedDocUrl = 'https://example.test/document/d/arbitrary-linked-
 const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
 const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
+const removedComposerHelperCopy = [
+  'Send to the selected session.',
+  'Select a connected OpenCode model before sending.',
+  'Start a new conversation in this project.'
+]
 const projectSidebar = (page: Page): Locator =>
   page.getByRole('complementary', { name: 'Projects' })
 const collapsedProjectSidebarRail = (page: Page): Locator =>
@@ -189,6 +194,18 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toHaveCount(0)
+}
+
+async function expectChatComposerWithoutHelperCopy(page: Page): Promise<void> {
+  const chatPrompt = page.getByRole('form', { name: 'Chat prompt' })
+
+  await expect(chatPrompt).toBeVisible()
+  await expect(page.getByLabel('OpenCode model')).toBeVisible()
+  await expect(page.getByLabel('Message OpenKhodam')).toBeVisible()
+  await expect(chatPrompt.getByRole('button', { name: 'Send', exact: true })).toBeVisible()
+  for (const helperCopy of removedComposerHelperCopy) {
+    await expect(page.getByText(helperCopy)).toBeHidden()
+  }
 }
 
 async function appRegion(locator: Locator): Promise<string> {
@@ -839,8 +856,7 @@ test('opens a project by directory into the project route with start composer', 
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
   await expectOpenedProjectRouteResolved(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
-  await expect(appWindow.getByText('Start a new conversation in this project.')).toBeVisible()
+  await expectChatComposerWithoutHelperCopy(appWindow)
 })
 
 test('shows the real OpenCode project chats surface', async ({ appWindow }) => {
@@ -877,11 +893,12 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   )
   await expect(
     appWindow
-      .getByText('Start a new conversation in this project.')
+      .getByText('Start a new conversation for this project.')
       .or(appWindow.getByText('No sessions found for this project.'))
       .or(appWindow.getByText(/^(Loading OpenCode data…|No messages found for this session\.)/))
       .first()
   ).toBeVisible()
+  await expectChatComposerWithoutHelperCopy(appWindow)
   const projectUrl = appWindow.url()
   await appWindow.reload()
   await expect(appWindow).toHaveURL(projectUrl)
@@ -897,7 +914,7 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   const sessionCount = await sessionLinks.count()
   if (sessionCount === 0) {
     await expect(appWindow.getByText('No sessions found for this project.')).toBeVisible()
-    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+    await expectChatComposerWithoutHelperCopy(appWindow)
     return
   }
 
@@ -906,7 +923,7 @@ test('shows real project/session selection in the reused chat shell', async ({ a
     /\/projects\/[^/]+\/sessions\/[^/]+$/
   )
   await expect(appWindow.locator('#active-chat-heading')).not.toHaveText('No chat selected')
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+  await expectChatComposerWithoutHelperCopy(appWindow)
   await expect(
     appWindow
       .getByText(/^(No messages found for this session\.|Loading OpenCode data…)/)
@@ -918,13 +935,13 @@ test('shows real project/session selection in the reused chat shell', async ({ a
     /\/projects\/[^/]+$/
   )
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+  await expectChatComposerWithoutHelperCopy(appWindow)
   await appWindow.goForward()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+\/sessions\/[^/]+$/
   )
   await expect(appWindow.locator('#active-chat-heading')).not.toHaveText('No chat selected')
-  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+  await expectChatComposerWithoutHelperCopy(appWindow)
 })
 
 test('renders seeded stable chat messages', async ({ appWindow }) => {
