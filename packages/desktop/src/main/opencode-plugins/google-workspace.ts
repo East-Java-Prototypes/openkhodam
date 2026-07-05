@@ -158,7 +158,7 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
     },
     google_docs_edit: {
       description:
-        'Edit a Google Docs document using semantic operations with the Google Workspace account connected in OpenKhodam Settings. Supports append_text and insert_after_text, requires OpenCode permission approval before writing, and returns a bounded updated-document preview.',
+        'Edit a Google Docs document using semantic operations with the Google Workspace account connected in OpenKhodam Settings. Supports append_text, insert_after_text, insert_before_text, replace_text, and delete_text; requires OpenCode permission approval before writing; and returns a bounded updated-document preview.',
       args: {
         documentId: {
           description: 'The Google Docs document ID to edit.',
@@ -167,29 +167,37 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
         operation: {
           additionalProperties: false,
           description:
-            'One semantic edit operation. Use append_text with text, or insert_after_text with match, optional occurrence (defaults to last), and text. Do not provide raw Google Docs indexes.',
+            'One semantic edit operation. Use append_text with text; insert_after_text or insert_before_text with match, optional occurrence (defaults to last), and text; replace_text with match, optional occurrence, and replacement text; or delete_text with match and optional occurrence. Do not provide raw Google Docs indexes.',
           properties: {
             type: {
-              description: 'Operation type: append_text or insert_after_text.',
-              enum: ['append_text', 'insert_after_text'],
+              description:
+                'Operation type: append_text, insert_after_text, insert_before_text, replace_text, or delete_text.',
+              enum: [
+                'append_text',
+                'insert_after_text',
+                'insert_before_text',
+                'replace_text',
+                'delete_text'
+              ],
               type: 'string'
             },
             match: {
-              description: 'Text to find when type is insert_after_text.',
+              description:
+                'Text to find for insert_after_text, insert_before_text, replace_text, and delete_text.',
               type: 'string'
             },
             occurrence: {
               description:
-                'Optional match occurrence for insert_after_text: first, last, or a 1-based number. Defaults to last.',
+                'Optional match occurrence for match-based edits: first, last, or a 1-based number. Defaults to last.',
               type: ['number', 'string']
             },
             text: {
               description:
-                'Text to insert. Literal newline escapes like \\n are normalized before approval and writing.',
+                'Text to append, insert, or use as replacement text. Literal newline escapes like \\n are normalized before approval and writing. Not required for delete_text.',
               type: 'string'
             }
           },
-          required: ['type', 'text'],
+          required: ['type'],
           type: 'object'
         }
       },
@@ -234,16 +242,30 @@ function toGoogleDocsEditOperation(
     }
   }
 
-  if (value.type === 'insert_after_text') {
+  if (
+    value.type === 'insert_after_text' ||
+    value.type === 'insert_before_text' ||
+    value.type === 'replace_text'
+  ) {
     return {
       match: stringArg(value.match),
       occurrence: occurrenceArg(value.occurrence),
       text: stringArg(value.text),
-      type: 'insert_after_text'
+      type: value.type
     }
   }
 
-  throw new Error('Google Docs edit operation type must be append_text or insert_after_text.')
+  if (value.type === 'delete_text') {
+    return {
+      match: stringArg(value.match),
+      occurrence: occurrenceArg(value.occurrence),
+      type: 'delete_text'
+    }
+  }
+
+  throw new Error(
+    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, or delete_text.'
+  )
 }
 
 function occurrenceArg(value: unknown): GoogleDocsTextOccurrence | undefined {
@@ -269,14 +291,17 @@ async function askForEditApproval(
 
   const metadata: Record<string, unknown> = {
     action: input.operation.type,
-    characterCount: input.operation.text.length,
     documentId: input.document.id,
     documentTitle: input.document.title,
-    link: input.document.link,
-    textPreview: previewText(input.operation.text)
+    link: input.document.link
   }
 
-  if (input.operation.type === 'insert_after_text') {
+  if ('text' in input.operation) {
+    metadata.characterCount = input.operation.text.length
+    metadata.textPreview = previewText(input.operation.text)
+  }
+
+  if ('match' in input.operation) {
     metadata.matchPreview = previewText(input.operation.match)
     metadata.matchCharacterCount = input.operation.match.length
     metadata.occurrence = input.operation.occurrence

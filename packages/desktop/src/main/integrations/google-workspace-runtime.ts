@@ -133,6 +133,23 @@ export type GoogleDocsEditOperation =
       text: string
       type: 'insert_after_text'
     }
+  | {
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      text: string
+      type: 'insert_before_text'
+    }
+  | {
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      text: string
+      type: 'replace_text'
+    }
+  | {
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      type: 'delete_text'
+    }
 
 export type GoogleDocsTextOccurrence = 'first' | 'last' | number
 
@@ -147,16 +164,35 @@ export type GoogleDocsEditApprovalOperation =
       text: string
       type: 'insert_after_text'
     }
+  | {
+      match: string
+      occurrence: GoogleDocsTextOccurrence
+      text: string
+      type: 'insert_before_text'
+    }
+  | {
+      match: string
+      occurrence: GoogleDocsTextOccurrence
+      text: string
+      type: 'replace_text'
+    }
+  | {
+      match: string
+      occurrence: GoogleDocsTextOccurrence
+      type: 'delete_text'
+    }
 
 export type GoogleDocsEditDocumentResult = {
   document: GoogleDocDocumentArtifact
   edit: {
     documentId: string
+    deletedTextLength: number
     insertedTextLength: number
     link: string | null
     ok: true
     operation: GoogleDocsEditOperation['type']
     revision: string | null
+    textLengthDelta: number
     title: string | null
   }
 }
@@ -185,6 +221,58 @@ type ResolvedGoogleDocsEditOperation =
       text: string
       type: 'insert_after_text'
     }
+  | {
+      insertionIndex: number
+      match: string
+      matchEndIndex: number
+      matchStartIndex: number
+      occurrence: GoogleDocsTextOccurrence
+      text: string
+      type: 'insert_before_text'
+    }
+  | {
+      match: string
+      matchEndIndex: number
+      matchStartIndex: number
+      occurrence: GoogleDocsTextOccurrence
+      text: string
+      type: 'replace_text'
+    }
+  | {
+      match: string
+      matchEndIndex: number
+      matchStartIndex: number
+      occurrence: GoogleDocsTextOccurrence
+      type: 'delete_text'
+    }
+
+type GoogleDocsBatchUpdateRequestBody = {
+  requests: GoogleDocsBatchUpdateRequest[]
+  writeControl?: { requiredRevisionId: string }
+}
+
+type GoogleDocsBatchUpdateRequest =
+  | {
+      insertText: {
+        location: { index: number }
+        text: string
+      }
+    }
+  | {
+      deleteContentRange: {
+        range: {
+          endIndex: number
+          startIndex: number
+        }
+      }
+    }
+
+type GoogleDocsTextMatchOperation = Exclude<GoogleDocsEditOperation, { type: 'append_text' }>
+
+type GoogleDocsTextMatchCandidate = {
+  matchEndIndex: number | null
+  matchStartIndex: number | null
+}
 
 type GoogleWorkspaceAccessInput = {
   configPath: string | undefined
@@ -334,8 +422,9 @@ export async function editGoogleDocDocument({
   return {
     document: updated.document,
     edit: {
+      deletedTextLength: getResolvedDeletedTextLength(resolvedOperation),
       documentId: updated.document.id || batchUpdateBody.documentId || current.document.id,
-      insertedTextLength: resolvedOperation.text.length,
+      insertedTextLength: getResolvedInsertedTextLength(resolvedOperation),
       link: updated.document.link,
       ok: true,
       operation: resolvedOperation.type,
@@ -344,6 +433,7 @@ export async function editGoogleDocDocument({
         batchUpdateBody.writeControl?.targetRevisionId ??
         batchUpdateBody.writeControl?.requiredRevisionId ??
         current.document.revision,
+      textLengthDelta: getResolvedTextLengthDelta(resolvedOperation),
       title: updated.document.title
     }
   }
@@ -451,23 +541,58 @@ function normalizeGoogleDocsEditOperation(
   }
 
   if (operation.type === 'insert_after_text') {
-    const match = typeof operation.match === 'string' ? operation.match : ''
-    if (!match) throw new Error('Google Docs insert_after_text requires match text.')
-
     return {
-      match,
-      occurrence: normalizeTextOccurrence(operation.occurrence),
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
       text: normalizeGoogleDocsEditText(operation.text),
       type: 'insert_after_text'
     }
   }
 
-  throw new Error('Google Docs edit operation type must be append_text or insert_after_text.')
+  if (operation.type === 'insert_before_text') {
+    return {
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      text: normalizeGoogleDocsEditText(operation.text),
+      type: 'insert_before_text'
+    }
+  }
+
+  if (operation.type === 'replace_text') {
+    return {
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      text: normalizeGoogleDocsEditText(operation.text),
+      type: 'replace_text'
+    }
+  }
+
+  if (operation.type === 'delete_text') {
+    return {
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      type: 'delete_text'
+    }
+  }
+
+  throw new Error(
+    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, or delete_text.'
+  )
+}
+
+function normalizeGoogleDocsMatchText(
+  match: unknown,
+  operationType: GoogleDocsTextMatchOperation['type']
+): string {
+  const normalized = typeof match === 'string' ? match : ''
+  if (!normalized) throw new Error(`Google Docs ${operationType} requires match text.`)
+
+  return normalized
 }
 
 function normalizeGoogleDocsEditText(text: string): string {
   if (typeof text !== 'string' || text.length === 0) {
-    throw new Error('Text to insert into the Google Doc is required.')
+    throw new Error('Text to insert or replace in the Google Doc is required.')
   }
 
   return text
@@ -478,7 +603,10 @@ function normalizeGoogleDocsEditText(text: string): string {
     .replace(/\r/g, '\n')
 }
 
-function normalizeTextOccurrence(occurrence: unknown): GoogleDocsTextOccurrence {
+function normalizeTextOccurrence(
+  occurrence: unknown,
+  operationType: GoogleDocsTextMatchOperation['type']
+): GoogleDocsTextOccurrence {
   if (occurrence === undefined || occurrence === null || occurrence === '') return 'last'
   if (occurrence === 'first' || occurrence === 'last') return occurrence
 
@@ -492,39 +620,16 @@ function normalizeTextOccurrence(occurrence: unknown): GoogleDocsTextOccurrence 
   if (Number.isInteger(numericOccurrence) && numericOccurrence > 0) return numericOccurrence
 
   throw new Error(
-    'Google Docs insert_after_text occurrence must be first, last, or a 1-based number.'
+    `Google Docs ${operationType} occurrence must be first, last, or a 1-based number.`
   )
 }
 
 function createGoogleDocsBatchUpdateRequest(
   document: GoogleDocDocumentArtifact,
   operation: ResolvedGoogleDocsEditOperation
-): {
-  requests: Array<{
-    insertText: {
-      location: { index: number }
-      text: string
-    }
-  }>
-  writeControl?: { requiredRevisionId: string }
-} {
-  const request = {
-    requests: [
-      {
-        insertText: {
-          location: { index: operation.insertionIndex },
-          text: operation.text
-        }
-      }
-    ]
-  } as {
-    requests: Array<{
-      insertText: {
-        location: { index: number }
-        text: string
-      }
-    }>
-    writeControl?: { requiredRevisionId: string }
+): GoogleDocsBatchUpdateRequestBody {
+  const request: GoogleDocsBatchUpdateRequestBody = {
+    requests: createGoogleDocsBatchUpdateRequests(operation)
   }
 
   if (document.revision) {
@@ -532,6 +637,67 @@ function createGoogleDocsBatchUpdateRequest(
   }
 
   return request
+}
+
+function createGoogleDocsBatchUpdateRequests(
+  operation: ResolvedGoogleDocsEditOperation
+): GoogleDocsBatchUpdateRequest[] {
+  if (
+    operation.type === 'append_text' ||
+    operation.type === 'insert_after_text' ||
+    operation.type === 'insert_before_text'
+  ) {
+    return [
+      {
+        insertText: {
+          location: { index: operation.insertionIndex },
+          text: operation.text
+        }
+      }
+    ]
+  }
+
+  if (operation.type === 'delete_text') {
+    return [createDeleteContentRangeRequest(operation.matchStartIndex, operation.matchEndIndex)]
+  }
+
+  return [
+    createDeleteContentRangeRequest(operation.matchStartIndex, operation.matchEndIndex),
+    {
+      insertText: {
+        location: { index: operation.matchStartIndex },
+        text: operation.text
+      }
+    }
+  ]
+}
+
+function createDeleteContentRangeRequest(
+  startIndex: number,
+  endIndex: number
+): GoogleDocsBatchUpdateRequest {
+  return {
+    deleteContentRange: {
+      range: {
+        endIndex,
+        startIndex
+      }
+    }
+  }
+}
+
+function getResolvedInsertedTextLength(operation: ResolvedGoogleDocsEditOperation): number {
+  return 'text' in operation ? operation.text.length : 0
+}
+
+function getResolvedDeletedTextLength(operation: ResolvedGoogleDocsEditOperation): number {
+  if (operation.type !== 'delete_text' && operation.type !== 'replace_text') return 0
+
+  return operation.matchEndIndex - operation.matchStartIndex
+}
+
+function getResolvedTextLengthDelta(operation: ResolvedGoogleDocsEditOperation): number {
+  return getResolvedInsertedTextLength(operation) - getResolvedDeletedTextLength(operation)
 }
 
 function createDriveQuery(query: string): string {
@@ -855,11 +1021,19 @@ function toGoogleDocsEditApprovalOperation(
     }
   }
 
+  if (operation.type === 'delete_text') {
+    return {
+      match: operation.match,
+      occurrence: operation.occurrence,
+      type: 'delete_text'
+    }
+  }
+
   return {
     match: operation.match,
     occurrence: operation.occurrence,
     text: operation.text,
-    type: 'insert_after_text'
+    type: operation.type
   }
 }
 
@@ -876,55 +1050,71 @@ function resolveGoogleDocsEditOperation(
     }
   }
 
-  return resolveInsertAfterTextOperation(indexedBlocks, operation)
+  return resolveTextMatchOperation(indexedBlocks, operation)
 }
 
-function resolveInsertAfterTextOperation(
+function resolveTextMatchOperation(
   indexedBlocks: IndexedGoogleDocBodyBlock[],
-  operation: Extract<GoogleDocsEditOperation, { type: 'insert_after_text' }>
+  operation: GoogleDocsTextMatchOperation
 ): ResolvedGoogleDocsEditOperation {
   const matches = indexedBlocks.flatMap((block) => findBlockMatchCandidates(block, operation.match))
   if (!matches.length) {
-    throw new Error('Google Docs insert_after_text could not find the requested match text.')
+    throw new Error(`Google Docs ${operation.type} could not find the requested match text.`)
   }
 
   const occurrence = operation.occurrence ?? 'last'
-  const match = selectTextMatch(matches, occurrence)
-  if (
-    match.insertionIndex === null ||
-    match.matchEndIndex === null ||
-    match.matchStartIndex === null
-  ) {
+  const match = selectTextMatch(matches, occurrence, operation.type)
+  if (match.matchEndIndex === null || match.matchStartIndex === null) {
     throw new Error(
-      'Google Docs insert_after_text matched text in an unsupported paragraph structure.'
+      `Google Docs ${operation.type} matched text in an unsupported paragraph structure.`
     )
   }
 
-  return {
-    insertionIndex: match.insertionIndex,
+  const resolvedMatch = {
     match: operation.match,
     matchEndIndex: match.matchEndIndex,
     matchStartIndex: match.matchStartIndex,
-    occurrence,
-    text: operation.text,
-    type: 'insert_after_text'
+    occurrence
+  }
+
+  if (operation.type === 'insert_after_text') {
+    return {
+      ...resolvedMatch,
+      insertionIndex: match.matchEndIndex,
+      text: operation.text,
+      type: 'insert_after_text'
+    }
+  }
+
+  if (operation.type === 'insert_before_text') {
+    return {
+      ...resolvedMatch,
+      insertionIndex: match.matchStartIndex,
+      text: operation.text,
+      type: 'insert_before_text'
+    }
+  }
+
+  if (operation.type === 'replace_text') {
+    return {
+      ...resolvedMatch,
+      text: operation.text,
+      type: 'replace_text'
+    }
+  }
+
+  return {
+    ...resolvedMatch,
+    type: 'delete_text'
   }
 }
 
 function findBlockMatchCandidates(
   block: IndexedGoogleDocBodyBlock,
   matchText: string
-): Array<{
-  insertionIndex: number | null
-  matchEndIndex: number | null
-  matchStartIndex: number | null
-}> {
+): GoogleDocsTextMatchCandidate[] {
   const baseTextStartIndex = getContiguousTextStartIndex(block)
-  const matches = [] as Array<{
-    insertionIndex: number | null
-    matchEndIndex: number | null
-    matchStartIndex: number | null
-  }>
+  const matches = [] as GoogleDocsTextMatchCandidate[]
   let searchIndex = 0
 
   while (searchIndex <= block.text.length) {
@@ -934,7 +1124,6 @@ function findBlockMatchCandidates(
     const matchStartIndex = baseTextStartIndex === null ? null : baseTextStartIndex + matchOffset
     const matchEndIndex = matchStartIndex === null ? null : matchStartIndex + matchText.length
     matches.push({
-      insertionIndex: matchEndIndex,
       matchEndIndex,
       matchStartIndex
     })
@@ -956,7 +1145,11 @@ function getContiguousTextStartIndex(block: IndexedGoogleDocBodyBlock): number |
   return null
 }
 
-function selectTextMatch<T>(matches: T[], occurrence: GoogleDocsTextOccurrence): T {
+function selectTextMatch<T>(
+  matches: T[],
+  occurrence: GoogleDocsTextOccurrence,
+  operationType: GoogleDocsTextMatchOperation['type']
+): T {
   const match =
     occurrence === 'first'
       ? matches[0]
@@ -965,7 +1158,7 @@ function selectTextMatch<T>(matches: T[], occurrence: GoogleDocsTextOccurrence):
         : matches[occurrence - 1]
 
   if (!match) {
-    throw new Error(`Google Docs insert_after_text occurrence ${occurrence} was not found.`)
+    throw new Error(`Google Docs ${operationType} occurrence ${occurrence} was not found.`)
   }
 
   return match
