@@ -1,6 +1,12 @@
-import { join } from 'node:path'
+import { realpathSync, statSync } from 'node:fs'
+import { isAbsolute, join, normalize } from 'node:path'
 
-import type { GoogleWorkspaceIntegrationStatus } from '@openkhodam/ui/types'
+import type {
+  GetOpenCodeModelSelectionInput,
+  GoogleWorkspaceIntegrationStatus,
+  OpenCodeModelSelection,
+  SetOpenCodeModelSelectionInput
+} from '@openkhodam/ui/types'
 
 import { JsonConfigFile } from '../config/json-config-file'
 
@@ -19,6 +25,11 @@ export type GoogleWorkspaceTokenConfig = {
 
 export type OpenKhodamConfig = {
   version: 1
+  preferences: {
+    openCode: {
+      modelSelectionsByDirectory: Record<string, OpenCodeModelSelection>
+    }
+  }
   integrations: {
     googleWorkspace: {
       account: GoogleWorkspaceAccountConfig | null
@@ -53,6 +64,35 @@ export class OpenKhodamConfigFileStore {
 
   async getGoogleWorkspaceStatus(configured: boolean): Promise<GoogleWorkspaceIntegrationStatus> {
     return toGoogleWorkspaceStatus(await this.read(), configured)
+  }
+
+  async getOpenCodeModelSelection(
+    input: GetOpenCodeModelSelectionInput
+  ): Promise<OpenCodeModelSelection | null> {
+    const projectDirectory = normalizeModelSelectionProjectDirectory(input)
+    const config = await this.read()
+    return config.preferences.openCode.modelSelectionsByDirectory[projectDirectory] ?? null
+  }
+
+  async setOpenCodeModelSelection(
+    input: SetOpenCodeModelSelectionInput
+  ): Promise<OpenCodeModelSelection | null> {
+    const projectDirectory = normalizeModelSelectionProjectDirectory(input)
+    const model = normalizeInputOpenCodeModelSelection(input)
+    const config = await this.read()
+    const modelSelectionsByDirectory = {
+      ...config.preferences.openCode.modelSelectionsByDirectory
+    }
+
+    if (model) {
+      modelSelectionsByDirectory[projectDirectory] = model
+    } else {
+      delete modelSelectionsByDirectory[projectDirectory]
+    }
+
+    config.preferences.openCode.modelSelectionsByDirectory = modelSelectionsByDirectory
+    await this.write(config)
+    return model
   }
 
   async setGoogleWorkspaceConnection(
@@ -93,6 +133,11 @@ export class OpenKhodamConfigStore extends OpenKhodamConfigFileStore {
 export function createDefaultConfig(): OpenKhodamConfig {
   return {
     version: 1,
+    preferences: {
+      openCode: {
+        modelSelectionsByDirectory: {}
+      }
+    },
     integrations: {
       googleWorkspace: {
         account: null,
@@ -146,32 +191,154 @@ export function toGoogleWorkspaceStatus(
 }
 
 function normalizeConfig(value: unknown): OpenKhodamConfig {
-  const config = (value ?? {}) as Partial<OpenKhodamConfig>
-  const google = config.integrations?.googleWorkspace
+  const config = isRecord(value) ? value : {}
+  const integrations = isRecord(config.integrations) ? config.integrations : {}
+  const google = isRecord(integrations.googleWorkspace) ? integrations.googleWorkspace : null
   return {
     version: 1,
+    preferences: normalizePreferencesConfig(config.preferences),
     integrations: {
       googleWorkspace: {
-        account: google?.account
-          ? {
-              email: typeof google.account.email === 'string' ? google.account.email : null,
-              name: typeof google.account.name === 'string' ? google.account.name : null
-            }
-          : null,
+        account: normalizeGoogleWorkspaceAccount(google?.account),
         scopes: Array.isArray(google?.scopes)
           ? google.scopes.filter((scope): scope is string => typeof scope === 'string')
           : [],
-        token: google?.token
-          ? {
-              accessToken: google.token.accessToken,
-              refreshToken: google.token.refreshToken ?? null,
-              expiresAt: google.token.expiresAt ?? null,
-              tokenType: google.token.tokenType ?? null,
-              idToken: google.token.idToken ?? null
-            }
-          : null,
+        token: normalizeGoogleWorkspaceToken(google?.token),
         updatedAt: typeof google?.updatedAt === 'number' ? google.updatedAt : null
       }
     }
   }
+}
+
+function normalizePreferencesConfig(value: unknown): OpenKhodamConfig['preferences'] {
+  const preferences = isRecord(value) ? value : {}
+  const openCode = isRecord(preferences.openCode) ? preferences.openCode : {}
+  return {
+    openCode: {
+      modelSelectionsByDirectory: normalizeModelSelectionsByDirectory(
+        openCode.modelSelectionsByDirectory
+      )
+    }
+  }
+}
+
+function normalizeModelSelectionsByDirectory(
+  value: unknown
+): Record<string, OpenCodeModelSelection> {
+  const selections = isRecord(value) ? value : {}
+  const normalizedSelections: Record<string, OpenCodeModelSelection> = {}
+
+  for (const [rawDirectory, rawSelection] of Object.entries(selections)) {
+    const projectDirectory = normalizeStoredProjectDirectoryKey(rawDirectory)
+    if (!projectDirectory) continue
+
+    const selection = normalizeStoredOpenCodeModelSelection(rawSelection)
+    if (!selection) continue
+
+    normalizedSelections[projectDirectory] = selection
+  }
+
+  return normalizedSelections
+}
+
+function normalizeGoogleWorkspaceAccount(value: unknown): GoogleWorkspaceAccountConfig | null {
+  if (!isRecord(value)) return null
+  return {
+    email: typeof value.email === 'string' ? value.email : null,
+    name: typeof value.name === 'string' ? value.name : null
+  }
+}
+
+function normalizeGoogleWorkspaceToken(value: unknown): GoogleWorkspaceTokenConfig | null {
+  if (!isRecord(value)) return null
+  if (typeof value.accessToken !== 'string') return null
+
+  return {
+    accessToken: value.accessToken,
+    refreshToken: typeof value.refreshToken === 'string' ? value.refreshToken : null,
+    expiresAt: typeof value.expiresAt === 'number' ? value.expiresAt : null,
+    tokenType: typeof value.tokenType === 'string' ? value.tokenType : null,
+    idToken: typeof value.idToken === 'string' ? value.idToken : null
+  }
+}
+
+function normalizeModelSelectionProjectDirectory(input: unknown): string {
+  const record = normalizeInputRecord(input, 'OpenCode model selection input')
+  return normalizeExistingProjectDirectory(record.projectDirectory)
+}
+
+function normalizeInputOpenCodeModelSelection(input: unknown): OpenCodeModelSelection | null {
+  const record = normalizeInputRecord(input, 'OpenCode model selection input')
+  if (record.model === null) return null
+
+  const model = normalizeStoredOpenCodeModelSelection(record.model)
+  if (!model) throw new Error('model must include non-empty providerID and modelID strings.')
+  return model
+}
+
+function normalizeExistingProjectDirectory(value: unknown): string {
+  const projectDirectory = normalizeRequiredString(value, 'projectDirectory')
+  if (!isAbsolute(projectDirectory)) {
+    throw new Error('projectDirectory must be an absolute path.')
+  }
+
+  let canonicalPath: string
+  try {
+    canonicalPath = realpathSync(projectDirectory)
+  } catch {
+    throw new Error('projectDirectory must be an existing directory.')
+  }
+
+  let isDirectory = false
+  try {
+    isDirectory = statSync(canonicalPath).isDirectory()
+  } catch {
+    throw new Error('projectDirectory must be an existing directory.')
+  }
+
+  if (!isDirectory) throw new Error('projectDirectory must be an existing directory.')
+  return canonicalPath
+}
+
+function normalizeStoredProjectDirectoryKey(value: unknown): string | null {
+  const projectDirectory = normalizeOptionalString(value)
+  if (!projectDirectory) return null
+  if (!isAbsolute(projectDirectory)) return null
+
+  const normalized = normalize(projectDirectory)
+  if (!normalized || normalized.includes('\0') || !isAbsolute(normalized)) return null
+  return normalized
+}
+
+function normalizeStoredOpenCodeModelSelection(value: unknown): OpenCodeModelSelection | null {
+  if (!isRecord(value)) return null
+
+  const providerID = normalizeOptionalString(value.providerID)
+  const modelID = normalizeOptionalString(value.modelID)
+  if (!providerID || !modelID) return null
+
+  return { providerID, modelID }
+}
+
+function normalizeInputRecord(value: unknown, fieldName: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${fieldName} must be an object.`)
+  return value
+}
+
+function normalizeRequiredString(value: unknown, fieldName: string): string {
+  const normalized = normalizeOptionalString(value)
+  if (!normalized) throw new Error(`${fieldName} must be a non-empty string.`)
+  return normalized
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  if (value.includes('\0')) return null
+
+  const normalized = value.trim()
+  return normalized.length > 0 ? normalized : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

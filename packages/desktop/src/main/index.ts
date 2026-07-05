@@ -74,6 +74,12 @@ app.whenReady().then(() => {
   ipcMain.handle('opencode:get-status', () => opencodeSidecar.getStatus())
   ipcMain.handle('opencode:get-connection', () => opencodeSidecar.getConnection())
   ipcMain.handle('opencode:restart', () => opencodeSidecar.restart())
+  ipcMain.handle('opencode:get-model-selection', (_event, input) =>
+    openKhodamConfig.getOpenCodeModelSelection(input)
+  )
+  ipcMain.handle('opencode:set-model-selection', (_event, input) =>
+    openKhodamConfig.setOpenCodeModelSelection(input)
+  )
   ipcMain.handle('google-workspace:get-status', () => googleWorkspace.getStatus())
   ipcMain.handle('google-workspace:connect', () => googleWorkspace.connect())
   ipcMain.handle('google-workspace:cancel-connect', () => googleWorkspace.cancelConnect())

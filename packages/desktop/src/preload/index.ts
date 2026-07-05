@@ -1,14 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
+  GetOpenCodeModelSelectionInput,
   GoogleWorkspaceIntegrationStatus,
   LinkedGoogleDoc,
   OpenCodeConnection,
+  OpenCodeModelSelection,
   OpenCodeSidecarStatus,
   ProjectArtifactsConfig,
   ProjectArtifactsListInput,
   ProjectSessionLinkedDocsListInput,
   RecordLinkedGoogleDocInput,
+  SetOpenCodeModelSelectionInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 
@@ -28,6 +31,14 @@ const api = {
   getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>
     ipcRenderer.invoke('opencode:get-status'),
   restartOpenCode: (): Promise<OpenCodeSidecarStatus> => ipcRenderer.invoke('opencode:restart'),
+  getOpenCodeModelSelection: (
+    input: GetOpenCodeModelSelectionInput
+  ): Promise<OpenCodeModelSelection | null> =>
+    ipcRenderer.invoke('opencode:get-model-selection', input),
+  setOpenCodeModelSelection: (
+    input: SetOpenCodeModelSelectionInput
+  ): Promise<OpenCodeModelSelection | null> =>
+    ipcRenderer.invoke('opencode:set-model-selection', input),
   getGoogleWorkspaceStatus: (): Promise<GoogleWorkspaceIntegrationStatus> =>
     ipcRenderer.invoke('google-workspace:get-status'),
   connectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
