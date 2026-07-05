@@ -8,7 +8,8 @@ import type { GoogleWorkspaceAccountConfig, GoogleWorkspaceTokenConfig } from '.
 import { OpenKhodamConfigStore } from './openkhodam-config'
 import {
   GOOGLE_DOCS_DOCUMENTS_SCOPE,
-  GOOGLE_DRIVE_METADATA_READONLY_SCOPE
+  GOOGLE_DRIVE_METADATA_READONLY_SCOPE,
+  GOOGLE_SHEETS_SPREADSHEETS_SCOPE
 } from './google-workspace-runtime'
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
@@ -19,7 +20,8 @@ const GOOGLE_SCOPES = [
   'email',
   'profile',
   GOOGLE_DRIVE_METADATA_READONLY_SCOPE,
-  GOOGLE_DOCS_DOCUMENTS_SCOPE
+  GOOGLE_DOCS_DOCUMENTS_SCOPE,
+  GOOGLE_SHEETS_SPREADSHEETS_SCOPE
 ]
 const ONE_MINUTE_MS = 60 * 1000
 const GOOGLE_OAUTH_TIMEOUT_MS = 5 * ONE_MINUTE_MS

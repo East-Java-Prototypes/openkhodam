@@ -5,9 +5,11 @@ import { isAbsolute, join, posix } from 'node:path'
 
 import type {
   GoogleDocDocumentArtifact,
+  GoogleSheetSpreadsheetArtifact,
   LinkedGoogleDoc,
   LinkedGoogleDocRecord,
   PersistedGoogleDocDocumentArtifact,
+  PersistedGoogleSheetSpreadsheetArtifact,
   ProjectArtifactsConfig,
   ProjectArtifactsListInput,
   ProjectSessionLinkedDocsListInput,
@@ -20,9 +22,11 @@ import { JsonConfigFile, writeJsonConfigFile } from '../config/json-config-file'
 export const OPENKHODAM_PROJECT_DIRECTORY_NAME = '.openkhodam'
 export const PROJECT_ARTIFACTS_CONFIG_VERSION = 1
 export const GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION = 1
+export const GOOGLE_SHEET_SPREADSHEET_ARTIFACT_SCHEMA_VERSION = 1
 export const PROJECT_ARTIFACTS_FILE_NAME = 'artifacts.json'
 export const PROJECT_ARTIFACTS_DIRECTORY_NAME = 'artifacts'
 export const GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME = 'google-docs'
+export const GOOGLE_SHEETS_ARTIFACTS_DIRECTORY_NAME = 'google-sheets'
 
 export type ProjectArtifactsFileStoreOptions = {
   readonly now?: () => number
@@ -58,6 +62,16 @@ export type PersistGoogleDocDocumentArtifactInput = {
 }
 
 export type PersistGoogleDocDocumentArtifactResult = {
+  artifactPath: string
+  created: boolean
+}
+
+export type PersistGoogleSheetSpreadsheetArtifactInput = {
+  projectDirectory: string
+  spreadsheet: GoogleSheetSpreadsheetArtifact
+}
+
+export type PersistGoogleSheetSpreadsheetArtifactResult = {
   artifactPath: string
   created: boolean
 }
@@ -171,6 +185,23 @@ export class ProjectArtifactsFileStore {
     return { artifactPath, created: existingFileStat === null }
   }
 
+  async persistGoogleSheetSpreadsheetArtifact(
+    spreadsheet: GoogleSheetSpreadsheetArtifact
+  ): Promise<PersistGoogleSheetSpreadsheetArtifactResult> {
+    const spreadsheetId = normalizeGoogleSheetArtifactSpreadsheetId(spreadsheet.id)
+    const fileName = encodeGoogleSheetArtifactFileName(spreadsheetId)
+    const artifactPath = getGoogleSheetArtifactRelativePath(fileName)
+    const filePath = getGoogleSheetArtifactFilePath(this.projectDirectory, fileName)
+    const artifact = createPersistedGoogleSheetSpreadsheetArtifact(spreadsheet, this.now())
+
+    await this.read()
+    this.prepareGoogleSheetArtifactPathForWrite(filePath)
+    const existingFileStat = lstatIfExists(filePath)
+    await writeJsonConfigFile(filePath, artifact)
+
+    return { artifactPath, created: existingFileStat === null }
+  }
+
   async deleteGoogleDocDocumentArtifact(
     artifactPath: string
   ): Promise<DeleteGoogleDocDocumentArtifactResult> {
@@ -232,6 +263,12 @@ export class ProjectArtifactsFileStore {
     this.validateProjectDirectory()
     ensureGoogleDocsArtifactsDirectory(this.projectDirectory)
     validateGoogleDocsArtifactPath(this.projectDirectory, filePath)
+  }
+
+  private prepareGoogleSheetArtifactPathForWrite(filePath: string): void {
+    this.validateProjectDirectory()
+    ensureGoogleSheetsArtifactsDirectory(this.projectDirectory)
+    validateGoogleSheetsArtifactPath(this.projectDirectory, filePath)
   }
 
   private prepareGoogleDocArtifactPathForDelete(filePath: string): void {
@@ -303,6 +340,12 @@ export async function persistGoogleDocDocumentArtifact(
   input: PersistGoogleDocDocumentArtifactInput
 ): Promise<PersistGoogleDocDocumentArtifactResult> {
   return createProjectArtifactsStore(input).persistGoogleDocDocumentArtifact(input.document)
+}
+
+export async function persistGoogleSheetSpreadsheetArtifact(
+  input: PersistGoogleSheetSpreadsheetArtifactInput
+): Promise<PersistGoogleSheetSpreadsheetArtifactResult> {
+  return createProjectArtifactsStore(input).persistGoogleSheetSpreadsheetArtifact(input.spreadsheet)
 }
 
 export async function deleteGoogleDocDocumentArtifact(
@@ -383,6 +426,18 @@ function ensureGoogleDocsArtifactsDirectory(projectDirectory: string): void {
   )
 }
 
+function ensureGoogleSheetsArtifactsDirectory(projectDirectory: string): void {
+  ensureProjectArtifactsDirectory(projectDirectory)
+  ensureRegularDirectory(
+    getProjectArtifactDataDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam/artifacts'
+  )
+  ensureRegularDirectory(
+    getGoogleSheetsArtifactsDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam/artifacts/google-sheets'
+  )
+}
+
 function validateProjectArtifactsPath(projectDirectory: string, filePath: string): void {
   const directoryPath = getProjectArtifactsDirectoryPath(projectDirectory)
   validateRegularDirectoryIfExists(directoryPath, 'Project artifacts directory .openkhodam')
@@ -405,6 +460,22 @@ function validateGoogleDocsArtifactPath(projectDirectory: string, filePath: stri
   validateRegularFileIfExists(filePath, 'Google Docs artifact file')
 }
 
+function validateGoogleSheetsArtifactPath(projectDirectory: string, filePath: string): void {
+  validateRegularDirectoryIfExists(
+    getProjectArtifactsDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam'
+  )
+  validateRegularDirectoryIfExists(
+    getProjectArtifactDataDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam/artifacts'
+  )
+  validateRegularDirectoryIfExists(
+    getGoogleSheetsArtifactsDirectoryPath(projectDirectory),
+    'Project artifacts directory .openkhodam/artifacts/google-sheets'
+  )
+  validateRegularFileIfExists(filePath, 'Google Sheets artifact file')
+}
+
 function getProjectArtifactsDirectoryPath(projectDirectory: string): string {
   return join(projectDirectory, OPENKHODAM_PROJECT_DIRECTORY_NAME)
 }
@@ -422,11 +493,29 @@ function getGoogleDocsArtifactsDirectoryPath(projectDirectory: string): string {
   )
 }
 
+function getGoogleSheetsArtifactsDirectoryPath(projectDirectory: string): string {
+  return join(
+    projectDirectory,
+    OPENKHODAM_PROJECT_DIRECTORY_NAME,
+    PROJECT_ARTIFACTS_DIRECTORY_NAME,
+    GOOGLE_SHEETS_ARTIFACTS_DIRECTORY_NAME
+  )
+}
+
 function getGoogleDocArtifactRelativePath(fileName: string): string {
   return posix.join(
     OPENKHODAM_PROJECT_DIRECTORY_NAME,
     PROJECT_ARTIFACTS_DIRECTORY_NAME,
     GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME,
+    fileName
+  )
+}
+
+function getGoogleSheetArtifactRelativePath(fileName: string): string {
+  return posix.join(
+    OPENKHODAM_PROJECT_DIRECTORY_NAME,
+    PROJECT_ARTIFACTS_DIRECTORY_NAME,
+    GOOGLE_SHEETS_ARTIFACTS_DIRECTORY_NAME,
     fileName
   )
 }
@@ -437,6 +526,16 @@ function getGoogleDocArtifactFilePath(projectDirectory: string, fileName: string
     OPENKHODAM_PROJECT_DIRECTORY_NAME,
     PROJECT_ARTIFACTS_DIRECTORY_NAME,
     GOOGLE_DOCS_ARTIFACTS_DIRECTORY_NAME,
+    fileName
+  )
+}
+
+function getGoogleSheetArtifactFilePath(projectDirectory: string, fileName: string): string {
+  return join(
+    projectDirectory,
+    OPENKHODAM_PROJECT_DIRECTORY_NAME,
+    PROJECT_ARTIFACTS_DIRECTORY_NAME,
+    GOOGLE_SHEETS_ARTIFACTS_DIRECTORY_NAME,
     fileName
   )
 }
@@ -615,6 +714,10 @@ function normalizeGoogleDocArtifactDocumentId(value: unknown): string {
   return normalizeRequiredString(value, 'document.id')
 }
 
+function normalizeGoogleSheetArtifactSpreadsheetId(value: unknown): string {
+  return normalizeRequiredString(value, 'spreadsheet.id')
+}
+
 function createPersistedGoogleDocDocumentArtifact(
   document: GoogleDocDocumentArtifact,
   cachedAt: number
@@ -626,6 +729,17 @@ function createPersistedGoogleDocDocumentArtifact(
   }
 }
 
+function createPersistedGoogleSheetSpreadsheetArtifact(
+  spreadsheet: GoogleSheetSpreadsheetArtifact,
+  cachedAt: number
+): PersistedGoogleSheetSpreadsheetArtifact {
+  return {
+    ...spreadsheet,
+    schemaVersion: GOOGLE_SHEET_SPREADSHEET_ARTIFACT_SCHEMA_VERSION,
+    cachedAt
+  }
+}
+
 function encodeGoogleDocArtifactFileName(documentId: string): string {
   const encodedDocumentId = Buffer.from(documentId, 'utf8').toString('base64url')
   if (!isSafeEncodedGoogleDocArtifactId(encodedDocumentId)) {
@@ -633,6 +747,15 @@ function encodeGoogleDocArtifactFileName(documentId: string): string {
   }
 
   return `encoded-${encodedDocumentId}.json`
+}
+
+function encodeGoogleSheetArtifactFileName(spreadsheetId: string): string {
+  const encodedSpreadsheetId = Buffer.from(spreadsheetId, 'utf8').toString('base64url')
+  if (!isSafeEncodedGoogleSheetArtifactId(encodedSpreadsheetId)) {
+    throw new Error('Google Sheets spreadsheet ID could not be encoded for an artifact file path.')
+  }
+
+  return `encoded-${encodedSpreadsheetId}.json`
 }
 
 function normalizeInputArtifactPath(value: unknown): string | null {
@@ -684,6 +807,10 @@ function isSafeGoogleDocArtifactFileName(value: string): boolean {
 }
 
 function isSafeEncodedGoogleDocArtifactId(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value)
+}
+
+function isSafeEncodedGoogleSheetArtifactId(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value)
 }
 

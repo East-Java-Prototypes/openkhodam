@@ -1,16 +1,23 @@
-import type { GoogleDocDocumentArtifact } from '../integrations/google-workspace-runtime'
+import type {
+  GoogleDocDocumentArtifact,
+  GoogleSheetSpreadsheetArtifact
+} from '../integrations/google-workspace-runtime'
 import {
   createGoogleDocDocumentPreview,
+  createGoogleSheetSpreadsheetPreview,
   editGoogleDocDocument,
   type GoogleDocsEditOperation,
   type GoogleDocsTextOccurrence,
+  type GoogleSheetsValueRenderOption,
   readGoogleDocDocument,
+  readGoogleSheetSpreadsheet,
   searchGoogleDriveFiles
 } from '../integrations/google-workspace-runtime'
 import {
   deleteGoogleDocDocumentArtifact,
   getOrCreateLinkedGoogleDoc,
-  persistGoogleDocDocumentArtifact
+  persistGoogleDocDocumentArtifact,
+  persistGoogleSheetSpreadsheetArtifact
 } from '../integrations/project-artifacts'
 
 type GoogleDriveSearchFilesToolArgs = {
@@ -20,6 +27,12 @@ type GoogleDriveSearchFilesToolArgs = {
 
 type GoogleDocsReadToolArgs = {
   documentId?: string
+}
+
+type GoogleSheetsReadToolArgs = {
+  ranges?: string[]
+  spreadsheetId?: string
+  valueRenderOption?: string
 }
 
 type GoogleDocsEditToolArgs = {
@@ -71,6 +84,29 @@ type GoogleDocsReadToolDefinition = {
   execute: (args: GoogleDocsReadToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
 }
 
+type GoogleSheetsReadToolDefinition = {
+  args: {
+    ranges: {
+      description: string
+      items: { type: 'string' }
+      maxItems: 5
+      type: 'array'
+    }
+    spreadsheetId: {
+      description: string
+      type: 'string'
+    }
+    valueRenderOption: {
+      default: 'FORMATTED_VALUE'
+      description: string
+      enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA']
+      type: 'string'
+    }
+  }
+  description: string
+  execute: (args: GoogleSheetsReadToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
+}
+
 type GoogleDocsEditToolDefinition = {
   args: {
     documentId: {
@@ -94,6 +130,7 @@ type GoogleWorkspaceHooks = {
     google_docs_edit: GoogleDocsEditToolDefinition
     google_docs_read: GoogleDocsReadToolDefinition
     google_drive_search_files: GoogleDriveSearchFilesToolDefinition
+    google_sheets_read: GoogleSheetsReadToolDefinition
   }
 }
 
@@ -146,6 +183,44 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
 
         return JSON.stringify({
           document: createGoogleDocDocumentPreview(result.document)
+        })
+      }
+    },
+    google_sheets_read: {
+      description:
+        'Read a Google Sheets spreadsheet using the Google Workspace account connected in OpenKhodam Settings. Returns a safe google.sheet.spreadsheet artifact with bounded A1 range previews. Read-only; does not edit spreadsheets.',
+      args: {
+        spreadsheetId: {
+          description: 'The Google Sheets spreadsheet ID to read.',
+          type: 'string'
+        },
+        ranges: {
+          description:
+            'Optional A1 notation ranges to read. If omitted, the first visible sheets are read with bounded A1:Z200 preview ranges. At most 5 ranges are used.',
+          items: { type: 'string' },
+          maxItems: 5,
+          type: 'array'
+        },
+        valueRenderOption: {
+          default: 'FORMATTED_VALUE',
+          description:
+            'How Sheets should render cell values: FORMATTED_VALUE, UNFORMATTED_VALUE, or FORMULA. Defaults to FORMATTED_VALUE.',
+          enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'],
+          type: 'string'
+        }
+      },
+      async execute(args, context) {
+        const spreadsheetId = stringArg(args.spreadsheetId)
+        const result = await readGoogleSheetSpreadsheet({
+          ranges: rangesArg(args.ranges),
+          signal: context.abort,
+          spreadsheetId,
+          valueRenderOption: valueRenderOptionArg(args.valueRenderOption)
+        })
+        await recordReadGoogleSheetArtifact(context, result.spreadsheet)
+
+        return JSON.stringify({
+          spreadsheet: createGoogleSheetSpreadsheetPreview(result.spreadsheet)
         })
       }
     },
@@ -214,6 +289,21 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
 
 function stringArg(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function rangesArg(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value)) return undefined
+  return value.map((range) => stringArg(range))
+}
+
+function valueRenderOptionArg(value: unknown): GoogleSheetsValueRenderOption | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (value === 'FORMATTED_VALUE' || value === 'UNFORMATTED_VALUE' || value === 'FORMULA') {
+    return value
+  }
+
+  return value as GoogleSheetsValueRenderOption
 }
 
 function toGoogleDocsEditOperation(
@@ -316,6 +406,27 @@ async function recordReadGoogleDocArtifact(
       docId: document.id,
       reason: 'artifact_record_failed',
       sessionId
+    })
+  }
+}
+
+async function recordReadGoogleSheetArtifact(
+  context: GoogleWorkspaceToolContext,
+  spreadsheet: GoogleSheetSpreadsheetArtifact
+): Promise<void> {
+  const projectDirectory = nonEmptyString(context.directory)
+  const sessionId = nonEmptyString(context.sessionID)
+  if (!projectDirectory || !sessionId) return
+
+  try {
+    await persistGoogleSheetSpreadsheetArtifact({
+      projectDirectory,
+      spreadsheet
+    })
+  } catch {
+    console.warn('Failed to persist Google Sheet artifact', {
+      reason: 'artifact_persist_failed',
+      spreadsheetId: spreadsheet.id
     })
   }
 }
