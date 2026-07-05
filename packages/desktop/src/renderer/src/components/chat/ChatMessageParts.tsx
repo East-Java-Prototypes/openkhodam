@@ -55,7 +55,10 @@ function ReasoningPart({
   part: Extract<ChatMessagePart, { type: 'reasoning' }>
 }): JSX.Element {
   return (
-    <section className="border-l border-border/70 pl-3 text-muted-foreground/80" aria-label="Reasoning">
+    <section
+      className="border-l border-border/70 pl-3 text-muted-foreground/80"
+      aria-label="Reasoning"
+    >
       <div className="mb-1 text-[0.6875rem] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
         Reasoning
       </div>
