@@ -35,6 +35,34 @@ const connectedProviderID = 'fake-provider'
 const connectedModelID = 'fake-connected-model'
 const disconnectedProviderID = 'offline-provider'
 const disconnectedModelID = 'offline-model'
+const structuredUserPrompt = 'Structured fixture user prompt with **literal user markdown**'
+const structuredAssistantMarkdownText = [
+  'Inspecting project files.',
+  '',
+  'Assistant markdown fixture with **bold assistant phrase**, `inlineToken`, and [fixture docs](https://example.test/markdown).',
+  '',
+  '- first list item',
+  '- second list item',
+  '',
+  '```ts',
+  'const fenced = "assistant markdown"',
+  'pnpm test:e2e',
+  '```',
+  '',
+  '# unsupported assistant heading',
+  '',
+  '> unsupported assistant quote',
+  '',
+  '![unsupported assistant image](https://example.test/unsupported-image.png)',
+  '',
+  '| unsupported | table |',
+  '| --- | --- |',
+  '| alpha | beta |',
+  '',
+  '- [ ] unsupported task list item'
+].join('\n')
+const structuredReasoningText = 'Need **file context** before responding.'
+const structuredToolOutput = 'V1 fixture tool output with **literal tool markdown**'
 const providers = {
   all: [
     {
@@ -199,7 +227,7 @@ function resetState(): void {
   sessions.set(structured.id, structured)
   const structuredUserID = stableMessageID()
   messages.set(structured.id, [
-    userMessage(structuredUserID, 'Structured fixture user prompt'),
+    userMessage(structuredUserID, structuredUserPrompt),
     structuredV1AssistantMessage(stableMessageID(), structuredUserID),
     patchOnlyAssistantMessage(stableMessageID(), structuredUserID),
     emptyAssistantMessage(stableMessageID(), structuredUserID),
@@ -347,15 +375,23 @@ function structuredV1AssistantMessage(id: string, parentID: string): unknown {
     info: { id, role: 'assistant', parentID, time: { created: Date.now() } },
     parts: [
       { id: `${id}-step-start`, type: 'step-start', text: 'Hidden v1 step start marker' },
-      { id: `${id}-text`, type: 'text', text: 'Inspecting project files.' },
-      { id: `${id}-reasoning`, type: 'reasoning', text: 'Need file context before responding.' },
+      {
+        id: `${id}-text`,
+        type: 'text',
+        text: structuredAssistantMarkdownText
+      },
+      {
+        id: `${id}-reasoning`,
+        type: 'reasoning',
+        text: structuredReasoningText
+      },
       {
         id: `${id}-tool`,
         type: 'tool',
         name: 'read',
         status: 'completed',
         input: { filePath: 'README.md' },
-        output: 'V1 fixture tool output'
+        output: structuredToolOutput
       },
       { id: `${id}-step-finish`, type: 'step-finish', text: 'Hidden v1 step finish marker' },
       { id: `${id}-unknown`, type: 'future-part', detail: 'V1 unknown fixture' }
