@@ -69,8 +69,7 @@ export function useOpenCodeModels(directory: string | null | undefined) {
   )
   const selectedModel = options.find((option) => option.id === selectedModelID) ?? null
   const effortOptions = useMemo(() => getEffortOptions(selectedModel), [selectedModel])
-  const selectedEffort =
-    effortOptions.find((option) => option.value === selectedEffortID) ?? null
+  const selectedEffort = effortOptions.find((option) => option.value === selectedEffortID) ?? null
   const effectiveSelectedEffortID = selectedEffort?.value ?? null
 
   useEffect(() => {

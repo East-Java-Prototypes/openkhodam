@@ -1071,9 +1071,10 @@ test('renders prompt input full-width with agent model and effort controls in th
   const modelBox = await elementBox(modelPicker, 'model picker')
   const effortBox = await elementBox(effortPicker, 'effort picker')
 
-  expect(promptBox.width, 'prompt input should span the active pane composer width').toBeGreaterThan(
-    composerBox.width * 0.85
-  )
+  expect(
+    promptBox.width,
+    'prompt input should span the active pane composer width'
+  ).toBeGreaterThan(composerBox.width * 0.85)
   for (const [label, box] of [
     ['agent picker', agentBox],
     ['model picker', modelBox],
@@ -1111,7 +1112,8 @@ test('updates effort options from selected model variants and hides effort for p
 
   await expect
     .poll(
-      () => fakeOpenCodeServer.getPromptRequests().find((request) => request.text === prompt) ?? null
+      () =>
+        fakeOpenCodeServer.getPromptRequests().find((request) => request.text === prompt) ?? null
     )
     .toMatchObject({
       text: prompt,
@@ -1142,7 +1144,8 @@ test('sends selected agent model and effort through the OpenCode prompt flow', a
 
   await expect
     .poll(
-      () => fakeOpenCodeServer.getPromptRequests().find((request) => request.text === prompt) ?? null
+      () =>
+        fakeOpenCodeServer.getPromptRequests().find((request) => request.text === prompt) ?? null
     )
     .toMatchObject({
       sessionID: 'seeded-session',
