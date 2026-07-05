@@ -109,17 +109,11 @@ export type GoogleDocsReadDocumentInput = {
 }
 
 export type GoogleDocsEditDocumentInput = {
-  approve: (input: GoogleDocsEditApprovalInput) => Promise<void>
   configPath?: string
   documentId: string
   fetch?: Fetch
   operation: GoogleDocsEditOperation
   signal?: AbortSignal
-}
-
-export type GoogleDocsEditApprovalInput = {
-  document: GoogleDocDocumentArtifact
-  operation: GoogleDocsEditApprovalOperation
 }
 
 export type GoogleDocsEditOperation =
@@ -152,35 +146,6 @@ export type GoogleDocsEditOperation =
     }
 
 export type GoogleDocsTextOccurrence = 'first' | 'last' | number
-
-export type GoogleDocsEditApprovalOperation =
-  | {
-      text: string
-      type: 'append_text'
-    }
-  | {
-      match: string
-      occurrence: GoogleDocsTextOccurrence
-      text: string
-      type: 'insert_after_text'
-    }
-  | {
-      match: string
-      occurrence: GoogleDocsTextOccurrence
-      text: string
-      type: 'insert_before_text'
-    }
-  | {
-      match: string
-      occurrence: GoogleDocsTextOccurrence
-      text: string
-      type: 'replace_text'
-    }
-  | {
-      match: string
-      occurrence: GoogleDocsTextOccurrence
-      type: 'delete_text'
-    }
 
 export type GoogleDocsEditDocumentResult = {
   document: GoogleDocDocumentArtifact
@@ -350,17 +315,12 @@ export async function readGoogleDocDocument({
 }
 
 export async function editGoogleDocDocument({
-  approve,
   configPath = process.env.OPENKHODAM_CONFIG_PATH,
   documentId,
   fetch: fetchImpl = fetch,
   operation,
   signal
 }: GoogleDocsEditDocumentInput): Promise<GoogleDocsEditDocumentResult> {
-  if (typeof approve !== 'function') {
-    throw new Error('Google Docs edit requires approval before writing to Google Docs.')
-  }
-
   const resolvedDocumentId = normalizeDocumentId(documentId)
   const normalizedOperation = normalizeGoogleDocsEditOperation(operation)
   const { token } = await getGoogleWorkspaceAccessToken({
@@ -385,11 +345,6 @@ export async function editGoogleDocDocument({
     normalizedOperation,
     getBodyEndInsertionIndex(current.rawDocument)
   )
-
-  await approve({
-    document: current.document,
-    operation: toGoogleDocsEditApprovalOperation(resolvedOperation)
-  })
 
   const batchUpdateResponse = await fetchImpl(createDocsBatchUpdateUrl(resolvedDocumentId), {
     body: JSON.stringify(createGoogleDocsBatchUpdateRequest(current.document, resolvedOperation)),
@@ -1009,32 +964,6 @@ function extractParagraphTextRuns(value: unknown): Array<{
       }
     ]
   })
-}
-
-function toGoogleDocsEditApprovalOperation(
-  operation: ResolvedGoogleDocsEditOperation
-): GoogleDocsEditApprovalOperation {
-  if (operation.type === 'append_text') {
-    return {
-      text: operation.text,
-      type: 'append_text'
-    }
-  }
-
-  if (operation.type === 'delete_text') {
-    return {
-      match: operation.match,
-      occurrence: operation.occurrence,
-      type: 'delete_text'
-    }
-  }
-
-  return {
-    match: operation.match,
-    occurrence: operation.occurrence,
-    text: operation.text,
-    type: operation.type
-  }
 }
 
 function resolveGoogleDocsEditOperation(
