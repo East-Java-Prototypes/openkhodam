@@ -479,12 +479,15 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   expect(heartbeatBox.x + heartbeatBox.width).toBeLessThanOrEqual(footerBox.x + footerBox.width + 1)
   await expect(chatActionPane(appWindow)).toBeVisible()
   await expect(chatActionPane(appWindow).getByText('No linked Google Docs yet.')).toBeVisible()
-  await expect(appWindow.getByText('Select a project to view sessions.').first()).toBeVisible()
+  const transcript = messageTranscript(appWindow)
+  await expect(transcript).toBeVisible()
+  await expect(transcript.getByText('Select a project to view sessions.')).toHaveCount(0)
+  await expect(transcript.getByText('Select a session to view messages.')).toHaveCount(0)
   await expect(
     appWindow
-      .getByText('Select a project to view sessions.')
-      .or(appWindow.getByText('Waiting for the OpenCode sidecar connection.'))
+      .getByText('Waiting for the OpenCode sidecar connection.')
       .or(appWindow.getByText('No OpenCode projects found.'))
+      .or(projectChatLink(appWindow))
       .first()
   ).toBeVisible()
 })
@@ -948,6 +951,34 @@ test('shows the real OpenCode project chats surface', async ({ appWindow }) => {
   ).toBeVisible()
 })
 
+test('keeps a selected empty session transcript quiet', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  const createResponse = await fetch(`${fakeOpenCodeServer.url}/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ directory: fakeProjectDirectory })
+  })
+  expect(createResponse.ok).toBe(true)
+  const emptySession = (await createResponse.json()) as { id: string; title: string }
+
+  await waitForChatShell(appWindow)
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expectOpenedProjectRouteResolved(appWindow)
+  await sessionChatLink(appWindow).filter({ hasText: emptySession.title }).click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    new RegExp(`/projects/[^/]+/sessions/${emptySession.id}$`)
+  )
+  await expect(appWindow.getByRole('heading', { name: emptySession.title })).toBeVisible()
+  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
+
+  const transcript = messageTranscript(appWindow)
+  await expect(transcript).toBeVisible()
+  await expect(transcript.getByText('No messages found for this session.')).toHaveCount(0)
+  await expect(transcript.getByRole('article')).toHaveCount(0)
+})
+
 test('shows real project/session selection in the reused chat shell', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
 
@@ -968,14 +999,15 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+$/
   )
-  await expect(
-    appWindow
-      .getByText('Start a new conversation for this project.')
-      .or(appWindow.getByText('No sessions found for this project.'))
-      .or(appWindow.getByText(/^(Loading OpenCode data…|No messages found for this session\.)/))
-      .first()
-  ).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
+  await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
   await expectChatComposerWithoutHelperCopy(appWindow)
+  await expect(
+    messageTranscript(appWindow).getByText('Start a new conversation for this project.')
+  ).toHaveCount(0)
+  await expect(
+    messageTranscript(appWindow).getByText('No sessions found for this project.')
+  ).toHaveCount(0)
   const projectUrl = appWindow.url()
   await appWindow.reload()
   await expect(appWindow).toHaveURL(projectUrl)
@@ -1001,12 +1033,10 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   )
   await expect(appWindow.locator('#active-chat-heading')).not.toHaveText('No chat selected')
   await expectChatComposerWithoutHelperCopy(appWindow)
+  await expect(messageTranscript(appWindow)).toBeVisible()
   await expect(
-    appWindow
-      .getByText(/^(No messages found for this session\.|Loading OpenCode data…)/)
-      .or(appWindow.getByRole('article').first())
-      .first()
-  ).toBeVisible()
+    messageTranscript(appWindow).getByText('No messages found for this session.')
+  ).toHaveCount(0)
   await appWindow.goBack()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+$/
@@ -1066,12 +1096,18 @@ test('filters parented subagent sessions from normal chat rendering', async ({ a
 
 test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
   await openStructuredFixtureChat(appWindow)
+  const transcript = messageTranscript(appWindow)
+  await expect(transcript.locator('[data-slot="message-scroller-item"]')).toHaveCount(4)
+  await expect(appWindow.getByText('Structured fixture user prompt')).toBeVisible()
   await expect(appWindow.getByText('Inspecting project files.')).toBeVisible()
   await expect(appWindow.getByText('Need file context before responding.')).toBeVisible()
   await expect(appWindow.getByText('Hidden v1 step start marker')).toHaveCount(0)
   await expect(appWindow.getByText('Hidden v1 step finish marker')).toHaveCount(0)
   await expect(appWindow.getByText('Hidden v2 step start marker')).toHaveCount(0)
   await expect(appWindow.getByText('Hidden v2 step finish marker')).toHaveCount(0)
+  await expect(appWindow.getByText('Hidden patch fixture marker')).toHaveCount(0)
+  await expect(appWindow.getByText('Unsupported part: patch')).toHaveCount(0)
+  await expect(appWindow.getByText('No text content.')).toHaveCount(0)
   const readTool = appWindow.locator('[aria-label="Tool read"]')
   await expect(readTool).toContainText('read')
   await expect(readTool).toContainText('completed')
@@ -1094,6 +1130,17 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
   await expect(bashTool).not.toContainText('V2 fixture tool output')
   await expect(bashTool).toContainText('bash')
   await expect(appWindow.getByText('Unsupported part: future-content')).toBeVisible()
+})
+
+test('shows one assistant header for repeated assistant/tool messages in a turn', async ({
+  appWindow
+}) => {
+  await openStructuredFixtureChat(appWindow)
+  const transcript = messageTranscript(appWindow)
+
+  await expect(transcript.getByRole('article', { name: /user message at/ })).toHaveCount(1)
+  await expect(transcript.getByRole('article', { name: /assistant message at/ })).toHaveCount(3)
+  await expect(transcript.locator('[data-slot="message-header"]')).toHaveText(['user', 'assistant'])
 })
 
 test('keeps a long collapsed tool disclosure anchored when opening it', async ({ appWindow }) => {
@@ -1186,6 +1233,9 @@ test('shows optimistic prompt before delayed stable message projection', async (
   await openSeededDeterministicChat(appWindow)
 
   await sendPrompt(appWindow, 'Delayed lifecycle prompt')
+  await expect(
+    messageTranscript(appWindow).getByText('Prompt sent. Messages will refresh shortly.')
+  ).toBeVisible()
   await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toBeVisible()
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })

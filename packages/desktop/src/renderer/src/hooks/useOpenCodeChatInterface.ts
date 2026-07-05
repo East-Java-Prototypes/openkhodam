@@ -68,6 +68,7 @@ export type OpenCodeProjectRouteState = {
   isLoading: boolean
   errorMessage: string | null
   emptyMessage: string | null
+  transcriptStatusMessage: string | null
 }
 
 export type OpenCodeStartConversationState = {
@@ -97,6 +98,7 @@ export type OpenCodeSessionRouteState = {
   isSending: boolean
   canSendPrompt: boolean
   emptyMessage: string | null
+  transcriptStatusMessage: string | null
   errorMessage: string | null
   successMessage: string | null
   modelOptions: OpenCodeModelOption[]
@@ -207,6 +209,12 @@ export function useOpenCodeProjectRoute(
       selectedProject,
       sessionsQuery.isSuccess,
       sessions.length
+    ),
+    transcriptStatusMessage: getProjectTranscriptStatusMessage(
+      connection,
+      projectId,
+      projectsQuery.isSuccess,
+      selectedProject
     )
   }
 }
@@ -253,7 +261,7 @@ export function useOpenCodeSessionRoute(
   const isSending = sendPromptMutation.isPending
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
 
-  const mappedMessages = useMemo(() => messages.map(mapMessage), [messages])
+  const mappedMessages = useMemo(() => messages.map(mapMessage).filter(isChatMessage), [messages])
   const refetchMessages = messagesQuery.refetch
   const visibleMessages = useMemo(
     () =>
@@ -327,7 +335,12 @@ export function useOpenCodeSessionRoute(
       sessionQuery.isSuccess,
       activeSession,
       messagesQuery.isSuccess,
-      messages.length
+      mappedMessages.length
+    ),
+    transcriptStatusMessage: getSessionTranscriptStatusMessage(
+      sessionID,
+      sessionQuery.isSuccess,
+      activeSession
     ),
     errorMessage: firstErrorMessage(
       activeSession ? null : sessionQuery.error,
@@ -510,15 +523,21 @@ function mapSessionToChat(
   }
 }
 
-function mapMessage(message: unknown, index: number): ChatMessage {
+function mapMessage(message: unknown, index: number): ChatMessage | null {
   const normalized = normalizeOpenCodeMessage(message)
+  if (!normalized) return null
   return {
     id: normalized.id ?? `message-${index}`,
     author: normalized.author,
+    ...(normalized.parentID ? { parentID: normalized.parentID } : {}),
     content: normalized.content,
     parts: normalized.parts,
     createdAt: formatTime(normalized.createdAt)
   }
+}
+
+function isChatMessage(message: ChatMessage | null): message is ChatMessage {
+  return message !== null
 }
 
 function buildPromptOptions(
@@ -598,6 +617,18 @@ function getProjectEmptyMessage(
   return null
 }
 
+function getProjectTranscriptStatusMessage(
+  connection: unknown,
+  projectId: string | null | undefined,
+  projectsLoaded: boolean,
+  project: OpenCodeProject | null
+): string | null {
+  if (!projectId) return null
+  if (connection === null) return 'Waiting for the OpenCode sidecar connection.'
+  if (projectsLoaded && !project) return 'Project not found.'
+  return null
+}
+
 function getSessionEmptyMessage(
   sessionID: string | null | undefined,
   sessionLoaded: boolean,
@@ -605,9 +636,19 @@ function getSessionEmptyMessage(
   messagesLoaded: boolean,
   messageCount: number
 ): string | null {
-  if (!sessionID) return 'Select a session to view messages.'
+  if (!sessionID) return null
   if (sessionLoaded && !session) return 'Session not found.'
   if (messagesLoaded && messageCount === 0) return 'No messages found for this session.'
+  return null
+}
+
+function getSessionTranscriptStatusMessage(
+  sessionID: string | null | undefined,
+  sessionLoaded: boolean,
+  session: ProjectChat | null
+): string | null {
+  if (!sessionID) return null
+  if (sessionLoaded && !session) return 'Session not found.'
   return null
 }
 
