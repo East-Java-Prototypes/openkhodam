@@ -1190,6 +1190,109 @@ test('shows only connected OpenCode models in the composer picker', async ({ app
   await expect(appWindow.getByText('Disconnected Hidden Model')).toHaveCount(0)
 })
 
+test('renders prompt input full-width with agent model and effort controls in the footer', async ({
+  appWindow
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const composer = appWindow.getByRole('form', { name: 'Chat prompt' })
+  const promptInput = composer.getByLabel('Message OpenKhodam')
+  const agentPicker = composer.getByLabel('OpenCode agent')
+  const modelPicker = composer.getByLabel('OpenCode model')
+  const effortPicker = composer.getByLabel('OpenCode effort')
+
+  await expect(agentPicker).toHaveValue('Build')
+  await expect(modelPicker).toHaveValue('Connected Fake Provider · Connected Fake Model')
+  await expect(effortPicker).toHaveValue('Default')
+
+  const composerBox = await elementBox(composer, 'chat prompt composer')
+  const promptBox = await elementBox(promptInput, 'chat prompt textarea')
+  const agentBox = await elementBox(agentPicker, 'agent picker')
+  const modelBox = await elementBox(modelPicker, 'model picker')
+  const effortBox = await elementBox(effortPicker, 'effort picker')
+
+  expect(promptBox.width, 'prompt input should span the active pane composer width').toBeGreaterThan(
+    composerBox.width * 0.85
+  )
+  for (const [label, box] of [
+    ['agent picker', agentBox],
+    ['model picker', modelBox],
+    ['effort picker', effortBox]
+  ] as const) {
+    expect(box.y, `${label} should sit in the composer footer below the textarea`).toBeGreaterThan(
+      promptBox.y + promptBox.height - 2
+    )
+  }
+})
+
+test('updates effort options from selected model variants and hides effort for plain models', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const composer = appWindow.getByRole('form', { name: 'Chat prompt' })
+  const effortPicker = composer.getByLabel('OpenCode effort')
+  await effortPicker.click()
+  await expect(appWindow.getByText('Default', { exact: true })).toBeVisible()
+  await expect(appWindow.getByText('Low', { exact: true })).toBeVisible()
+  await expect(appWindow.getByText('High', { exact: true })).toBeVisible()
+  await appWindow.getByText('High', { exact: true }).click()
+  await expect(effortPicker).toHaveValue('High')
+
+  const modelPicker = composer.getByLabel('OpenCode model')
+  await modelPicker.click()
+  await appWindow.getByText('Connected Alternate Model', { exact: true }).click()
+  await expect(modelPicker).toHaveValue('Connected Fake Provider · Connected Alternate Model')
+  await expect(composer.getByLabel('OpenCode effort')).toHaveCount(0)
+
+  const prompt = 'No stale variant prompt'
+  await sendPrompt(appWindow, prompt)
+
+  await expect
+    .poll(
+      () => fakeOpenCodeServer.getPromptRequests().find((request) => request.text === prompt) ?? null
+    )
+    .toMatchObject({
+      text: prompt,
+      model: { providerID: 'fake-provider', modelID: 'fake-alt-model' },
+      variant: null
+    })
+})
+
+test('sends selected agent model and effort through the OpenCode prompt flow', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const composer = appWindow.getByRole('form', { name: 'Chat prompt' })
+  const agentPicker = composer.getByLabel('OpenCode agent')
+  await agentPicker.click()
+  await appWindow.getByText('Plan', { exact: true }).click()
+  await expect(agentPicker).toHaveValue('Plan')
+
+  const effortPicker = composer.getByLabel('OpenCode effort')
+  await effortPicker.click()
+  await appWindow.getByText('High', { exact: true }).click()
+  await expect(effortPicker).toHaveValue('High')
+
+  const prompt = 'Selected picker prompt'
+  await sendPrompt(appWindow, prompt)
+
+  await expect
+    .poll(
+      () => fakeOpenCodeServer.getPromptRequests().find((request) => request.text === prompt) ?? null
+    )
+    .toMatchObject({
+      sessionID: 'seeded-session',
+      text: prompt,
+      agent: 'plan',
+      model: { providerID: 'fake-provider', modelID: 'fake-connected-model' },
+      variant: 'high'
+    })
+})
+
 test('starts a new stable chat from the project route', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
 

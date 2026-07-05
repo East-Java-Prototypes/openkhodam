@@ -2,7 +2,16 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 
 export type FakeOpenCodeServer = {
   url: string
+  getPromptRequests: () => FakePromptRequest[]
   close: () => Promise<void>
+}
+
+export type FakePromptRequest = {
+  sessionID: string
+  text: string
+  agent: string | null
+  model: { providerID: string; modelID: string } | null
+  variant: string | null
 }
 
 const directory = process.cwd()
@@ -10,6 +19,7 @@ const now = Date.now()
 const sessions = new Map<string, FakeSession>()
 const messages = new Map<string, unknown[]>()
 const pendingPrompts = new Map<string, { id: string; text: string; fetches: number }[]>()
+const promptRequests: FakePromptRequest[] = []
 let promptIdSequence = 0
 let newSessionSequence = 1
 let stableMessageSequence = 0
@@ -32,7 +42,10 @@ const providers = {
       name: 'Connected Fake Provider',
       env: [],
       models: {
-        [connectedModelID]: createProviderModel(connectedModelID, 'Connected Fake Model'),
+        [connectedModelID]: createProviderModel(connectedModelID, 'Connected Fake Model', {
+          low: {},
+          high: {}
+        }),
         'fake-alt-model': createProviderModel('fake-alt-model', 'Connected Alternate Model')
       }
     },
@@ -48,6 +61,12 @@ const providers = {
   connected: [connectedProviderID],
   default: { [connectedProviderID]: connectedModelID }
 }
+const agents = [
+  createAgent('build', 'Primary fake build agent', 'primary'),
+  createAgent('plan', 'All-mode fake planning agent', 'all'),
+  createAgent('hidden', 'Hidden fake agent', 'primary', { hidden: true }),
+  createAgent('subagent', 'Subagent-only fake agent', 'subagent')
+]
 
 type FakeSession = {
   id: string
@@ -76,6 +95,9 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     }
     if (request.method === 'GET' && url.pathname === '/provider') {
       return json(response, providers)
+    }
+    if (request.method === 'GET' && url.pathname === '/api/agent') {
+      return json(response, { location: { directory }, data: agents })
     }
     if (request.method === 'GET' && url.pathname === '/session') {
       return json(response, [...sessions.values()])
@@ -112,6 +134,21 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       if (!isConnectedModel(body?.model)) {
         return json(response, { message: 'prompt model must be connected' }, 400)
       }
+      if (!isVisibleAgent(body?.agent)) {
+        return json(response, { message: 'prompt agent must be a visible primary/all agent' }, 400)
+      }
+      if (!isValidVariant(body?.model, body?.variant)) {
+        return json(response, { message: 'prompt variant must belong to the selected model' }, 400)
+      }
+      promptRequests.push({
+        sessionID,
+        text,
+        agent: typeof body?.agent === 'string' ? body.agent : null,
+        model: isConnectedModel(body?.model)
+          ? { providerID: body.model.providerID, modelID: body.model.modelID }
+          : null,
+        variant: typeof body?.variant === 'string' ? body.variant : null
+      })
       pendingPrompts.set(sessionID, [
         ...(pendingPrompts.get(sessionID) ?? []),
         { id, text, fetches: 0 }
@@ -134,6 +171,7 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     throw new Error('Fake OpenCode server did not start.')
   return {
     url: `http://127.0.0.1:${address.port}`,
+    getPromptRequests: () => [...promptRequests],
     close: () => new Promise((resolve) => server.close(() => resolve()))
   }
 }
@@ -142,6 +180,7 @@ function resetState(): void {
   sessions.clear()
   messages.clear()
   pendingPrompts.clear()
+  promptRequests.length = 0
   promptIdSequence = 0
   newSessionSequence = 1
   stableMessageSequence = 0
@@ -251,7 +290,7 @@ function createSession(
   } as FakeSession
 }
 
-function createProviderModel(id: string, name: string) {
+function createProviderModel(id: string, name: string, variants?: Record<string, unknown>) {
   return {
     id,
     name,
@@ -261,7 +300,24 @@ function createProviderModel(id: string, name: string) {
     temperature: true,
     tool_call: true,
     limit: { context: 1000, output: 1000 },
+    ...(variants ? { variants } : {}),
     options: {}
+  }
+}
+
+function createAgent(
+  id: string,
+  description: string,
+  mode: 'primary' | 'all' | 'subagent',
+  options: { hidden?: boolean } = {}
+): unknown {
+  return {
+    id,
+    description,
+    mode,
+    hidden: options.hidden ?? false,
+    request: { headers: {}, body: {} },
+    permissions: []
   }
 }
 
@@ -396,6 +452,27 @@ function isConnectedModel(model: any): boolean {
   const keys = Object.keys(model)
   if (keys.length !== 2 || !keys.includes('providerID') || !keys.includes('modelID')) return false
   return model.providerID === connectedProviderID && model.modelID in providers.all[0].models
+}
+
+function isVisibleAgent(agentID: any): boolean {
+  if (agentID === undefined || agentID === null) return true
+  if (typeof agentID !== 'string') return false
+  return agents.some(
+    (agent: any) =>
+      agent.id === agentID &&
+      agent.hidden !== true &&
+      (agent.mode === 'primary' || agent.mode === 'all')
+  )
+}
+
+function isValidVariant(model: any, variant: any): boolean {
+  if (variant === undefined || variant === null) return true
+  if (typeof variant !== 'string') return false
+  if (!isConnectedModel(model)) return false
+  const providerModel = (
+    providers.all[0].models as Record<string, { variants?: Record<string, unknown> }>
+  )[model.modelID]
+  return Boolean(providerModel.variants && variant in providerModel.variants)
 }
 
 async function readJson(request: IncomingMessage): Promise<any> {

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useOpenCodeSdk } from './opencode/client'
+import { useOpenCodeSdk, type createOpenCodeClient } from './opencode/client'
 import { Identifier } from './opencode/id'
 import {
   openCodeSessionQueryKey,
@@ -8,9 +8,14 @@ import {
 } from './useOpenCodeSessions'
 import type { OpenCodeModelSelection } from './useOpenCodeModels'
 
+type OpenCodeClient = ReturnType<typeof createOpenCodeClient>
+type SessionCreateParameters = Parameters<OpenCodeClient['session']['create']>[0]
+
 export type OpenCodePromptOptions = {
   text: string
   model: OpenCodeModelSelection | null
+  agent: string | null
+  variant: string | null
 }
 
 export type OpenCodeAdmittedPrompt = {
@@ -40,6 +45,8 @@ export function useSendOpenCodePrompt(
         sessionID,
         messageID,
         model: options.model,
+        ...(options.agent ? { agent: options.agent } : {}),
+        ...(options.variant ? { variant: options.variant } : {}),
         parts: [createTextPart(text)]
       })
       if (response.error) throw response.error
@@ -77,9 +84,9 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
       if (!text) throw new Error('Enter a prompt before sending.')
       if (!options.model) throw new Error('Select a connected OpenCode model before sending.')
 
-      const createResponse = await client!.session.create({
-        directory
-      })
+      const createResponse = await client!.session.create(
+        createSessionParameters(directory, options)
+      )
       if (createResponse.error) throw createResponse.error
       if (!createResponse.data?.id) throw new Error('OpenCode did not return a session id.')
 
@@ -89,6 +96,8 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
         sessionID,
         messageID,
         model: options.model,
+        ...(options.agent ? { agent: options.agent } : {}),
+        ...(options.variant ? { variant: options.variant } : {}),
         parts: [createTextPart(text)]
       })
       if (promptResponse.error) throw promptResponse.error
@@ -120,6 +129,25 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
 
 function createOptimisticMessageID(): string {
   return Identifier.ascending('message')
+}
+
+function createSessionParameters(
+  directory: string,
+  options: OpenCodePromptOptions
+): SessionCreateParameters {
+  return {
+    directory,
+    ...(options.agent ? { agent: options.agent } : {}),
+    ...(options.model
+      ? {
+          model: {
+            id: options.model.modelID,
+            providerID: options.model.providerID,
+            ...(options.variant ? { variant: options.variant } : {})
+          }
+        }
+      : {})
+  }
 }
 
 function createPartID(): string {

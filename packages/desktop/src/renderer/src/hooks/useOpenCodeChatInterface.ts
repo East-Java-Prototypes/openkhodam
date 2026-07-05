@@ -28,9 +28,11 @@ import {
 } from './useOpenCodeSessions'
 import {
   useOpenCodeModels,
+  type OpenCodeModelEffortOption,
   type OpenCodeModelOption,
   type OpenCodeModelSelection
 } from './useOpenCodeModels'
+import { useOpenCodeAgents, type OpenCodeAgentOption } from './useOpenCodeAgents'
 import type { ChatMessage, ChatProject, ProjectChat } from './useChatInterfaceData'
 import { normalizeOpenCodeMessage } from './opencode/message-normalizer'
 
@@ -78,12 +80,21 @@ export type OpenCodeStartConversationState = {
   errorMessage: string | null
   admittedPrompt: OpenCodeAdmittedPrompt | null
   modelOptions: OpenCodeModelOption[]
+  agentOptions: OpenCodeAgentOption[]
+  effortOptions: OpenCodeModelEffortOption[]
   selectedModel: OpenCodeModelOption | null
   selectedModelID: string | null
   setSelectedModelID: (value: string | null) => void
+  selectedAgent: OpenCodeAgentOption | null
+  selectedAgentID: string | null
+  setSelectedAgentID: (value: string | null) => void
+  selectedEffort: OpenCodeModelEffortOption | null
+  selectedEffortID: string | null
+  setSelectedEffortID: (value: string | null) => void
   modelHelperText: string
   modelErrorMessage: string | null
   isLoadingModels: boolean
+  isLoadingAgents: boolean
   setPromptText: (value: string) => void
   startConversation: (
     onSuccess?: (sessionID: string, admittedPrompt: OpenCodeAdmittedPrompt) => void
@@ -102,12 +113,21 @@ export type OpenCodeSessionRouteState = {
   errorMessage: string | null
   successMessage: string | null
   modelOptions: OpenCodeModelOption[]
+  agentOptions: OpenCodeAgentOption[]
+  effortOptions: OpenCodeModelEffortOption[]
   selectedModel: OpenCodeModelOption | null
   selectedModelID: string | null
   setSelectedModelID: (value: string | null) => void
+  selectedAgent: OpenCodeAgentOption | null
+  selectedAgentID: string | null
+  setSelectedAgentID: (value: string | null) => void
+  selectedEffort: OpenCodeModelEffortOption | null
+  selectedEffortID: string | null
+  setSelectedEffortID: (value: string | null) => void
   modelHelperText: string
   modelErrorMessage: string | null
   isLoadingModels: boolean
+  isLoadingAgents: boolean
   setPromptText: (value: string) => void
   sendPrompt: () => void
 }
@@ -124,7 +144,12 @@ export type OpenCodeChatOpenedProject = {
   id: string
 }
 
-export type { OpenCodeAdmittedPrompt, OpenCodeModelOption }
+export type {
+  OpenCodeAdmittedPrompt,
+  OpenCodeAgentOption,
+  OpenCodeModelEffortOption,
+  OpenCodeModelOption
+}
 
 export function useOpenCodeChatShell(
   onOpenedProject?: (project: OpenCodeChatOpenedProject) => void
@@ -240,6 +265,7 @@ export function useOpenCodeSessionRoute(
   const messageSessionID = activeSession ? sessionID : null
   const { messagesQuery } = useSessionMessages(directory, messageSessionID)
   const models = useOpenCodeModels(directory)
+  const agents = useOpenCodeAgents(directory)
   const { sendPromptMutation, connection: sendConnection } = useSendOpenCodePrompt(
     directory,
     sessionID
@@ -327,6 +353,7 @@ export function useOpenCodeSessionRoute(
       Boolean(directory) &&
       promptText.trim().length > 0 &&
       models.selectedModel !== null &&
+      !agents.isLoading &&
       canSendToActiveSession &&
       sendConnection !== null &&
       !isSending,
@@ -352,15 +379,29 @@ export function useOpenCodeSessionRoute(
       ? 'Prompt sent. Messages will refresh shortly.'
       : null,
     modelOptions: models.options,
+    agentOptions: agents.options,
+    effortOptions: models.effortOptions,
     selectedModel: models.selectedModel,
     selectedModelID: models.selectedModelID,
     setSelectedModelID: models.setSelectedModelID,
+    selectedAgent: agents.selectedAgent,
+    selectedAgentID: agents.selectedAgentID,
+    setSelectedAgentID: agents.setSelectedAgentID,
+    selectedEffort: models.selectedEffort,
+    selectedEffortID: models.selectedEffortID,
+    setSelectedEffortID: models.setSelectedEffortID,
     modelHelperText: models.helperText,
     modelErrorMessage: models.errorMessage,
     isLoadingModels: models.isLoading,
+    isLoadingAgents: agents.isLoading,
     setPromptText,
     sendPrompt: () => {
-      const options = buildPromptOptions(promptText, models.selectedModel)
+      const options = buildPromptOptions(
+        promptText,
+        models.selectedModel,
+        agents.selectedAgentID,
+        models.selectedEffortID
+      )
       if (sessionID && activeSession) {
         sendPromptMutation.mutate(options, {
           onSuccess: (admittedPrompt) => {
@@ -416,6 +457,7 @@ export function useOpenCodeStartConversation(
   const [admittedPrompt, setAdmittedPrompt] = useState<OpenCodeAdmittedPrompt | null>(null)
   const { startConversationMutation, connection } = useStartOpenCodeConversation(directory)
   const models = useOpenCodeModels(directory)
+  const agents = useOpenCodeAgents(directory)
   const isSending = startConversationMutation.isPending
 
   return {
@@ -425,20 +467,35 @@ export function useOpenCodeStartConversation(
       Boolean(directory) &&
       promptText.trim().length > 0 &&
       models.selectedModel !== null &&
+      !agents.isLoading &&
       connection !== null &&
       !isSending,
     errorMessage: firstErrorMessage(startConversationMutation.error, models.errorMessage),
     admittedPrompt,
     modelOptions: models.options,
+    agentOptions: agents.options,
+    effortOptions: models.effortOptions,
     selectedModel: models.selectedModel,
     selectedModelID: models.selectedModelID,
     setSelectedModelID: models.setSelectedModelID,
+    selectedAgent: agents.selectedAgent,
+    selectedAgentID: agents.selectedAgentID,
+    setSelectedAgentID: agents.setSelectedAgentID,
+    selectedEffort: models.selectedEffort,
+    selectedEffortID: models.selectedEffortID,
+    setSelectedEffortID: models.setSelectedEffortID,
     modelHelperText: models.helperText,
     modelErrorMessage: models.errorMessage,
     isLoadingModels: models.isLoading,
+    isLoadingAgents: agents.isLoading,
     setPromptText,
     startConversation: (onSuccess) => {
-      const options = buildPromptOptions(promptText, models.selectedModel)
+      const options = buildPromptOptions(
+        promptText,
+        models.selectedModel,
+        agents.selectedAgentID,
+        models.selectedEffortID
+      )
       startConversationMutation.mutate(options, {
         onSuccess: (admittedPrompt) => {
           setAdmittedPrompt(admittedPrompt)
@@ -542,11 +599,15 @@ function isChatMessage(message: ChatMessage | null): message is ChatMessage {
 
 function buildPromptOptions(
   text: string,
-  model: OpenCodeModelSelection | null
+  model: OpenCodeModelSelection | null,
+  agent: string | null,
+  variant: string | null
 ): OpenCodePromptOptions {
   return {
     text,
-    model: model ? { providerID: model.providerID, modelID: model.modelID } : null
+    model: model ? { providerID: model.providerID, modelID: model.modelID } : null,
+    agent,
+    variant
   }
 }
 
