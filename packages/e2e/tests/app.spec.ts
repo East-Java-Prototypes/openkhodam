@@ -1385,15 +1385,20 @@ test('starts a new stable chat from the project route', async ({ appWindow }) =>
 test('shows optimistic prompt before delayed stable message projection', async ({ appWindow }) => {
   await openSeededDeterministicChat(appWindow)
 
+  const thinkingRow = messageTranscript(appWindow).getByText('Thinking…', { exact: true })
+  await expect(thinkingRow).toHaveCount(0)
+
   await sendPrompt(appWindow, 'Delayed lifecycle prompt')
-  await expect(
-    messageTranscript(appWindow).getByText('Prompt sent. Messages will refresh shortly.')
-  ).toBeVisible()
   await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toBeVisible()
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
   ).toBeVisible()
+  await expect(thinkingRow).toBeVisible()
+  await expect(
+    messageTranscript(appWindow).getByText('Prompt sent. Messages will refresh shortly.')
+  ).toHaveCount(0)
   await expect(appWindow.getByText('Fake response for: Delayed lifecycle prompt')).toBeVisible()
+  await expect(thinkingRow).toHaveCount(0)
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
   ).toHaveCount(0)

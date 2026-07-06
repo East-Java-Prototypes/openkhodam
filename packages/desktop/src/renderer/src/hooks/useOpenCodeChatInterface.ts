@@ -104,6 +104,7 @@ export type OpenCodeStartConversationState = {
 export type OpenCodeSessionRouteState = {
   activeChat: ProjectChat | null
   messages: ChatMessage[]
+  isAwaitingAssistantResponse: boolean
   promptText: string
   isLoading: boolean
   isSending: boolean
@@ -252,6 +253,7 @@ export function useOpenCodeSessionRoute(
 ): OpenCodeSessionRouteState {
   const [promptText, setPromptText] = useState('')
   const [optimisticPrompts, setOptimisticPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
+  const [awaitingPrompts, setAwaitingPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
   const queryClient = useQueryClient()
   const { sessionQuery } = useOpenCodeSession(directory, sessionID)
   const activeSessionFromList = sessions.find((session) => session.id === sessionID) ?? null
@@ -294,6 +296,13 @@ export function useOpenCodeSessionRoute(
       activeSession ? appendOptimisticPrompts(mappedMessages, optimisticPrompts, sessionID) : [],
     [activeSession, mappedMessages, optimisticPrompts, sessionID]
   )
+  const isAwaitingAssistantResponse = useMemo(
+    () =>
+      awaitingPrompts.some((prompt) =>
+        isPromptAwaitingAssistantResponse(visibleMessages, prompt, sessionID)
+      ),
+    [awaitingPrompts, sessionID, visibleMessages]
+  )
 
   useEffect(() => {
     if (!admittedPrompt || admittedPrompt.sessionID !== sessionID) return
@@ -301,6 +310,7 @@ export function useOpenCodeSessionRoute(
       if (current.some((prompt) => promptKey(prompt) === promptKey(admittedPrompt))) return current
       return [...current, admittedPrompt]
     })
+    setAwaitingPrompts((current) => addUniquePrompt(current, admittedPrompt))
   }, [admittedPrompt, sessionID])
 
   useEffect(() => {
@@ -342,9 +352,21 @@ export function useOpenCodeSessionRoute(
     }
   }, [mappedMessages, optimisticPrompts, refetchMessages, sessionID])
 
+  useEffect(() => {
+    setAwaitingPrompts((current) => {
+      const next = current.filter(
+        (prompt) =>
+          prompt.sessionID !== sessionID ||
+          !hasAssistantResponseForPrompt(visibleMessages, prompt)
+      )
+      return next.length === current.length ? current : next
+    })
+  }, [sessionID, visibleMessages])
+
   return {
     activeChat: activeSession,
     messages: visibleMessages,
+    isAwaitingAssistantResponse,
     promptText,
     isLoading:
       (sessionQuery.isLoading && activeSessionFromList === null) || messagesQuery.isLoading,
@@ -375,9 +397,7 @@ export function useOpenCodeSessionRoute(
       sendPromptMutation.error,
       sessionEventError?.message
     ),
-    successMessage: sendPromptMutation.isSuccess
-      ? 'Prompt sent. Messages will refresh shortly.'
-      : null,
+    successMessage: null,
     modelOptions: models.options,
     agentOptions: agents.options,
     effortOptions: models.effortOptions,
@@ -405,7 +425,8 @@ export function useOpenCodeSessionRoute(
       if (sessionID && activeSession) {
         sendPromptMutation.mutate(options, {
           onSuccess: (admittedPrompt) => {
-            setOptimisticPrompts((current) => [...current, admittedPrompt])
+            setOptimisticPrompts((current) => addUniquePrompt(current, admittedPrompt))
+            setAwaitingPrompts((current) => addUniquePrompt(current, admittedPrompt))
             setPromptText('')
           }
         })
@@ -430,7 +451,7 @@ function appendOptimisticPrompts(
   return [
     ...messages,
     ...pending.map((prompt) => ({
-      id: `optimistic-${prompt.sessionID}-${prompt.id}`,
+      id: optimisticPromptMessageID(prompt),
       author: 'user' as const,
       content: prompt.text,
       parts: [{ id: `optimistic-${prompt.id}-text`, type: 'text' as const, text: prompt.text }],
@@ -439,8 +460,60 @@ function appendOptimisticPrompts(
   ]
 }
 
+function addUniquePrompt(
+  prompts: OpenCodeAdmittedPrompt[],
+  prompt: OpenCodeAdmittedPrompt
+): OpenCodeAdmittedPrompt[] {
+  if (prompts.some((current) => promptKey(current) === promptKey(prompt))) return prompts
+  return [...prompts, prompt]
+}
+
 function promptKey(prompt: OpenCodeAdmittedPrompt): string {
   return `${prompt.sessionID}:${prompt.id}`
+}
+
+function optimisticPromptMessageID(prompt: OpenCodeAdmittedPrompt): string {
+  return `optimistic-${prompt.sessionID}-${prompt.id}`
+}
+
+function isPromptAwaitingAssistantResponse(
+  messages: ChatMessage[],
+  admittedPrompt: OpenCodeAdmittedPrompt,
+  sessionID: string | null | undefined
+): boolean {
+  if (admittedPrompt.sessionID !== sessionID) return false
+  return (
+    findPromptMessageIndex(messages, admittedPrompt) !== -1 &&
+    !hasAssistantResponseForPrompt(messages, admittedPrompt)
+  )
+}
+
+function hasAssistantResponseForPrompt(
+  messages: ChatMessage[],
+  admittedPrompt: OpenCodeAdmittedPrompt
+): boolean {
+  const promptIndex = findPromptMessageIndex(messages, admittedPrompt)
+  if (promptIndex === -1) return false
+
+  return messages
+    .slice(promptIndex + 1)
+    .some(
+      (message) =>
+        message.author === 'assistant' &&
+        (!message.parentID || message.parentID === admittedPrompt.id)
+    )
+}
+
+function findPromptMessageIndex(
+  messages: ChatMessage[],
+  admittedPrompt: OpenCodeAdmittedPrompt
+): number {
+  return messages.findIndex(
+    (message) =>
+      message.author === 'user' &&
+      (isProjectedPromptMessage(message, admittedPrompt) ||
+        message.id === optimisticPromptMessageID(admittedPrompt))
+  )
 }
 
 function isProjectedPromptMessage(
