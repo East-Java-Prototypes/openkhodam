@@ -386,6 +386,10 @@ function structuredV1AssistantMessage(id: string, parentID: string): unknown {
         text: structuredReasoningText
       },
       {
+        id: `${id}-empty-reasoning`,
+        type: 'reasoning'
+      },
+      {
         id: `${id}-tool`,
         type: 'tool',
         name: 'read',

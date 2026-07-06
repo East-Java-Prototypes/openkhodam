@@ -1100,6 +1100,7 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
   await expect(appWindow.getByText('Structured fixture user prompt')).toBeVisible()
   await expect(appWindow.getByText('Inspecting project files.')).toBeVisible()
   await expect(appWindow.getByText('Need **file context** before responding.')).toBeVisible()
+  await expect(appWindow.getByText('Reasoning updated.')).toHaveCount(0)
   await expect(appWindow.getByText('Hidden v1 step start marker')).toHaveCount(0)
   await expect(appWindow.getByText('Hidden v1 step finish marker')).toHaveCount(0)
   await expect(appWindow.getByText('Hidden v2 step start marker')).toHaveCount(0)
@@ -1107,6 +1108,19 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
   await expect(appWindow.getByText('Hidden patch fixture marker')).toHaveCount(0)
   await expect(appWindow.getByText('Unsupported part: patch')).toHaveCount(0)
   await expect(appWindow.getByText('No text content.')).toHaveCount(0)
+  const structuredV1Article = transcript
+    .getByRole('article', { name: /assistant message at/ })
+    .filter({ hasText: 'Inspecting project files.' })
+  await expect
+    .poll(
+      () =>
+        structuredV1Article.locator('[data-slot="message-surface"]').evaluate((surface) => {
+          const partList = surface.firstElementChild
+          return partList ? Array.from(partList.children).length : 0
+        }),
+      { message: 'empty reasoning parts should not render visible part rows' }
+    )
+    .toBe(4)
   const readTool = appWindow.locator('[aria-label="Tool read"]')
   await expect(readTool).toContainText('read')
   await expect(readTool).toContainText('completed')
