@@ -356,8 +356,7 @@ export function useOpenCodeSessionRoute(
     setAwaitingPrompts((current) => {
       const next = current.filter(
         (prompt) =>
-          prompt.sessionID !== sessionID ||
-          !hasAssistantResponseForPrompt(visibleMessages, prompt)
+          prompt.sessionID !== sessionID || !hasAssistantResponseForPrompt(visibleMessages, prompt)
       )
       return next.length === current.length ? current : next
     })
