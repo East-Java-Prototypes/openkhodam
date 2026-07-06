@@ -998,12 +998,7 @@ function ChatMessageList({
 
 function AssistantThinkingRow(): JSX.Element {
   return (
-    <div
-      data-slot="assistant-thinking-row"
-      role="status"
-      aria-live="polite"
-      className="min-w-0"
-    >
+    <div data-slot="assistant-thinking-row" role="status" aria-live="polite" className="min-w-0">
       <Message align="start">
         <MessageContent className="items-start">
           <MessageHeader className="px-0 capitalize">assistant</MessageHeader>
