@@ -33,6 +33,7 @@ export type OpenKhodamAPI = {
   cancelGoogleWorkspaceConnect: () => Promise<GoogleWorkspaceIntegrationStatus>
   disconnectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
   listOpenedProjectFolders: () => Promise<OpenedProjectFolder[]>
+  selectProjectDirectory: () => Promise<string | null>
   recordOpenedProjectFolder: (input: OpenProjectFolderInput) => Promise<OpenedProjectFolder>
   removeOpenedProjectFolder: (
     input: RemoveProjectFolderInput

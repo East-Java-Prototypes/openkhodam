@@ -44,6 +44,8 @@ const projectSettingsLink = (page: Page): Locator =>
   projectSidebar(page).getByRole('link', { name: 'Settings', exact: true })
 const projectHomeLink = (page: Page): Locator =>
   projectSidebar(page).getByRole('link', { name: 'Home', exact: true })
+const openProjectFolderButton = (page: Page): Locator =>
+  projectSidebar(page).getByRole('button', { name: 'Open project folder', exact: true })
 const sessionChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Project sessions' }).getByRole('link')
 const selectedProjectSessions = (page: Page): Locator =>
@@ -194,7 +196,9 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(projectHeartbeatStatus(page)).toBeVisible()
   await expect(page.getByRole('complementary', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Project sessions' })).toHaveCount(0)
-  await expect(page.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
+  await expect(openProjectFolderButton(page)).toBeVisible()
+  await expect(openProjectFolderButton(page)).toHaveAttribute('title', 'Open project folder')
+  await expect(page.getByRole('form', { name: 'Open project by directory' })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'Projects' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
@@ -415,6 +419,33 @@ async function waitForMainProcessValue(
   }
 
   throw new Error('Timed out waiting for the Electron main process capture.')
+}
+
+async function installProjectDirectoryPickerMock(
+  electronApp: ElectronApplication,
+  selectedDirectory: string | null
+): Promise<void> {
+  await electronApp.evaluate(({ dialog }, directory) => {
+    const globalObject = globalThis as any
+    globalObject.__projectDirectoryPickerCalls = []
+
+    dialog.showOpenDialog = async (...args: unknown[]) => {
+      const options = args.length > 1 ? args[1] : args[0]
+      globalObject.__projectDirectoryPickerCalls.push(options)
+
+      if (directory === null) return { canceled: true, filePaths: [] }
+      return { canceled: false, filePaths: [directory] }
+    }
+  }, selectedDirectory)
+}
+
+async function getProjectDirectoryPickerCallCount(
+  electronApp: ElectronApplication
+): Promise<number> {
+  return electronApp.evaluate(() => {
+    const calls = (globalThis as any).__projectDirectoryPickerCalls as unknown[] | undefined
+    return calls?.length ?? 0
+  })
 }
 
 async function waitForScrollTopToSettle(locator: Locator): Promise<void> {
@@ -644,7 +675,8 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
   await expect(sidebar).toBeVisible()
   await expect(projectHomeLink(appWindow)).toBeVisible()
   await expect(projectSettingsLink(appWindow)).toBeVisible()
-  await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
+  await expect(openProjectFolderButton(appWindow)).toBeVisible()
+  await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toHaveCount(0)
   await expect(resizeHandle).toBeVisible()
 })
 
@@ -931,21 +963,20 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
   }
 })
 
-test('opens a project by directory from the final chat shell, persists it, and removes it', async ({
-  appWindow
+test('opens a project by native folder picker from the final chat shell, persists it, and removes it', async ({
+  appWindow,
+  electronApp
 }) => {
   await waitForChatShell(appWindow)
   await expectFreshProjectSidebarWithoutRawOpenCodeProjects(appWindow)
+  await installProjectDirectoryPickerMock(electronApp, fakeProjectDirectory)
 
-  const directoryInput = appWindow.getByLabel('Project directory')
-  const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
-  const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
-
-  await expect(openButton).toBeDisabled()
-  await directoryInput.fill(fakeProjectDirectory)
+  const openButton = openProjectFolderButton(appWindow)
   await expect(openButton).toBeEnabled()
+  await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toHaveCount(0)
 
   await openButton.click()
+  await expect.poll(() => getProjectDirectoryPickerCallCount(electronApp)).toBe(1)
   await expect
     .poll(() => appWindow.evaluate(() => window.location.hash))
     .toMatch(/\/projects\/dir-/)
@@ -982,19 +1013,41 @@ test('opens a project by directory from the final chat shell, persists it, and r
   await expect(appWindow.getByText(emptyOpenedProjectsMessage)).toBeVisible()
 })
 
-test('opens a project by directory into a directory-derived project route with start composer', async ({
-  appWindow
+test('opens a project folder picker cancellation without changing Projects', async ({
+  appWindow,
+  electronApp
 }) => {
   await waitForChatShell(appWindow)
   await expectFreshProjectSidebarWithoutRawOpenCodeProjects(appWindow)
+  await installProjectDirectoryPickerMock(electronApp, null)
 
-  const directoryInput = appWindow.getByLabel('Project directory')
-  const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
-  const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
+  const initialHash = await appWindow.evaluate(() => window.location.hash)
+  const openButton = openProjectFolderButton(appWindow)
+  await expect(openButton).toBeEnabled()
 
-  await directoryInput.fill(repositoryDirectory)
+  await openButton.click()
+  await expect.poll(() => getProjectDirectoryPickerCallCount(electronApp)).toBe(1)
+  await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toBe(initialHash)
+  await expect
+    .poll(() => appWindow.evaluate(() => window.api.listOpenedProjectFolders()))
+    .toEqual([])
+  await expect(selectedProjectSessions(appWindow)).toHaveCount(0)
+  await expect(projectChatLink(appWindow).filter({ hasText: 'Fake Project' })).toHaveCount(0)
+  await expect(appWindow.getByText(emptyOpenedProjectsMessage)).toBeVisible()
+})
+
+test('opens a project by native folder picker into a directory-derived project route with start composer', async ({
+  appWindow,
+  electronApp
+}) => {
+  await waitForChatShell(appWindow)
+  await expectFreshProjectSidebarWithoutRawOpenCodeProjects(appWindow)
+  await installProjectDirectoryPickerMock(electronApp, repositoryDirectory)
+
+  const openButton = openProjectFolderButton(appWindow)
   await expect(openButton).toBeEnabled()
   await openButton.click()
+  await expect.poll(() => getProjectDirectoryPickerCallCount(electronApp)).toBe(1)
   await expect
     .poll(() => appWindow.evaluate(() => window.location.hash))
     .toMatch(/\/projects\/dir-/)
@@ -1683,7 +1736,8 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   await expect(projectHomeLink(appWindow)).toBeVisible()
   await expect(projectSettingsLink(appWindow)).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Project sessions' })).toHaveCount(0)
-  await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toBeVisible()
+  await expect(openProjectFolderButton(appWindow)).toBeVisible()
+  await expect(appWindow.getByRole('form', { name: 'Open project by directory' })).toHaveCount(0)
   await expect(appWindow.getByRole('navigation', { name: 'Projects' })).toBeVisible()
   await expect(appWindow.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(chatActionPane(appWindow)).toHaveCount(0)

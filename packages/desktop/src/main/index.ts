@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, nativeTheme } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, nativeTheme, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -79,6 +79,19 @@ app.whenReady().then(() => {
   ipcMain.handle('google-workspace:cancel-connect', () => googleWorkspace.cancelConnect())
   ipcMain.handle('google-workspace:disconnect', () => googleWorkspace.disconnect())
   ipcMain.handle('projects:list-opened-folders', () => openKhodamConfig.listOpenedProjectFolders())
+  ipcMain.handle('project-directory:select', async (event) => {
+    const browserWindow = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = {
+      title: 'Choose a project folder',
+      properties: ['openDirectory', 'createDirectory']
+    }
+    const result = browserWindow
+      ? await dialog.showOpenDialog(browserWindow, options)
+      : await dialog.showOpenDialog(options)
+
+    if (result.canceled) return null
+    return result.filePaths[0] ?? null
+  })
   ipcMain.handle('projects:record-opened-folder', (_event, input) =>
     openKhodamConfig.recordOpenedProjectFolder(input)
   )

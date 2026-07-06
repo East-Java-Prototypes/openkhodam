@@ -49,6 +49,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -333,12 +334,20 @@ function ProjectChatSidebar({
       role="complementary"
       aria-label="Projects"
     >
+      <SidebarHeader className="border-b p-4">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Projects
+          </h2>
+          <OpenProjectDirectoryButton shell={shell} />
+        </div>
+        {shell.openProjectStatusMessage ? (
+          <p role="status" className="sr-only">
+            {shell.openProjectStatusMessage}
+          </p>
+        ) : null}
+      </SidebarHeader>
       <SidebarContent className="p-4">
-        <SidebarGroup className="p-0">
-          <SidebarGroupContent>
-            <OpenProjectByDirectoryForm shell={shell} />
-          </SidebarGroupContent>
-        </SidebarGroup>
         <SidebarGroup className="p-0">
           <SidebarGroupContent>
             <nav aria-label="Projects">
@@ -400,6 +409,42 @@ function ProjectChatSidebar({
   )
 }
 
+function OpenProjectDirectoryButton({ shell }: { shell: OpenCodeChatShellState }): JSX.Element {
+  const label = 'Open project folder'
+
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="outline"
+      aria-label={label}
+      title={label}
+      disabled={!shell.canSelectProjectDirectory}
+      onClick={shell.selectProjectDirectory}
+    >
+      <FolderPlusIcon />
+    </Button>
+  )
+}
+
+function FolderPlusIcon(): JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v4" />
+      <path d="M16 19h6" />
+      <path d="M19 16v6" />
+    </svg>
+  )
+}
+
 function SidebarHeartbeat({ status }: { status: OpenCodeHeartbeatStatus }): JSX.Element {
   return (
     <Tooltip>
@@ -449,68 +494,6 @@ function CollapsedProjectSidebarRail({ onRestore }: { onRestore: () => void }): 
         Projects
       </Button>
     </aside>
-  )
-}
-
-function OpenProjectByDirectoryForm({ shell }: { shell: OpenCodeChatShellState }): JSX.Element {
-  return (
-    <form
-      className="mb-6 rounded-none border bg-card p-3"
-      aria-label="Open project by directory"
-      onSubmit={(event) => {
-        event.preventDefault()
-        if (shell.canOpenProject) shell.openProjectByDirectory()
-      }}
-    >
-      <label
-        className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-        htmlFor="project-directory"
-      >
-        Project directory
-      </label>
-      <div className="mt-2 flex gap-2">
-        <input
-          id="project-directory"
-          className="min-w-0 flex-1 rounded-none border bg-background px-2 py-1 text-sm"
-          value={shell.projectDirectoryText}
-          onChange={(event) => shell.setProjectDirectoryText(event.currentTarget.value)}
-          placeholder="/path/to/project"
-        />
-        <Button type="submit" size="sm" disabled={!shell.canOpenProject}>
-          Open
-        </Button>
-      </div>
-      {shell.openProjectStatusMessage ? (
-        <p className="mt-2 text-xs text-muted-foreground">{shell.openProjectStatusMessage}</p>
-      ) : null}
-      {shell.openedProject ? <OpenedProjectDetails project={shell.openedProject} /> : null}
-    </form>
-  )
-}
-
-function OpenedProjectDetails({
-  project
-}: {
-  project: OpenCodeChatShellState['openedProject']
-}): JSX.Element | null {
-  if (!project) return null
-  return (
-    <section
-      className="mt-2 text-xs text-muted-foreground"
-      aria-labelledby="opened-project-heading"
-    >
-      <h2 id="opened-project-heading" className="font-semibold text-foreground">
-        Opened project details
-      </h2>
-      <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
-        <dt>Name</dt>
-        <dd>{project.name}</dd>
-        <dt>Directory</dt>
-        <dd>{project.directory}</dd>
-        <dt>ID</dt>
-        <dd>{project.id}</dd>
-      </dl>
-    </section>
   )
 }
 
