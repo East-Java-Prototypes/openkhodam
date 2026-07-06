@@ -784,6 +784,7 @@ export function ActiveChatPanel({
           <Separator />
           <ChatMessageList
             messages={messages}
+            isAwaitingAssistantResponse={session?.isAwaitingAssistantResponse ?? false}
             transcriptStatusMessage={
               session?.transcriptStatusMessage ?? project?.transcriptStatusMessage ?? null
             }
@@ -907,12 +908,14 @@ export function SessionRouteActivePane({
 
 function ChatMessageList({
   messages,
+  isAwaitingAssistantResponse,
   transcriptStatusMessage,
   isLoading,
   errorMessage,
   successMessage
 }: {
   messages: ChatMessage[]
+  isAwaitingAssistantResponse: boolean
   transcriptStatusMessage: string | null
   isLoading: boolean
   errorMessage: string | null
@@ -983,12 +986,36 @@ function ChatMessageList({
                   )
                 })}
               </div>
+              {isAwaitingAssistantResponse ? <AssistantThinkingRow /> : null}
             </div>
           </MessageScrollerContent>
         </MessageScrollerViewport>
         <MessageScrollerButton />
       </MessageScroller>
     </MessageScrollerProvider>
+  )
+}
+
+function AssistantThinkingRow(): JSX.Element {
+  return (
+    <div
+      data-slot="assistant-thinking-row"
+      role="status"
+      aria-live="polite"
+      className="min-w-0"
+    >
+      <Message align="start">
+        <MessageContent className="items-start">
+          <MessageHeader className="px-0 capitalize">assistant</MessageHeader>
+          <div
+            data-slot="message-surface"
+            className="max-w-2xl min-w-0 border border-border bg-card/60 px-4 py-3 text-sm text-muted-foreground shadow-sm"
+          >
+            Thinking…
+          </div>
+        </MessageContent>
+      </Message>
+    </div>
   )
 }
 
