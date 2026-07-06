@@ -89,15 +89,15 @@ function normalizePart(part: unknown, fallbackId: string): ChatMessagePart | nul
       type: 'text',
       text: getStringFromRecord(part, 'text') ?? getStringFromRecord(part, 'content') ?? ''
     }
-  if (type === 'reasoning')
+  if (type === 'reasoning') {
+    const text = getStringFromRecord(part, 'text') ?? getStringFromRecord(part, 'content')
+    if (!text?.trim()) return null
     return {
       id,
       type: 'reasoning',
-      text:
-        getStringFromRecord(part, 'text') ??
-        getStringFromRecord(part, 'content') ??
-        'Reasoning updated.'
+      text
     }
+  }
   if (type === 'tool' || getStringFromRecord(part, 'tool') || getStringFromRecord(part, 'name'))
     return normalizeTool(part, id)
   return {
