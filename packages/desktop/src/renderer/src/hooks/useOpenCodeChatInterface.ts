@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
@@ -55,13 +55,11 @@ export type OpenCodeChatShellState = {
   isLoading: boolean
   errorMessage: string | null
   emptyMessage: string | null
-  projectDirectoryText: string
   openedProject: OpenCodeChatOpenedProject | null
   openProjectStatusMessage: string | null
-  canOpenProject: boolean
+  canSelectProjectDirectory: boolean
   removingProjectDirectory: string | null
-  setProjectDirectoryText: (value: string) => void
-  openProjectByDirectory: () => void
+  selectProjectDirectory: () => void
   removeOpenedProject: (project: ChatProject) => void
 }
 
@@ -167,11 +165,35 @@ export function useOpenCodeChatShell(
     removeProjectFolderMutation
   } = useOpenCodeProjects()
   const events = useOpenCodeEvents()
-  const [projectDirectoryText, setProjectDirectoryText] = useState('')
   const [openedDirectory, setOpenedDirectory] = useState<string | null>(null)
+  const [isSelectingProjectDirectory, setSelectingProjectDirectory] = useState(false)
+  const [projectDirectorySelectionError, setProjectDirectorySelectionError] =
+    useState<unknown>(null)
   const lastOpenedProjectId = useRef<string | null>(null)
   const openedProject = openProjectMutation.data ? mapOpenedProject(openProjectMutation.data) : null
   const heartbeatStatus = getHeartbeatStatus(connection, events)
+  const isOpeningProject = openProjectMutation.isPending || isSelectingProjectDirectory
+  const canSelectProjectDirectory = connection !== null && !isOpeningProject
+
+  const selectProjectDirectory = useCallback(() => {
+    if (connection === null || isOpeningProject) return
+
+    setProjectDirectorySelectionError(null)
+    setSelectingProjectDirectory(true)
+    void window.api
+      .selectProjectDirectory()
+      .then((directory) => {
+        if (!directory) return
+        setOpenedDirectory(directory)
+        openProjectMutation.mutate(directory)
+      })
+      .catch((error: unknown) => {
+        setProjectDirectorySelectionError(error)
+      })
+      .finally(() => {
+        setSelectingProjectDirectory(false)
+      })
+  }, [connection, isOpeningProject, openProjectMutation])
 
   useEffect(() => {
     if (!openedProject || lastOpenedProjectId.current === openedProject.id) return
@@ -189,12 +211,12 @@ export function useOpenCodeChatShell(
     errorMessage: firstErrorMessage(
       connectionQuery.error,
       projectsQuery.error,
+      projectDirectorySelectionError,
       openProjectMutation.error,
       removeProjectFolderMutation.error,
       events.error
     ),
     emptyMessage: getShellEmptyMessage(connection, projectsQuery.isSuccess, projects.length),
-    projectDirectoryText,
     openedProject,
     openProjectStatusMessage: getOpenProjectStatusMessage(
       openedDirectory,
@@ -202,20 +224,11 @@ export function useOpenCodeChatShell(
       openProjectMutation.error,
       openProjectMutation.data
     ),
-    canOpenProject:
-      projectDirectoryText.trim().length > 0 &&
-      connection !== null &&
-      !openProjectMutation.isPending,
+    canSelectProjectDirectory,
     removingProjectDirectory: removeProjectFolderMutation.isPending
       ? (removeProjectFolderMutation.variables ?? null)
       : null,
-    setProjectDirectoryText,
-    openProjectByDirectory: () => {
-      const directory = projectDirectoryText.trim()
-      if (!directory) return
-      setOpenedDirectory(directory)
-      openProjectMutation.mutate(directory)
-    },
+    selectProjectDirectory,
     removeOpenedProject: (project) => {
       if (!project.directory) return
       removeProjectFolderMutation.mutate(project.directory, {

@@ -41,6 +41,8 @@ const api = {
     ipcRenderer.invoke('google-workspace:disconnect'),
   listOpenedProjectFolders: (): Promise<OpenedProjectFolder[]> =>
     ipcRenderer.invoke('projects:list-opened-folders'),
+  selectProjectDirectory: (): Promise<string | null> =>
+    ipcRenderer.invoke('project-directory:select'),
   recordOpenedProjectFolder: (input: OpenProjectFolderInput): Promise<OpenedProjectFolder> =>
     ipcRenderer.invoke('projects:record-opened-folder', input),
   removeOpenedProjectFolder: (
