@@ -3,12 +3,15 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type {
   GoogleWorkspaceIntegrationStatus,
   LinkedGoogleDoc,
+  OpenProjectFolderInput,
   OpenCodeConnection,
   OpenCodeSidecarStatus,
+  OpenedProjectFolder,
   ProjectArtifactsConfig,
   ProjectArtifactsListInput,
   ProjectSessionLinkedDocsListInput,
   RecordLinkedGoogleDocInput,
+  RemoveProjectFolderInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 
@@ -36,6 +39,14 @@ const api = {
     ipcRenderer.invoke('google-workspace:cancel-connect'),
   disconnectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
     ipcRenderer.invoke('google-workspace:disconnect'),
+  listOpenedProjectFolders: (): Promise<OpenedProjectFolder[]> =>
+    ipcRenderer.invoke('projects:list-opened-folders'),
+  recordOpenedProjectFolder: (input: OpenProjectFolderInput): Promise<OpenedProjectFolder> =>
+    ipcRenderer.invoke('projects:record-opened-folder', input),
+  removeOpenedProjectFolder: (
+    input: RemoveProjectFolderInput
+  ): Promise<OpenedProjectFolder | null> =>
+    ipcRenderer.invoke('projects:remove-opened-folder', input),
   listProjectArtifacts: (input: ProjectArtifactsListInput): Promise<ProjectArtifactsConfig> =>
     ipcRenderer.invoke('project-artifacts:list-project', input),
   listSessionLinkedDocs: (input: ProjectSessionLinkedDocsListInput): Promise<LinkedGoogleDoc[]> =>

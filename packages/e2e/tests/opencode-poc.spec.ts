@@ -110,6 +110,9 @@ type GoogleWorkspacePlugin = {
 
 type OpenKhodamConfigFixture = {
   version: 1
+  projects: {
+    openedFolders: Array<{ directory: string; lastOpenedAt: number }>
+  }
   integrations: {
     googleWorkspace: {
       account: { email: string | null; name: string | null } | null
@@ -179,6 +182,9 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
   try {
     await expect(configStore.read()).resolves.toEqual({
       version: 1,
+      projects: {
+        openedFolders: []
+      },
       integrations: {
         googleWorkspace: {
           account: null,
@@ -3030,6 +3036,9 @@ async function writeOpenKhodamConfig(
     `${JSON.stringify(
       {
         version: 1,
+        projects: {
+          openedFolders: []
+        },
         integrations: {
           googleWorkspace
         }

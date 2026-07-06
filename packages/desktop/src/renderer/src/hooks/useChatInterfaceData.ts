@@ -35,6 +35,7 @@ export type ProjectChat = {
 export type ChatProject = {
   id: string
   name: string
+  directory?: string
   subtitle?: string
 }
 

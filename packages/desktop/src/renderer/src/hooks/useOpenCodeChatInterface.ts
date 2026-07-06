@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   useOpenCodeProjects,
   type OpenCodeCurrentProject,
+  type OpenCodeOpenedProject,
   type OpenCodeProject
 } from './opencode/projects'
 import {
@@ -36,7 +37,6 @@ import { useOpenCodeAgents, type OpenCodeAgentOption } from './useOpenCodeAgents
 import type { ChatMessage, ChatProject, ProjectChat } from './useChatInterfaceData'
 import { normalizeOpenCodeMessage } from './opencode/message-normalizer'
 
-const emptyProjects: OpenCodeProject[] = []
 const emptySessions: OpenCodeSession[] = []
 const emptyMessages: unknown[] = []
 
@@ -59,8 +59,10 @@ export type OpenCodeChatShellState = {
   openedProject: OpenCodeChatOpenedProject | null
   openProjectStatusMessage: string | null
   canOpenProject: boolean
+  removingProjectDirectory: string | null
   setProjectDirectoryText: (value: string) => void
   openProjectByDirectory: () => void
+  removeOpenedProject: (project: ChatProject) => void
 }
 
 export type OpenCodeProjectRouteState = {
@@ -152,10 +154,17 @@ export type {
 }
 
 export function useOpenCodeChatShell(
-  onOpenedProject?: (project: OpenCodeChatOpenedProject) => void
+  onOpenedProject?: (project: OpenCodeChatOpenedProject) => void,
+  onRemovedProject?: (project: ChatProject) => void
 ): OpenCodeChatShellState {
-  const { status, connection, connectionQuery, projectsQuery, openProjectMutation } =
-    useOpenCodeProjects()
+  const {
+    status,
+    connection,
+    connectionQuery,
+    projectsQuery,
+    openProjectMutation,
+    removeProjectFolderMutation
+  } = useOpenCodeProjects()
   const events = useOpenCodeEvents()
   const [projectDirectoryText, setProjectDirectoryText] = useState('')
   const [openedDirectory, setOpenedDirectory] = useState<string | null>(null)
@@ -169,7 +178,7 @@ export function useOpenCodeChatShell(
     onOpenedProject?.(openedProject)
   }, [onOpenedProject, openedProject])
 
-  const projects = projectsQuery.data ?? emptyProjects
+  const projects = projectsQuery.data
 
   return {
     projects: useMemo(() => mapProjects(projects), [projects]),
@@ -180,6 +189,7 @@ export function useOpenCodeChatShell(
       connectionQuery.error,
       projectsQuery.error,
       openProjectMutation.error,
+      removeProjectFolderMutation.error,
       events.error
     ),
     emptyMessage: getShellEmptyMessage(connection, projectsQuery.isSuccess, projects.length),
@@ -195,12 +205,21 @@ export function useOpenCodeChatShell(
       projectDirectoryText.trim().length > 0 &&
       connection !== null &&
       !openProjectMutation.isPending,
+    removingProjectDirectory: removeProjectFolderMutation.isPending
+      ? (removeProjectFolderMutation.variables ?? null)
+      : null,
     setProjectDirectoryText,
     openProjectByDirectory: () => {
       const directory = projectDirectoryText.trim()
       if (!directory) return
       setOpenedDirectory(directory)
       openProjectMutation.mutate(directory)
+    },
+    removeOpenedProject: (project) => {
+      if (!project.directory) return
+      removeProjectFolderMutation.mutate(project.directory, {
+        onSuccess: () => onRemovedProject?.(project)
+      })
     }
   }
 }
@@ -209,9 +228,9 @@ export function useOpenCodeProjectRoute(
   projectId: string | null | undefined
 ): OpenCodeProjectRouteState {
   const { connection, connectionQuery, projectsQuery } = useOpenCodeProjects()
-  const projects = projectsQuery.data ?? emptyProjects
+  const projects = projectsQuery.data
   const selectedProject = resolveProject(projects, projectId)
-  const selectedDirectory = selectedProject?.worktree ?? null
+  const selectedDirectory = selectedProject?.directory ?? null
   const { sessionsQuery } = useProjectSessions(selectedDirectory)
   const sessions = sessionsQuery.data ?? emptySessions
 
@@ -515,26 +534,29 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
 }
 
 export function getProjectRouteId(project: OpenCodeProject | ChatProject, index = 0): string {
-  return (
-    getStringFromRecord(project, 'id') ??
-    getStringFromRecord(project, 'worktree')?.replaceAll('/', '-') ??
-    `project-${index}`
-  )
+  const directory =
+    getStringFromRecord(project, 'directory') ?? getStringFromRecord(project, 'worktree')
+  if (directory) return getProjectDirectoryRouteId(directory)
+
+  return getStringFromRecord(project, 'id') ?? `project-${index}`
 }
 
 function resolveProject(
-  projects: OpenCodeProject[],
+  projects: OpenCodeOpenedProject[],
   projectId: string | null | undefined
-): OpenCodeProject | null {
+): OpenCodeOpenedProject | null {
   if (!projectId) return null
   return projects.find((project, index) => getProjectRouteId(project, index) === projectId) ?? null
 }
 
-function mapOpenedProject(project: OpenCodeCurrentProject): OpenCodeChatOpenedProject {
+function mapOpenedProject(input: {
+  folder: { directory: string }
+  project: OpenCodeCurrentProject
+}): OpenCodeChatOpenedProject {
   return {
-    name: project.name ?? 'Unknown project',
-    directory: project.worktree ?? 'Unknown directory',
-    id: project.id ?? 'Unknown ID'
+    name: input.project.name ?? basename(input.folder.directory) ?? 'Unknown project',
+    directory: input.folder.directory,
+    id: getProjectDirectoryRouteId(input.folder.directory)
   }
 }
 
@@ -542,16 +564,16 @@ function getOpenProjectStatusMessage(
   openedDirectory: string | null,
   isLoading: boolean,
   error: unknown,
-  project: OpenCodeCurrentProject | undefined
+  openedProject: { folder: { directory: string } } | undefined
 ): string | null {
   if (!openedDirectory) return null
   if (isLoading) return `Opening directory: ${openedDirectory}`
   if (error) return `Project open error: ${formatUnknownError(error)}`
-  if (project) return `Opened project: ${project.worktree ?? openedDirectory}`
+  if (openedProject) return `Opened project: ${openedProject.folder.directory}`
   return null
 }
 
-function mapProjects(projects: OpenCodeProject[]): ChatProject[] {
+function mapProjects(projects: OpenCodeOpenedProject[]): ChatProject[] {
   return projects.map(mapProject)
 }
 
@@ -559,10 +581,11 @@ function mapSessionsToChats(sessions: OpenCodeSession[]): ProjectChat[] {
   return sessions.map(mapSessionToChat)
 }
 
-function mapProject(project: OpenCodeProject, index: number): ChatProject {
+function mapProject(project: OpenCodeOpenedProject, index: number): ChatProject {
   return {
     id: getProjectRouteId(project, index),
-    name: projectLabel(project, index)
+    name: projectLabel(project, index),
+    directory: project.directory
   }
 }
 
@@ -617,7 +640,7 @@ function getShellEmptyMessage(
   projectCount: number
 ): string | null {
   if (connection === null) return 'Waiting for the OpenCode sidecar connection.'
-  if (projectsLoaded && projectCount === 0) return 'No OpenCode projects found.'
+  if (projectsLoaded && projectCount === 0) return 'No opened project folders yet.'
   return null
 }
 
@@ -667,7 +690,7 @@ function getProjectEmptyMessage(
   connection: unknown,
   projectId: string | null | undefined,
   projectsLoaded: boolean,
-  project: OpenCodeProject | null,
+  project: OpenCodeOpenedProject | null,
   sessionsLoaded: boolean,
   sessionCount: number
 ): string | null {
@@ -682,7 +705,7 @@ function getProjectTranscriptStatusMessage(
   connection: unknown,
   projectId: string | null | undefined,
   projectsLoaded: boolean,
-  project: OpenCodeProject | null
+  project: OpenCodeOpenedProject | null
 ): string | null {
   if (!projectId) return null
   if (connection === null) return 'Waiting for the OpenCode sidecar connection.'
@@ -733,8 +756,20 @@ function formatUnknownError(error: unknown): string {
     return String(error)
   }
 }
-function projectLabel(project: OpenCodeProject, index: number): string {
-  return project.name || basename(project.worktree) || project.id || `Project ${index + 1}`
+function projectLabel(project: OpenCodeOpenedProject, index: number): string {
+  return project.name || basename(project.directory) || project.id || `Project ${index + 1}`
+}
+
+function getProjectDirectoryRouteId(directory: string): string {
+  return `dir-${base64UrlEncode(directory)}`
+}
+
+function base64UrlEncode(value: string): string {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
 }
 function basename(path: string | undefined): string | null {
   if (!path) return null
