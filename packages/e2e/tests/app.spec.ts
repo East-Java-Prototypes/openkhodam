@@ -1167,7 +1167,7 @@ test('renders assistant markdown without changing user, reasoning, or tool text'
   await expect(userArticle).toContainText('**literal user markdown**')
   await expect(userArticle.locator('strong')).toHaveCount(0)
 
-  const reasoning = markdownArticle.locator('section').filter({
+  const reasoning = markdownArticle.locator('p').filter({
     hasText: 'Need **file context** before responding.'
   })
   await expect(reasoning).toBeVisible()
