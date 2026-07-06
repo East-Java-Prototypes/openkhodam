@@ -54,7 +54,11 @@ function ReasoningPart({
 }: {
   part: Extract<ChatMessagePart, { type: 'reasoning' }>
 }): JSX.Element {
-  return <p className="whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground/80">{part.text}</p>
+  return (
+    <p className="whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground/80">
+      {part.text}
+    </p>
+  )
 }
 
 function StatusPart({ part }: { part: Extract<ChatMessagePart, { type: 'status' }> }): JSX.Element {
