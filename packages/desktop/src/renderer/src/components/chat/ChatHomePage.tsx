@@ -359,6 +359,8 @@ function ProjectChatSidebar({
                     project={chatProject}
                     routeProject={project}
                     session={session}
+                    isRemoving={shell.removingProjectDirectory === chatProject.directory}
+                    onRemoveProject={shell.removeOpenedProject}
                     areActiveProjectSessionsVisible={areActiveProjectSessionsVisible}
                     onActiveProjectSessionsToggle={onActiveProjectSessionsToggle}
                   />
@@ -579,16 +581,56 @@ function ProjectNewConversationLink({ project }: { project: ChatProject }): JSX.
   )
 }
 
+function ProjectRemoveButton({
+  project,
+  isRemoving,
+  onRemoveProject
+}: {
+  project: ChatProject
+  isRemoving: boolean
+  onRemoveProject: (project: ChatProject) => void
+}): JSX.Element {
+  const label = `Remove ${project.name} from Projects`
+
+  const handleClick = useCallback(
+    (event: MouseEvent<HTMLButtonElement>): void => {
+      event.preventDefault()
+      event.stopPropagation()
+      onRemoveProject(project)
+    },
+    [onRemoveProject, project]
+  )
+
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="ghost"
+      className="size-10 shrink-0 text-base leading-none"
+      disabled={isRemoving || !project.directory}
+      aria-label={label}
+      title={label}
+      onClick={handleClick}
+    >
+      <span aria-hidden="true">×</span>
+    </Button>
+  )
+}
+
 function ProjectWithSessions({
   project,
   routeProject,
   session,
+  isRemoving,
+  onRemoveProject,
   areActiveProjectSessionsVisible,
   onActiveProjectSessionsToggle
 }: {
   project: ChatProject
   routeProject?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
+  isRemoving: boolean
+  onRemoveProject: (project: ChatProject) => void
   areActiveProjectSessionsVisible: boolean
   onActiveProjectSessionsToggle: () => void
 }): JSX.Element {
@@ -604,6 +646,11 @@ function ProjectWithSessions({
           />
         </div>
         <ProjectNewConversationLink project={project} />
+        <ProjectRemoveButton
+          project={project}
+          isRemoving={isRemoving}
+          onRemoveProject={onRemoveProject}
+        />
       </div>
       {isActive && areActiveProjectSessionsVisible ? (
         <SelectedProjectSessions project={routeProject} session={session} />

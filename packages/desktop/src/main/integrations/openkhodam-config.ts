@@ -1,6 +1,11 @@
-import { join } from 'node:path'
+import { join, normalize, parse } from 'node:path'
 
-import type { GoogleWorkspaceIntegrationStatus } from '@openkhodam/ui/types'
+import type {
+  GoogleWorkspaceIntegrationStatus,
+  OpenProjectFolderInput,
+  OpenedProjectFolder,
+  RemoveProjectFolderInput
+} from '@openkhodam/ui/types'
 
 import { JsonConfigFile } from '../config/json-config-file'
 
@@ -19,6 +24,9 @@ export type GoogleWorkspaceTokenConfig = {
 
 export type OpenKhodamConfig = {
   version: 1
+  projects: {
+    openedFolders: OpenedProjectFolder[]
+  }
   integrations: {
     googleWorkspace: {
       account: GoogleWorkspaceAccountConfig | null
@@ -53,6 +61,49 @@ export class OpenKhodamConfigFileStore {
 
   async getGoogleWorkspaceStatus(configured: boolean): Promise<GoogleWorkspaceIntegrationStatus> {
     return toGoogleWorkspaceStatus(await this.read(), configured)
+  }
+
+  async listOpenedProjectFolders(): Promise<OpenedProjectFolder[]> {
+    return (await this.read()).projects.openedFolders
+  }
+
+  async recordOpenedProjectFolder(input: OpenProjectFolderInput): Promise<OpenedProjectFolder> {
+    const directory = normalizeOpenedProjectDirectory(input.directory)
+    if (!directory) throw new Error('Project directory is required.')
+
+    const openedFolder = { directory, lastOpenedAt: Date.now() }
+    const config = await this.read()
+    config.projects.openedFolders = normalizeOpenedProjectFolders([
+      ...config.projects.openedFolders.filter(
+        (folder) =>
+          openedProjectDirectoryKey(folder.directory) !== openedProjectDirectoryKey(directory)
+      ),
+      openedFolder
+    ])
+    await this.write(config)
+    return openedFolder
+  }
+
+  async removeOpenedProjectFolder(
+    input: RemoveProjectFolderInput
+  ): Promise<OpenedProjectFolder | null> {
+    const directory = normalizeOpenedProjectDirectory(input.directory)
+    if (!directory) throw new Error('Project directory is required.')
+
+    const config = await this.read()
+    const directoryKey = openedProjectDirectoryKey(directory)
+    const removedFolder =
+      config.projects.openedFolders.find(
+        (folder) => openedProjectDirectoryKey(folder.directory) === directoryKey
+      ) ?? null
+
+    if (!removedFolder) return null
+
+    config.projects.openedFolders = config.projects.openedFolders.filter(
+      (folder) => openedProjectDirectoryKey(folder.directory) !== directoryKey
+    )
+    await this.write(config)
+    return removedFolder
   }
 
   async setGoogleWorkspaceConnection(
@@ -93,6 +144,9 @@ export class OpenKhodamConfigStore extends OpenKhodamConfigFileStore {
 export function createDefaultConfig(): OpenKhodamConfig {
   return {
     version: 1,
+    projects: {
+      openedFolders: []
+    },
     integrations: {
       googleWorkspace: {
         account: null,
@@ -150,6 +204,9 @@ function normalizeConfig(value: unknown): OpenKhodamConfig {
   const google = config.integrations?.googleWorkspace
   return {
     version: 1,
+    projects: {
+      openedFolders: normalizeOpenedProjectFolders(config.projects?.openedFolders)
+    },
     integrations: {
       googleWorkspace: {
         account: google?.account
@@ -174,4 +231,53 @@ function normalizeConfig(value: unknown): OpenKhodamConfig {
       }
     }
   }
+}
+
+function normalizeOpenedProjectFolders(value: unknown): OpenedProjectFolder[] {
+  if (!Array.isArray(value)) return []
+
+  const folders = new Map<string, OpenedProjectFolder>()
+  for (const item of value) {
+    if (!isRecord(item)) continue
+
+    const directory = normalizeOpenedProjectDirectory(item.directory)
+    if (!directory) continue
+
+    const lastOpenedAt = normalizeLastOpenedAt(item.lastOpenedAt)
+    const key = openedProjectDirectoryKey(directory)
+    const existing = folders.get(key)
+    if (existing && existing.lastOpenedAt > lastOpenedAt) continue
+
+    folders.set(key, { directory, lastOpenedAt })
+  }
+
+  return [...folders.values()].sort(
+    (left, right) =>
+      right.lastOpenedAt - left.lastOpenedAt || left.directory.localeCompare(right.directory)
+  )
+}
+
+function normalizeOpenedProjectDirectory(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+
+  const directory = value.trim()
+  if (!directory) return null
+
+  const normalized = normalize(directory)
+  const root = parse(normalized).root
+  if (normalized === root) return normalized
+
+  return normalized.replace(/[\\/]+$/, '') || normalized
+}
+
+function normalizeLastOpenedAt(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function openedProjectDirectoryKey(directory: string): string {
+  return process.platform === 'win32' ? directory.toLocaleLowerCase() : directory
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }

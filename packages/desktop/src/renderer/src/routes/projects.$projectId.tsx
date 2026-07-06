@@ -44,6 +44,13 @@ function ProjectRoute(): JSX.Element {
     },
     [navigate]
   )
+  const navigateHomeAfterActiveProjectRemoval = useCallback(
+    (project: { id: string }) => {
+      if (project.id !== projectId) return
+      void navigate({ to: '/' })
+    },
+    [navigate, projectId]
+  )
   const toggleActiveProjectSessions = useCallback(() => {
     void navigate({
       to: router.state.location.pathname,
@@ -51,7 +58,7 @@ function ProjectRoute(): JSX.Element {
       replace: true
     })
   }, [areActiveProjectSessionsVisible, navigate, router])
-  const shell = useOpenCodeChatShell(navigateToOpenedProject)
+  const shell = useOpenCodeChatShell(navigateToOpenedProject, navigateHomeAfterActiveProjectRemoval)
   const project = useOpenCodeProjectRoute(projectId)
   return (
     <OpenCodeProjectRouteProvider project={project}>

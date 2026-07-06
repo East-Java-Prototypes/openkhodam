@@ -48,6 +48,17 @@ export type GoogleWorkspaceIntegrationStatus =
       updatedAt: number
     }
 
+export type OpenedProjectFolder = {
+  directory: string
+  lastOpenedAt: number
+}
+
+export type OpenProjectFolderInput = {
+  directory: string
+}
+
+export type RemoveProjectFolderInput = OpenProjectFolderInput
+
 export type LinkedGoogleDoc = {
   artifactPath: string | null
   id: string

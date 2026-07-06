@@ -78,6 +78,13 @@ app.whenReady().then(() => {
   ipcMain.handle('google-workspace:connect', () => googleWorkspace.connect())
   ipcMain.handle('google-workspace:cancel-connect', () => googleWorkspace.cancelConnect())
   ipcMain.handle('google-workspace:disconnect', () => googleWorkspace.disconnect())
+  ipcMain.handle('projects:list-opened-folders', () => openKhodamConfig.listOpenedProjectFolders())
+  ipcMain.handle('projects:record-opened-folder', (_event, input) =>
+    openKhodamConfig.recordOpenedProjectFolder(input)
+  )
+  ipcMain.handle('projects:remove-opened-folder', (_event, input) =>
+    openKhodamConfig.removeOpenedProjectFolder(input)
+  )
   ipcMain.handle('project-artifacts:list-project', (_event, input) =>
     projectArtifacts.listProjectArtifacts(input)
   )

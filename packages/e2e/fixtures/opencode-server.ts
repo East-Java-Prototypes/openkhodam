@@ -31,6 +31,13 @@ const project = {
   time: { created: now, updated: now },
   sandboxes: []
 }
+const rootProject = {
+  id: 'global',
+  name: 'Global',
+  worktree: '/',
+  time: { created: now, updated: now },
+  sandboxes: []
+}
 const connectedProviderID = 'fake-provider'
 const connectedModelID = 'fake-connected-model'
 const disconnectedProviderID = 'offline-provider'
@@ -118,10 +125,10 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       return json(response, { healthy: true, version: 'fake-stable' })
     }
     if (request.method === 'GET' && url.pathname === '/project') {
-      return json(response, [project])
+      return json(response, [project, rootProject])
     }
     if (request.method === 'GET' && url.pathname === '/project/current') {
-      return json(response, project)
+      return json(response, projectForDirectory(url.searchParams.get('directory') ?? directory))
     }
     if (request.method === 'GET' && url.pathname === '/provider') {
       return json(response, providers)
@@ -203,6 +210,17 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     url: `http://127.0.0.1:${address.port}`,
     getPromptRequests: () => [...promptRequests],
     close: () => new Promise((resolve) => server.close(() => resolve()))
+  }
+}
+
+function projectForDirectory(projectDirectory: string): typeof project {
+  if (projectDirectory === directory) return project
+
+  return {
+    ...project,
+    id: 'global',
+    name: 'Global',
+    worktree: projectDirectory
   }
 }
 

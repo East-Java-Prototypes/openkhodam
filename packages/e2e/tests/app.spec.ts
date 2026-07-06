@@ -11,6 +11,7 @@ const projectArtifactsDirectory = join(fakeProjectDirectory, '.openkhodam')
 const projectArtifactsFile = join(projectArtifactsDirectory, 'artifacts.json')
 const googleWorkspaceNotConfiguredMessage =
   'Google OAuth client ID or client secret is not configured.'
+const emptyOpenedProjectsMessage = 'No opened project folders yet.'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
 const fixtureLinkedDocUrl = 'https://docs.google.com/document/d/fixture-linked-doc/edit'
 const arbitraryLinkedDocUrl = 'https://example.test/document/d/arbitrary-linked-doc/edit'
@@ -200,6 +201,33 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByText('OpenCode', { exact: true })).toHaveCount(0)
 }
 
+async function expectFreshProjectSidebarWithoutRawOpenCodeProjects(page: Page): Promise<void> {
+  await expect(projectChatLink(page).filter({ hasText: 'Fake Project' })).toHaveCount(0)
+  await expect(
+    page.getByRole('navigation', { name: 'Projects' }).getByText(fakeProjectDirectory, {
+      exact: true
+    })
+  ).toHaveCount(0)
+  await expect(projectChatLink(page).filter({ hasText: 'Global' })).toHaveCount(0)
+  await expect(page.getByText(emptyOpenedProjectsMessage)).toBeVisible()
+}
+
+async function recordOpenedProjectFolder(page: Page, directory: string): Promise<void> {
+  await page.evaluate((projectDirectory) => {
+    return window.api.recordOpenedProjectFolder({ directory: projectDirectory })
+  }, directory)
+}
+
+async function seedOpenedFakeProject(page: Page): Promise<void> {
+  await waitForChatShell(page)
+  if ((await projectChatLink(page).filter({ hasText: 'Fake Project' }).count()) > 0) return
+
+  await recordOpenedProjectFolder(page, fakeProjectDirectory)
+  await page.reload()
+  await waitForChatShell(page)
+  await expect(projectChatLink(page).filter({ hasText: 'Fake Project' })).toBeVisible()
+}
+
 async function expectChatComposerWithoutHelperCopy(page: Page): Promise<void> {
   const chatPrompt = page.getByRole('form', { name: 'Chat prompt' })
 
@@ -334,7 +362,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 }
 
 async function openSeededDeterministicChat(page: Page): Promise<void> {
-  await waitForChatShell(page)
+  await seedOpenedFakeProject(page)
   await expect(projectChatLink(page).filter({ hasText: 'Fake Project' })).toBeVisible()
   await projectChatLink(page).filter({ hasText: 'Fake Project' }).click()
   await expect(page.evaluate(() => window.location.hash)).resolves.toMatch(/\/projects\/[^/]+$/)
@@ -352,7 +380,7 @@ async function openSeededDeterministicChat(page: Page): Promise<void> {
 }
 
 async function openStructuredFixtureChat(page: Page): Promise<void> {
-  await waitForChatShell(page)
+  await seedOpenedFakeProject(page)
   await expect(projectChatLink(page).filter({ hasText: 'Fake Project' })).toBeVisible()
   await projectChatLink(page).filter({ hasText: 'Fake Project' }).click()
   await expectOpenedProjectRouteResolved(page)
@@ -486,7 +514,7 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   await expect(
     appWindow
       .getByText('Waiting for the OpenCode sidecar connection.')
-      .or(appWindow.getByText('No OpenCode projects found.'))
+      .or(appWindow.getByText(emptyOpenedProjectsMessage))
       .or(projectChatLink(appWindow))
       .first()
   ).toBeVisible()
@@ -516,6 +544,7 @@ test('renders basename project labels and opens the project new-conversation she
     })
   })
 
+  await recordOpenedProjectFolder(appWindow, fakeProjectDirectory)
   await appWindow.reload()
   await waitForChatShell(appWindow)
 
@@ -543,19 +572,19 @@ test('renders basename project labels and opens the project new-conversation she
 
   await fallbackProjectLink.click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/fallback-project$/
+    /\/projects\/dir-[^/]+$/
   )
   await expectOpenedProjectRouteResolved(appWindow)
   await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/fallback-project\/sessions\/seeded-session$/
+    /\/projects\/dir-[^/]+\/sessions\/seeded-session$/
   )
   await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
 
   await newConversationLink.click()
   await expect
     .poll(() => appWindow.evaluate(() => window.location.hash))
-    .toMatch(/\/projects\/fallback-project$/)
+    .toMatch(/\/projects\/dir-[^/]+$/)
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
     'showActiveProjectSessions'
   )
@@ -622,7 +651,7 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
 test('toggles active project sessions without collapsing the project sidebar', async ({
   appWindow
 }) => {
-  await waitForChatShell(appWindow)
+  await seedOpenedFakeProject(appWindow)
 
   const fakeProjectLink = projectChatLink(appWindow).filter({ hasText: 'Fake Project' })
   await expect(fakeProjectLink).toBeVisible()
@@ -666,14 +695,14 @@ test('toggles active project sessions without collapsing the project sidebar', a
 
   await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/fake-project\/sessions\/seeded-session$/
+    /\/projects\/[^/]+\/sessions\/seeded-session$/
   )
   await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
 
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
   await expect
     .poll(() => appWindow.evaluate(() => window.location.hash))
-    .toMatch(/\/projects\/fake-project\/sessions\/seeded-session\?showActiveProjectSessions=false$/)
+    .toMatch(/\/projects\/[^/]+\/sessions\/seeded-session\?showActiveProjectSessions=false$/)
   await expect(projectSidebar(appWindow)).toBeVisible()
   await expect(collapsedProjectSidebarRail(appWindow)).toHaveCount(0)
   await expect(selectedProjectSessions(appWindow)).toHaveCount(0)
@@ -681,7 +710,7 @@ test('toggles active project sessions without collapsing the project sidebar', a
 
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/fake-project\/sessions\/seeded-session$/
+    /\/projects\/[^/]+\/sessions\/seeded-session$/
   )
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
     'showActiveProjectSessions'
@@ -700,7 +729,7 @@ test('toggles active project sessions without collapsing the project sidebar', a
 
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/fake-project$/
+    /\/projects\/[^/]+$/
   )
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
     'showActiveProjectSessions'
@@ -902,27 +931,62 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
   }
 })
 
-test('opens a project by directory from the final chat shell', async ({ appWindow }) => {
+test('opens a project by directory from the final chat shell, persists it, and removes it', async ({
+  appWindow
+}) => {
   await waitForChatShell(appWindow)
+  await expectFreshProjectSidebarWithoutRawOpenCodeProjects(appWindow)
 
   const directoryInput = appWindow.getByLabel('Project directory')
   const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
   const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
 
   await expect(openButton).toBeDisabled()
-  await directoryInput.fill(repositoryDirectory)
+  await directoryInput.fill(fakeProjectDirectory)
   await expect(openButton).toBeEnabled()
 
   await openButton.click()
-  await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
+  await expect
+    .poll(() => appWindow.evaluate(() => window.location.hash))
+    .toMatch(/\/projects\/dir-/)
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
   await expectOpenedProjectRouteResolved(appWindow)
+
+  await expect
+    .poll(() =>
+      appWindow.evaluate(() => window.api.listOpenedProjectFolders().then((folders) => folders))
+    )
+    .toEqual([
+      expect.objectContaining({
+        directory: fakeProjectDirectory,
+        lastOpenedAt: expect.any(Number)
+      })
+    ])
+  await expect(projectChatLink(appWindow).filter({ hasText: 'Fake Project' })).toBeVisible()
+
+  const projectUrl = appWindow.url()
+  await appWindow.reload()
+  await expect(appWindow).toHaveURL(projectUrl)
+  await expect(projectChatLink(appWindow).filter({ hasText: 'Fake Project' })).toBeVisible()
+  await expect(selectedProjectSessions(appWindow)).toBeVisible()
+
+  await appWindow
+    .getByRole('navigation', { name: 'Projects' })
+    .getByRole('button', { name: 'Remove Fake Project from Projects', exact: true })
+    .click()
+  await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/#\/$/)
+  await expect(projectChatLink(appWindow).filter({ hasText: 'Fake Project' })).toHaveCount(0)
+  await expect
+    .poll(() => appWindow.evaluate(() => window.api.listOpenedProjectFolders()))
+    .toEqual([])
+  await expect(appWindow.getByText(emptyOpenedProjectsMessage)).toBeVisible()
 })
 
-test('opens a project by directory into the project route with start composer', async ({
+test('opens a project by directory into a directory-derived project route with start composer', async ({
   appWindow
 }) => {
   await waitForChatShell(appWindow)
+  await expectFreshProjectSidebarWithoutRawOpenCodeProjects(appWindow)
 
   const directoryInput = appWindow.getByLabel('Project directory')
   const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
@@ -931,23 +995,23 @@ test('opens a project by directory into the project route with start composer', 
   await directoryInput.fill(repositoryDirectory)
   await expect(openButton).toBeEnabled()
   await openButton.click()
-  await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
+  await expect
+    .poll(() => appWindow.evaluate(() => window.location.hash))
+    .toMatch(/\/projects\/dir-/)
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
+    '/projects/global'
+  )
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
   await expectOpenedProjectRouteResolved(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expectChatComposerWithoutHelperCopy(appWindow)
 })
 
-test('shows the real OpenCode project chats surface', async ({ appWindow }) => {
+test('keeps raw OpenCode projects out of a fresh opened-projects sidebar', async ({
+  appWindow
+}) => {
   await waitForChatShell(appWindow)
-
-  await expect(
-    appWindow
-      .getByText('No OpenCode projects found.')
-      .or(appWindow.getByText('Waiting for the OpenCode sidecar connection.'))
-      .or(projectChatLink(appWindow))
-      .first()
-  ).toBeVisible()
+  await expectFreshProjectSidebarWithoutRawOpenCodeProjects(appWindow)
 })
 
 test('keeps a selected empty session transcript quiet', async ({
@@ -962,7 +1026,7 @@ test('keeps a selected empty session transcript quiet', async ({
   expect(createResponse.ok).toBe(true)
   const emptySession = (await createResponse.json()) as { id: string; title: string }
 
-  await waitForChatShell(appWindow)
+  await seedOpenedFakeProject(appWindow)
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
   await expectOpenedProjectRouteResolved(appWindow)
   await sessionChatLink(appWindow).filter({ hasText: emptySession.title }).click()
@@ -979,11 +1043,11 @@ test('keeps a selected empty session transcript quiet', async ({
 })
 
 test('shows real project/session selection in the reused chat shell', async ({ appWindow }) => {
-  await waitForChatShell(appWindow)
+  await seedOpenedFakeProject(appWindow)
 
   const projectLinks = projectChatLink(appWindow)
   const terminalProjectState = appWindow
-    .getByText('No OpenCode projects found.')
+    .getByText(emptyOpenedProjectsMessage)
     .or(appWindow.getByText('Waiting for the OpenCode sidecar connection.'))
     .or(projectLinks)
     .first()
@@ -1063,7 +1127,7 @@ test('renders seeded stable chat messages', async ({ appWindow }) => {
 })
 
 test('filters parented subagent sessions from normal chat rendering', async ({ appWindow }) => {
-  await waitForChatShell(appWindow)
+  await seedOpenedFakeProject(appWindow)
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
   await expectOpenedProjectRouteResolved(appWindow)
 
@@ -1079,12 +1143,15 @@ test('filters parented subagent sessions from normal chat rendering', async ({ a
   await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
   await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
 
-  await appWindow.evaluate(() => {
-    window.location.hash = '#/projects/fake-project/sessions/child-subagent-session'
-  })
+  const projectHash = await appWindow.evaluate(() => window.location.hash)
+  const projectRoute = projectHash.match(/#(\/projects\/[^/]+)/)?.[1]
+  if (!projectRoute) throw new Error(`Expected project route in hash: ${projectHash}`)
+  await appWindow.evaluate((route) => {
+    window.location.hash = `#${route}/sessions/child-subagent-session`
+  }, projectRoute)
   await expect
     .poll(() => appWindow.evaluate(() => window.location.hash))
-    .toMatch(/\/projects\/fake-project\/sessions\/child-subagent-session$/)
+    .toMatch(/\/projects\/[^/]+\/sessions\/child-subagent-session$/)
   await expect(appWindow.getByText('Session not found.')).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(appWindow.getByRole('button', { name: 'Send' })).toBeDisabled()
@@ -1267,7 +1334,7 @@ test('keeps a long collapsed tool disclosure anchored when opening it', async ({
 })
 
 test('shows only connected OpenCode models in the composer picker', async ({ appWindow }) => {
-  await waitForChatShell(appWindow)
+  await seedOpenedFakeProject(appWindow)
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
 
   const modelPicker = appWindow.getByLabel('OpenCode model')
@@ -1385,7 +1452,7 @@ test('sends selected agent model and effort through the OpenCode prompt flow', a
 })
 
 test('starts a new stable chat from the project route', async ({ appWindow }) => {
-  await waitForChatShell(appWindow)
+  await seedOpenedFakeProject(appWindow)
 
   const projectLinks = projectChatLink(appWindow)
   await expect(projectLinks.first()).toBeVisible()
