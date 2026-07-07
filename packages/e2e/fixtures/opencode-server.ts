@@ -15,6 +15,7 @@ export type FakeOpenCodeServer = {
   waitForOAuthAuthorize: (providerID: string) => Promise<void>
   releaseOAuthAuthorize: (providerID: string) => void
   waitForOAuthAuthorizeSettlement: (providerID: string) => Promise<void>
+  getAbortRequests: () => FakeAbortRequest[]
   close: () => Promise<void>
 }
 
@@ -33,6 +34,10 @@ export type FakeProviderManagementRequest = {
 }
 
 export type FakeOAuthRequest = { providerID: string; type: 'authorize' | 'callback' }
+
+export type FakeAbortRequest = {
+  sessionID: string
+}
 
 export type FakePromptRequest = {
   sessionID: string
@@ -53,6 +58,7 @@ const pendingPrompts = new Map<
 const sessionStatuses = new Map<string, { type: 'busy' | 'retry' }>()
 const promptRequests: FakePromptRequest[] = []
 const requestEvents: string[] = []
+const abortRequests: FakeAbortRequest[] = []
 let promptIdSequence = 0
 let newSessionSequence = 1
 let stableMessageSequence = 0
@@ -494,9 +500,11 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       }
 
       requestEvents.push(`abort:${sessionID}`)
+      abortRequests.push({ sessionID })
       pendingPrompts.delete(sessionID)
+      sessionStatuses.delete(sessionID)
       session.time.updated = Date.now()
-      return json(response, session)
+      return json(response, true)
     }
     const revertMatch = url.pathname.match(/^\/session\/([^/]+)\/revert$/)
     if (request.method === 'POST' && revertMatch) {
@@ -532,6 +540,7 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     url: `http://127.0.0.1:${address.port}`,
     getPromptRequests: () => [...promptRequests],
     getRequestEvents: () => [...requestEvents],
+    getAbortRequests: () => [...abortRequests],
     getProviderManagementRequests: () =>
       providerManagementRequests.map((request) => ({ ...request })),
     getProviderAuthRequests: () => providerAuthRequests.map((request) => ({ ...request })),
@@ -650,6 +659,7 @@ function resetState(): void {
   didFailProviderConnect = false
   promptRequests.length = 0
   requestEvents.length = 0
+  abortRequests.length = 0
   promptIdSequence = 0
   newSessionSequence = 1
   stableMessageSequence = 0
