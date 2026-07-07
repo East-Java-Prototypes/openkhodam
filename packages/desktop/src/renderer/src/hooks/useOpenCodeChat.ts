@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useOpenCodeSdk, type createOpenCodeClient } from './opencode/client'
 import { Identifier } from './opencode/id'
 import {
@@ -10,6 +10,7 @@ import {
 import type { OpenCodeModelSelection } from './useOpenCodeModels'
 
 type OpenCodeClient = ReturnType<typeof createOpenCodeClient>
+type OpenCodeStatusSnapshot = Parameters<typeof projectSessionsQueryKey>[0]
 type SessionCreateParameters = Parameters<OpenCodeClient['session']['create']>[0]
 
 export type OpenCodePromptOptions = {
@@ -136,6 +137,31 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
   return { status, statusQuery, connection, connectionQuery, startConversationMutation }
 }
 
+export function useAbortOpenCodeSession(
+  directory: string | null | undefined,
+  sessionID: string | null | undefined
+) {
+  const queryClient = useQueryClient()
+  const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
+
+  const abortSessionMutation = useMutation({
+    mutationFn: async () => {
+      if (connection === null) throw new Error('OpenCode sidecar is not connected.')
+      if (!directory) throw new Error('Select a project before stopping generation.')
+      if (!sessionID) throw new Error('Select a session before stopping generation.')
+
+      const response = await client!.session.abort({ sessionID, directory })
+      if (response.error) throw response.error
+      return { aborted: response.data === true, sessionID }
+    },
+    onSettled: async () => {
+      await invalidateSessionRunQueries(queryClient, status, directory, sessionID)
+    }
+  })
+
+  return { status, statusQuery, connection, connectionQuery, abortSessionMutation }
+}
+
 export function useUndoOpenCodePrompt(
   directory: string | null | undefined,
   sessionID: string | null | undefined
@@ -183,6 +209,24 @@ export function useUndoOpenCodePrompt(
   })
 
   return { status, statusQuery, connection, connectionQuery, undoPromptMutation }
+}
+
+async function invalidateSessionRunQueries(
+  queryClient: QueryClient,
+  status: OpenCodeStatusSnapshot,
+  directory: string | null | undefined,
+  sessionID: string | null | undefined
+): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) }),
+    queryClient.invalidateQueries({ queryKey: sessionStatusQueryKey(status, directory) }),
+    queryClient.invalidateQueries({
+      queryKey: openCodeSessionQueryKey(status, directory, sessionID)
+    }),
+    queryClient.invalidateQueries({
+      queryKey: sessionMessagesQueryKey(status, directory, sessionID)
+    })
+  ])
 }
 
 function createOptimisticMessageID(): string {

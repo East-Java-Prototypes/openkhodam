@@ -10,6 +10,7 @@ import {
 import {
   type OpenCodePromptOptions,
   type OpenCodeAdmittedPrompt,
+  useAbortOpenCodeSession,
   useSendOpenCodePrompt,
   useStartOpenCodeConversation,
   useUndoOpenCodePrompt
@@ -112,8 +113,10 @@ export type OpenCodeSessionRouteState = {
   isLoading: boolean
   isSending: boolean
   isUndoingPrompt: boolean
+  isStoppingGeneration: boolean
   canSendPrompt: boolean
   canUndoPrompt: boolean
+  canStopGeneration: boolean
   emptyMessage: string | null
   transcriptStatusMessage: string | null
   errorMessage: string | null
@@ -137,6 +140,7 @@ export type OpenCodeSessionRouteState = {
   setPromptText: (value: string) => void
   sendPrompt: () => void
   undoLastPrompt: () => void
+  stopGeneration: () => void
 }
 
 export type OpenCodeChatInterfaceState = OpenCodeChatShellState &
@@ -315,6 +319,10 @@ export function useOpenCodeSessionRoute(
     directory,
     sessionID
   )
+  const { abortSessionMutation, connection: abortConnection } = useAbortOpenCodeSession(
+    directory,
+    sessionID
+  )
   const messages = messagesQuery.data ?? emptyMessages
   const sessionEventErrorsQuery = useQuery({
     queryKey: openCodeSessionEventErrorsQueryKey,
@@ -331,6 +339,9 @@ export function useOpenCodeSessionRoute(
   )
   const isSending = sendPromptMutation.isPending
   const isUndoingPrompt = undoPromptMutation.isPending
+  const isStoppingGeneration = abortSessionMutation.isPending
+  const sessionStatus = sessionID ? sessionStatusesQuery.data?.[sessionID] : undefined
+  const isGenerationActive = isActiveSessionStatus(sessionStatus)
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
   const revertMessageID = activeSession ? getSessionRevertMessageID(fetchedSession) : null
 
@@ -444,6 +455,7 @@ export function useOpenCodeSessionRoute(
       (sessionQuery.isLoading && activeSessionFromList === null) || messagesQuery.isLoading,
     isSending,
     isUndoingPrompt,
+    isStoppingGeneration,
     canSendPrompt:
       Boolean(directory) &&
       promptText.trim().length > 0 &&
@@ -452,13 +464,20 @@ export function useOpenCodeSessionRoute(
       canSendToActiveSession &&
       sendConnection !== null &&
       !isSending &&
-      !isUndoingPrompt,
+      !isUndoingPrompt &&
+      !isStoppingGeneration,
     canUndoPrompt:
       Boolean(directory) &&
       canSendToActiveSession &&
       undoConnection !== null &&
       lastVisibleUserPrompt !== null &&
       !isUndoingPrompt,
+    canStopGeneration:
+      Boolean(directory) &&
+      canSendToActiveSession &&
+      abortConnection !== null &&
+      isGenerationActive &&
+      !isStoppingGeneration,
     emptyMessage: getSessionEmptyMessage(
       sessionID,
       sessionQuery.isSuccess,
@@ -474,8 +493,10 @@ export function useOpenCodeSessionRoute(
     errorMessage: firstErrorMessage(
       activeSession ? null : sessionQuery.error,
       messagesQuery.error,
+      sessionStatusesQuery.error,
       sendPromptMutation.error,
       undoPromptMutation.error,
+      abortSessionMutation.error,
       sessionEventError?.message
     ),
     successMessage: null,
@@ -529,8 +550,36 @@ export function useOpenCodeSessionRoute(
           }
         }
       )
+    },
+    stopGeneration: () => {
+      if (
+        !directory ||
+        !sessionID ||
+        !canSendToActiveSession ||
+        abortConnection === null ||
+        !isGenerationActive ||
+        isStoppingGeneration
+      )
+        return
+
+      abortSessionMutation.mutate(undefined, {
+        onSuccess: () => {
+          clearAdmittedPromptHandoff(sessionID)
+          setOptimisticPrompts((current) =>
+            current.filter((prompt) => prompt.sessionID !== sessionID)
+          )
+          setAwaitingPrompts((current) =>
+            current.filter((prompt) => prompt.sessionID !== sessionID)
+          )
+        }
+      })
     }
   }
+}
+
+function clearAdmittedPromptHandoff(sessionID: string | null | undefined): void {
+  if (!sessionID) return
+  sessionStorage.removeItem(`opencode-admitted-prompt:${sessionID}`)
 }
 
 type UndoPromptTarget = {

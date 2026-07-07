@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LinkedGoogleArtifact } from '@openkhodam/ui/types'
+import { SquareIcon } from 'lucide-react'
 import {
   createContext,
   useCallback,
@@ -835,10 +836,13 @@ export function ActiveChatPanel({
                 promptText={session.promptText}
                 setPromptText={session.setPromptText}
                 sendPrompt={session.sendPrompt}
+                stopGeneration={session.stopGeneration}
                 canSendPrompt={session.canSendPrompt}
                 canUndoPrompt={session.canUndoPrompt}
+                canStopGeneration={session.canStopGeneration}
                 isSending={session.isSending}
                 isUndoingPrompt={session.isUndoingPrompt}
+                isStoppingGeneration={session.isStoppingGeneration}
                 undoLastPrompt={session.undoLastPrompt}
                 modelOptions={session.modelOptions}
                 agentOptions={session.agentOptions}
@@ -913,8 +917,11 @@ export function ProjectRouteActivePane({
             promptText={startConversation.promptText}
             setPromptText={startConversation.setPromptText}
             sendPrompt={() => startConversation.startConversation()}
+            stopGeneration={noop}
             canSendPrompt={startConversation.canSendPrompt}
+            canStopGeneration={false}
             isSending={startConversation.isSending}
+            isStoppingGeneration={false}
             modelOptions={startConversation.modelOptions}
             agentOptions={startConversation.agentOptions}
             effortOptions={startConversation.effortOptions}
@@ -1130,10 +1137,13 @@ function ChatPromptComposer({
   promptText,
   setPromptText,
   sendPrompt,
+  stopGeneration = noop,
   canSendPrompt,
   canUndoPrompt = false,
+  canStopGeneration = false,
   isSending,
   isUndoingPrompt = false,
+  isStoppingGeneration = false,
   undoLastPrompt = noop,
   modelOptions,
   agentOptions,
@@ -1150,10 +1160,13 @@ function ChatPromptComposer({
   promptText: string
   setPromptText: (value: string) => void
   sendPrompt: () => void
+  stopGeneration?: () => void
   canSendPrompt: boolean
   canUndoPrompt?: boolean
+  canStopGeneration?: boolean
   isSending: boolean
   isUndoingPrompt?: boolean
+  isStoppingGeneration?: boolean
   undoLastPrompt?: () => void
   modelOptions: OpenCodeModelOption[]
   agentOptions: OpenCodeAgentOption[]
@@ -1182,6 +1195,7 @@ function ChatPromptComposer({
   const isSlashCommandPopoverOpen = slashCommandQuery !== null && !isSlashCommandPopoverDismissed
   const canSubmitPrompt = isExactUndoCommand ? canRunUndoCommand : canSendPrompt
   const isComposerBusy = isSending || isUndoingPrompt
+  const isStopVisible = canStopGeneration || isStoppingGeneration
 
   useEffect(() => {
     if (!isSlashCommandPopoverOpen) return
@@ -1321,9 +1335,23 @@ function ChatPromptComposer({
                 />
               ) : null}
             </div>
-            <InputGroupButton type="submit" disabled={!canSubmitPrompt}>
-              {isUndoingPrompt ? 'Undoing…' : isSending ? 'Sending…' : 'Send'}
-            </InputGroupButton>
+            <div className="flex shrink-0 items-center gap-2">
+              {isStopVisible ? (
+                <InputGroupButton
+                  type="button"
+                  size="icon-sm"
+                  aria-label="Stop generation"
+                  title="Stop generation"
+                  disabled={!canStopGeneration || isStoppingGeneration}
+                  onClick={stopGeneration}
+                >
+                  <SquareIcon aria-hidden="true" />
+                </InputGroupButton>
+              ) : null}
+              <InputGroupButton type="submit" disabled={!canSubmitPrompt}>
+                {isUndoingPrompt ? 'Undoing…' : isSending ? 'Sending…' : 'Send'}
+              </InputGroupButton>
+            </div>
           </InputGroupAddon>
         </InputGroup>
         <PopoverContent
