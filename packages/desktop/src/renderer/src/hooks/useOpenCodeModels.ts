@@ -212,7 +212,9 @@ function isProviderModelPayload(model: unknown): model is ProviderModelPayload {
 }
 
 function readStringArrayProperty(value: unknown, property: string): string[] {
-  return readArrayProperty(value, property).filter((item): item is string => typeof item === 'string')
+  return readArrayProperty(value, property).filter(
+    (item): item is string => typeof item === 'string'
+  )
 }
 
 function readArrayProperty(value: unknown, property: string): unknown[] {

@@ -102,8 +102,7 @@ function normalizePart(part: unknown, fallbackId: string): ChatMessagePart | nul
     id,
     type: 'unknown',
     label: type,
-    text:
-      readStringProperty(part, 'text') ?? readStringProperty(part, 'content') ?? stringify(part)
+    text: readStringProperty(part, 'text') ?? readStringProperty(part, 'content') ?? stringify(part)
   }
 }
 
@@ -133,8 +132,7 @@ function normalizeTool(value: unknown, id: string): ChatMessagePart {
       readStringProperty(value, 'tool') ??
       readStringProperty(value, 'command') ??
       'tool',
-    status:
-      readStringProperty(value, 'status') ?? readStringProperty(state, 'status') ?? 'updated',
+    status: readStringProperty(value, 'status') ?? readStringProperty(state, 'status') ?? 'updated',
     title: readStringProperty(value, 'title') ?? undefined,
     input: valueToText(input) ?? undefined,
     output: output ?? undefined,
@@ -246,5 +244,7 @@ function firstPresent(...values: unknown[]): unknown {
 function valueToText(value: unknown): string | null {
   if (value === undefined || value === null) return null
   if (typeof value === 'string') return value.length > 0 ? value : null
-  return readStringProperty(value, 'message') ?? readStringProperty(value, 'text') ?? stringify(value)
+  return (
+    readStringProperty(value, 'message') ?? readStringProperty(value, 'text') ?? stringify(value)
+  )
 }
