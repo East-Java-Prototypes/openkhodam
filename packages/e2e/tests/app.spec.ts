@@ -1173,10 +1173,34 @@ test('renders assistant markdown without changing user, reasoning, or tool text'
   await expect(markdownArticle).not.toContainText('**bold assistant phrase**')
   await expect(markdownArticle).not.toContainText('```')
   await expect(
-    markdownArticle.locator(
-      'img, h1, h2, h3, h4, h5, h6, blockquote, table, thead, tbody, tr, th, td, input[type="checkbox"]'
-    )
+    markdownArticle.getByRole('heading', { name: 'Supported assistant heading', level: 2 })
+  ).toBeVisible()
+
+  const markdownTable = markdownArticle.locator('table').filter({ hasText: 'alpha' })
+  await expect(markdownTable).toBeVisible()
+  await expect(markdownTable.locator('thead th')).toHaveText(['supported', 'table', 'wide content'])
+  await expect(markdownTable.locator('tbody tr').first().locator('td')).toHaveText([
+    'alpha',
+    'beta',
+    'exceptionally-long-unbroken-table-value-for-overflow-handling-0123456789-abcdefghijklmnopqrstuvwxyz'
+  ])
+  const tableContainer = markdownArticle.locator('[data-slot="markdown-table-container"]').first()
+  await expect(tableContainer).toBeVisible()
+  const tableOverflow = await tableContainer.evaluate((container) => ({
+    clientWidth: container.clientWidth,
+    overflowX: window.getComputedStyle(container).overflowX,
+    scrollWidth: container.scrollWidth
+  }))
+  expect(tableOverflow.overflowX).toMatch(/auto|scroll/)
+  expect(tableOverflow.scrollWidth).toBeGreaterThan(tableOverflow.clientWidth)
+  const messageSurface = markdownArticle.locator('[data-slot="message-surface"]').first()
+  const tableContainerBox = await elementBox(tableContainer, 'assistant markdown table container')
+  const messageSurfaceBox = await elementBox(messageSurface, 'assistant markdown message surface')
+  expect(tableContainerBox.width).toBeLessThanOrEqual(messageSurfaceBox.width)
+  await expect(
+    markdownArticle.locator('img, blockquote, input[type="checkbox"], [data-raw-html-fixture="blocked"]')
   ).toHaveCount(0)
+  await expect(markdownArticle).not.toContainText('unsupported raw html block')
 
   await expect(userArticle).toContainText('**literal user markdown**')
   await expect(userArticle.locator('strong')).toHaveCount(0)

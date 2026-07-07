@@ -4,11 +4,52 @@ import remarkGfm from 'remark-gfm'
 
 import { cn } from '@/lib/utils'
 
-const allowedMarkdownElements = ['p', 'strong', 'em', 'ul', 'ol', 'li', 'a', 'code', 'pre', 'br']
+const allowedMarkdownElements = [
+  'p',
+  'strong',
+  'em',
+  'ul',
+  'ol',
+  'li',
+  'a',
+  'code',
+  'pre',
+  'br',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'table',
+  'thead',
+  'tbody',
+  'tr',
+  'th',
+  'td'
+]
 
 const markdownComponents: Components = {
   p({ children }) {
     return <p className="mb-2.5 leading-6 last:mb-0">{children}</p>
+  },
+  h1({ children }) {
+    return <h1 className="mb-2 mt-3 text-base font-semibold leading-6 first:mt-0">{children}</h1>
+  },
+  h2({ children }) {
+    return <h2 className="mb-2 mt-3 text-[0.95rem] font-semibold leading-6 first:mt-0">{children}</h2>
+  },
+  h3({ children }) {
+    return <h3 className="mb-1.5 mt-2.5 text-sm font-semibold leading-5 first:mt-0">{children}</h3>
+  },
+  h4({ children }) {
+    return <h4 className="mb-1.5 mt-2.5 text-sm font-semibold leading-5 first:mt-0">{children}</h4>
+  },
+  h5({ children }) {
+    return <h5 className="mb-1.5 mt-2.5 text-sm font-semibold leading-5 first:mt-0">{children}</h5>
+  },
+  h6({ children }) {
+    return <h6 className="mb-1.5 mt-2.5 text-sm font-semibold leading-5 first:mt-0">{children}</h6>
   },
   strong({ children }) {
     return <strong className="font-semibold">{children}</strong>
@@ -60,6 +101,33 @@ const markdownComponents: Components = {
         {children}
       </pre>
     )
+  },
+  table({ children }) {
+    return (
+      <div
+        data-slot="markdown-table-container"
+        className="my-3 max-w-full overflow-x-auto rounded-md border border-border/70"
+      >
+        <table className="w-max min-w-full border-collapse text-left text-[0.8125rem] leading-5">
+          {children}
+        </table>
+      </div>
+    )
+  },
+  thead({ children }) {
+    return <thead className="bg-muted/60">{children}</thead>
+  },
+  tbody({ children }) {
+    return <tbody>{children}</tbody>
+  },
+  tr({ children }) {
+    return <tr className="border-b border-border/60 last:border-b-0">{children}</tr>
+  },
+  th({ children }) {
+    return <th className="whitespace-nowrap px-2.5 py-1.5 font-semibold align-top">{children}</th>
+  },
+  td({ children }) {
+    return <td className="whitespace-nowrap px-2.5 py-1.5 align-top">{children}</td>
   }
 }
 
