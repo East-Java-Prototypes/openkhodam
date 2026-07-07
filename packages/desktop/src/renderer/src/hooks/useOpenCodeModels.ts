@@ -8,6 +8,12 @@ type OpenCodeClient = ReturnType<typeof createOpenCodeClient>
 type ProviderListResponse = NonNullable<
   Awaited<ReturnType<OpenCodeClient['provider']['list']>>['data']
 >
+type ProviderListItem = ProviderListResponse['all'][number]
+type ProviderModel = ProviderListItem['models'][string]
+type ConnectedProviderPayload = Pick<ProviderListItem, 'id'> &
+  Partial<Pick<ProviderListItem, 'models' | 'name'>>
+type ProviderModelPayload = Pick<ProviderModel, 'id'> &
+  Partial<Pick<ProviderModel, 'name' | 'variants'>>
 
 export type OpenCodeModelSelection = {
   providerID: string
@@ -107,21 +113,19 @@ export function useOpenCodeModels(directory: string | null | undefined) {
 }
 
 function normalizeModelOptions(data: ProviderListResponse | undefined): OpenCodeModelOption[] {
-  if (!isRecord(data)) return []
-  const connected = new Set(getStringArray(data.connected))
-  return getArray(data.all)
-    .filter(
-      (provider): provider is Record<string, unknown> =>
-        isRecord(provider) && connected.has(getString(provider.id))
+  const connected = new Set(readStringArrayProperty(data, 'connected'))
+  return readArrayProperty(data, 'all')
+    .filter((provider): provider is ConnectedProviderPayload =>
+      isConnectedProvider(provider, connected)
     )
     .flatMap((provider) =>
-      Object.values(isRecord(provider.models) ? provider.models : {})
-        .filter(isRecord)
+      Object.values(readObjectProperty(provider, 'models') ?? {})
+        .filter(isProviderModelPayload)
         .map((model) => {
-          const providerID = getString(provider.id)
-          const modelID = getString(model.id)
-          const providerName = getString(provider.name) || providerID
-          const modelName = getString(model.name) || modelID
+          const providerID = provider.id
+          const modelID = model.id
+          const providerName = readStringProperty(provider, 'name') || providerID
+          const modelName = readStringProperty(model, 'name') || modelID
           return {
             id: `${providerID}/${modelID}`,
             providerID,
@@ -148,10 +152,11 @@ function getEffortOptions(selectedModel: OpenCodeModelOption | null): OpenCodeMo
   ]
 }
 
-function getModelVariantIDs(model: Record<string, unknown>): string[] {
-  if (!isRecord(model.variants)) return []
-  return Object.entries(model.variants)
-    .filter(([, variant]) => !(isRecord(variant) && variant.disabled === true))
+function getModelVariantIDs(model: ProviderModelPayload): string[] {
+  const variants = readObjectProperty(model, 'variants')
+  if (!variants) return []
+  return Object.entries(variants)
+    .filter(([, variant]) => readBooleanProperty(variant, 'disabled') !== true)
     .map(([variantID]) => variantID.trim())
     .filter((variantID) => variantID.length > 0)
     .sort(compareVariantIDs)
@@ -183,11 +188,10 @@ function getDefaultModelID(
   data: ProviderListResponse | undefined,
   options: OpenCodeModelOption[]
 ): string | null {
-  if (!isRecord(data)) return null
-  const connected = new Set(getStringArray(data.connected))
-  const defaults = isRecord(data.default) ? data.default : {}
+  const connected = new Set(readStringArrayProperty(data, 'connected'))
+  const defaults = readObjectProperty(data, 'default')
   for (const providerID of connected) {
-    const modelID = getString(defaults[providerID])
+    const modelID = readStringValue(defaults?.[providerID])
     if (!modelID) continue
     const id = `${providerID}/${modelID}`
     if (options.some((option) => option.id === id)) return id
@@ -195,20 +199,50 @@ function getDefaultModelID(
   return null
 }
 
-function getArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
+function isConnectedProvider(
+  provider: unknown,
+  connected: Set<string>
+): provider is ConnectedProviderPayload {
+  const providerID = readStringProperty(provider, 'id')
+  return providerID.length > 0 && connected.has(providerID)
 }
 
-function getStringArray(value: unknown): string[] {
-  return getArray(value).filter((item): item is string => typeof item === 'string')
+function isProviderModelPayload(model: unknown): model is ProviderModelPayload {
+  return readStringProperty(model, 'id').length > 0
 }
 
-function getString(value: unknown): string {
+function readStringArrayProperty(value: unknown, property: string): string[] {
+  return readArrayProperty(value, property).filter((item): item is string => typeof item === 'string')
+}
+
+function readArrayProperty(value: unknown, property: string): unknown[] {
+  const propertyValue = readProperty(value, property)
+  return Array.isArray(propertyValue) ? propertyValue : []
+}
+
+function readObjectProperty(value: unknown, property: string): Record<string, unknown> | null {
+  const propertyValue = readProperty(value, property)
+  return typeof propertyValue === 'object' && propertyValue !== null
+    ? (propertyValue as Record<string, unknown>)
+    : null
+}
+
+function readStringProperty(value: unknown, property: string): string {
+  return readStringValue(readProperty(value, property))
+}
+
+function readStringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+function readBooleanProperty(value: unknown, property: string): boolean | null {
+  const propertyValue = readProperty(value, property)
+  return typeof propertyValue === 'boolean' ? propertyValue : null
+}
+
+function readProperty(value: unknown, property: string): unknown {
+  if (typeof value !== 'object' || value === null) return undefined
+  return (value as { [key: string]: unknown })[property]
 }
 
 function getModelHelperText(

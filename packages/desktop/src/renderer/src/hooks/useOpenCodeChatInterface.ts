@@ -588,8 +588,8 @@ export function useOpenCodeChatInterface(): OpenCodeChatInterfaceState {
 
 export function getProjectRouteId(project: OpenCodeProject | ChatProject, index = 0): string {
   return (
-    getStringFromRecord(project, 'id') ??
-    getStringFromRecord(project, 'worktree')?.replaceAll('/', '-') ??
+    readStringProperty(project, 'id') ??
+    readStringProperty(project, 'worktree')?.replaceAll('/', '-') ??
     `project-${index}`
   )
 }
@@ -792,15 +792,15 @@ function firstErrorMessage(...errors: unknown[]): string | null {
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) return error.message
   if (typeof error === 'string') return error
-  if (!isRecord(error)) return String(error)
   const message =
-    getStringFromRecord(error, 'message') ??
-    getStringFromRecord(error, 'detail') ??
-    getStringFromRecord(error, '_tag') ??
-    getStringFromRecord(error, 'name')
+    readStringProperty(error, 'message') ??
+    readStringProperty(error, 'detail') ??
+    readStringProperty(error, '_tag') ??
+    readStringProperty(error, 'name')
   if (message) return message
   try {
-    return JSON.stringify(error)
+    const serialized = JSON.stringify(error)
+    return typeof serialized === 'string' ? serialized : String(error)
   } catch {
     return String(error)
   }
@@ -816,19 +816,19 @@ function basename(path: string | undefined): string | null {
   return parts[parts.length - 1] || null
 }
 function getSessionId(session: OpenCodeSession | OpenCodeSessionDetails): string | null {
-  return getStringFromRecord(session, 'id') ?? getStringFromRecord(session, 'sessionID')
+  return readStringProperty(session, 'id') ?? readStringProperty(session, 'sessionID')
 }
 function getSessionTitle(session: OpenCodeSession | OpenCodeSessionDetails): string | null {
-  return getStringFromRecord(session, 'title') ?? getStringFromRecord(session, 'name')
+  return readStringProperty(session, 'title') ?? readStringProperty(session, 'name')
 }
 function getSessionTime(session: OpenCodeSession | OpenCodeSessionDetails): TimeValue {
-  const time = getRecordProperty(session, 'time')
+  const time = readObjectProperty(session, 'time')
   return (
-    getTimeFromRecord(time, 'updated') ??
-    getTimeFromRecord(time, 'created') ??
-    getTimeFromRecord(session, 'updated') ??
-    getTimeFromRecord(session, 'updatedAt') ??
-    getTimeFromRecord(session, 'time')
+    readTimeProperty(time, 'updated') ??
+    readTimeProperty(time, 'created') ??
+    readTimeProperty(session, 'updated') ??
+    readTimeProperty(session, 'updatedAt') ??
+    readTimeProperty(session, 'time')
   )
 }
 function formatTime(value: TimeValue): string {
@@ -838,21 +838,23 @@ function formatTime(value: TimeValue): string {
     ? String(value)
     : date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
-function getTimeFromRecord(value: unknown, property: string): TimeValue {
-  if (!isRecord(value) || !(property in value)) return null
-  const propertyValue = value[property]
+function readTimeProperty(value: unknown, property: string): TimeValue {
+  const propertyValue = readProperty(value, property)
   if (typeof propertyValue === 'string' && propertyValue.length > 0) return propertyValue
   if (typeof propertyValue === 'number') return propertyValue
   return null
 }
-function getStringFromRecord(value: unknown, property: string): string | null {
-  if (!isRecord(value) || !(property in value)) return null
-  const propertyValue = value[property]
+function readStringProperty(value: unknown, property: string): string | null {
+  const propertyValue = readProperty(value, property)
   return typeof propertyValue === 'string' && propertyValue.length > 0 ? propertyValue : null
 }
-function getRecordProperty(value: unknown, property: string): Record<string, unknown> | null {
-  return isRecord(value) && isRecord(value[property]) ? value[property] : null
+function readObjectProperty(value: unknown, property: string): Record<string, unknown> | null {
+  const propertyValue = readProperty(value, property)
+  return typeof propertyValue === 'object' && propertyValue !== null
+    ? (propertyValue as Record<string, unknown>)
+    : null
 }
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+function readProperty(value: unknown, property: string): unknown {
+  if (typeof value !== 'object' || value === null) return undefined
+  return (value as { [key: string]: unknown })[property]
 }

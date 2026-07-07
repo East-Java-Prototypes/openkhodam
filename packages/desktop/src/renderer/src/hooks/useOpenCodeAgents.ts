@@ -8,6 +8,9 @@ type OpenCodeClient = ReturnType<typeof createOpenCodeClient>
 type AgentListResponse = NonNullable<
   Awaited<ReturnType<OpenCodeClient['v2']['agent']['list']>>['data']
 >
+type AgentListItem = AgentListResponse extends { data: ReadonlyArray<infer Agent> } ? Agent : never
+type SelectableAgentPayload = Pick<AgentListItem, 'id' | 'mode'> &
+  Partial<Pick<AgentListItem, 'description' | 'hidden'>>
 
 export type OpenCodeAgentOption = {
   id: string
@@ -65,20 +68,14 @@ export function useOpenCodeAgents(directory: string | null | undefined) {
 }
 
 function normalizeAgentOptions(data: AgentListResponse | undefined): OpenCodeAgentOption[] {
-  if (!isRecord(data)) return []
-  return getArray(data.data)
-    .filter(isRecord)
-    .filter((agent) => {
-      const mode = getString(agent.mode)
-      return agent.hidden !== true && (mode === 'primary' || mode === 'all')
-    })
+  return getAgentListItems(data)
+    .filter(isSelectableAgent)
     .map((agent) => {
-      const id = getString(agent.id)
-      const mode: OpenCodeAgentOption['mode'] = getString(agent.mode) === 'all' ? 'all' : 'primary'
-      const description = getString(agent.description) || null
+      const mode: OpenCodeAgentOption['mode'] = agent.mode === 'all' ? 'all' : 'primary'
+      const description = readStringProperty(agent, 'description') || null
       return {
-        id,
-        label: humanizeAgentID(id),
+        id: agent.id,
+        label: humanizeAgentID(agent.id),
         description,
         mode
       }
@@ -95,16 +92,33 @@ function humanizeAgentID(id: string): string {
     .join(' ')
 }
 
-function getArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
+function getAgentListItems(data: AgentListResponse | undefined): AgentListItem[] {
+  return Array.isArray(data?.data) ? [...data.data] : []
 }
 
-function getString(value: unknown): string {
-  return typeof value === 'string' ? value : ''
+function isSelectableAgent(agent: unknown): agent is SelectableAgentPayload {
+  const id = readStringProperty(agent, 'id')
+  const mode = readStringProperty(agent, 'mode')
+  return id.length > 0 && readBooleanProperty(agent, 'hidden') !== true && isSelectableMode(mode)
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+function isSelectableMode(mode: string): mode is OpenCodeAgentOption['mode'] {
+  return mode === 'primary' || mode === 'all'
+}
+
+function readStringProperty(value: unknown, property: string): string {
+  const propertyValue = readProperty(value, property)
+  return typeof propertyValue === 'string' ? propertyValue : ''
+}
+
+function readBooleanProperty(value: unknown, property: string): boolean | null {
+  const propertyValue = readProperty(value, property)
+  return typeof propertyValue === 'boolean' ? propertyValue : null
+}
+
+function readProperty(value: unknown, property: string): unknown {
+  if (typeof value !== 'object' || value === null) return undefined
+  return (value as { [key: string]: unknown })[property]
 }
 
 function formatUnknownError(error: unknown): string {

@@ -29,30 +29,30 @@ function normalizeParts(message: unknown): ChatMessagePart[] {
   const v2 = normalizeV2Message(message)
   if (v2) return v2
   const parts =
-    getArrayProperty(message, 'parts') ??
-    getArrayProperty(getRecordProperty(message, 'info'), 'parts')
+    readArrayProperty(message, 'parts') ??
+    readArrayProperty(readObjectProperty(message, 'info'), 'parts')
   return compactParts((parts ?? []).map((part, index) => normalizePart(part, `part-${index}`)))
 }
 
 function normalizeV2Message(message: unknown): ChatMessagePart[] | null {
-  const type = getStringFromRecord(message, 'type')
+  const type = readStringProperty(message, 'type')
   if (!type) return null
   if (type === 'user' || type === 'synthetic' || type === 'system')
-    return textParts(getStringFromRecord(message, 'text'), type)
+    return textParts(readStringProperty(message, 'text'), type)
   if (type === 'assistant')
     return compactParts(
-      (getArrayProperty(message, 'content') ?? []).map((part, index) =>
+      (readArrayProperty(message, 'content') ?? []).map((part, index) =>
         normalizePart(part, `content-${index}`)
       )
     )
-  if (type === 'shell' && isRecord(message)) return [normalizeTool(message, 'shell')]
+  if (type === 'shell') return [normalizeTool(message, 'shell')]
   if (type === 'compaction')
     return [
       {
         id: 'status-compaction',
         type: 'status',
         title: 'Session compacted',
-        text: getStringFromRecord(message, 'summary') ?? undefined
+        text: readStringProperty(message, 'summary') ?? undefined
       }
     ]
   if (type === 'agent-switched')
@@ -61,7 +61,7 @@ function normalizeV2Message(message: unknown): ChatMessagePart[] | null {
         id: 'status-agent',
         type: 'status',
         title: 'Agent switched',
-        text: getStringFromRecord(message, 'agent') ?? undefined
+        text: readStringProperty(message, 'agent') ?? undefined
       }
     ]
   if (type === 'model-switched')
@@ -70,7 +70,7 @@ function normalizeV2Message(message: unknown): ChatMessagePart[] | null {
         id: 'status-model',
         type: 'status',
         title: 'Model switched',
-        text: stringify(getRecordProperty(message, 'model'))
+        text: stringify(readObjectProperty(message, 'model'))
       }
     ]
   return [{ id: 'status-unknown', type: 'unknown', label: type, text: stringify(message) }]
@@ -78,19 +78,17 @@ function normalizeV2Message(message: unknown): ChatMessagePart[] | null {
 
 function normalizePart(part: unknown, fallbackId: string): ChatMessagePart | null {
   if (typeof part === 'string') return { id: fallbackId, type: 'text', text: part }
-  if (!isRecord(part))
-    return { id: fallbackId, type: 'unknown', label: 'part', text: stringify(part) }
-  const id = getStringFromRecord(part, 'id') ?? fallbackId
-  const type = getStringFromRecord(part, 'type') ?? 'part'
+  const id = readStringProperty(part, 'id') ?? fallbackId
+  const type = readStringProperty(part, 'type') ?? 'part'
   if (NON_RENDERABLE_PART_TYPES.has(type)) return null
   if (type === 'text')
     return {
       id,
       type: 'text',
-      text: getStringFromRecord(part, 'text') ?? getStringFromRecord(part, 'content') ?? ''
+      text: readStringProperty(part, 'text') ?? readStringProperty(part, 'content') ?? ''
     }
   if (type === 'reasoning') {
-    const text = getStringFromRecord(part, 'text') ?? getStringFromRecord(part, 'content')
+    const text = readStringProperty(part, 'text') ?? readStringProperty(part, 'content')
     if (!text?.trim()) return null
     return {
       id,
@@ -98,14 +96,14 @@ function normalizePart(part: unknown, fallbackId: string): ChatMessagePart | nul
       text
     }
   }
-  if (type === 'tool' || getStringFromRecord(part, 'tool') || getStringFromRecord(part, 'name'))
+  if (type === 'tool' || readStringProperty(part, 'tool') || readStringProperty(part, 'name'))
     return normalizeTool(part, id)
   return {
     id,
     type: 'unknown',
     label: type,
     text:
-      getStringFromRecord(part, 'text') ?? getStringFromRecord(part, 'content') ?? stringify(part)
+      readStringProperty(part, 'text') ?? readStringProperty(part, 'content') ?? stringify(part)
   }
 }
 
@@ -113,30 +111,31 @@ function compactParts(parts: Array<ChatMessagePart | null>): ChatMessagePart[] {
   return parts.filter((part): part is ChatMessagePart => part !== null)
 }
 
-function normalizeTool(value: Record<string, unknown>, id: string): ChatMessagePart {
-  const state = getRecordProperty(value, 'state')
+function normalizeTool(value: unknown, id: string): ChatMessagePart {
+  const state = readObjectProperty(value, 'state')
   const input = firstPresent(
-    getProperty(value, 'input'),
-    getProperty(state, 'input'),
-    getProperty(value, 'parameters'),
-    getProperty(state, 'parameters')
+    readProperty(value, 'input'),
+    readProperty(state, 'input'),
+    readProperty(value, 'parameters'),
+    readProperty(state, 'parameters')
   )
   const output =
-    valueToText(getProperty(value, 'output')) ??
-    valueToText(getProperty(state, 'output')) ??
-    contentItemsText(getArrayProperty(state, 'content'))
-  const error = valueToText(getProperty(value, 'error')) ?? valueToText(getProperty(state, 'error'))
+    valueToText(readProperty(value, 'output')) ??
+    valueToText(readProperty(state, 'output')) ??
+    contentItemsText(readArrayProperty(state, 'content'))
+  const error =
+    valueToText(readProperty(value, 'error')) ?? valueToText(readProperty(state, 'error'))
   return {
-    id: getStringFromRecord(value, 'id') ?? id,
+    id: readStringProperty(value, 'id') ?? id,
     type: 'tool',
     name:
-      getStringFromRecord(value, 'name') ??
-      getStringFromRecord(value, 'tool') ??
-      getStringFromRecord(value, 'command') ??
+      readStringProperty(value, 'name') ??
+      readStringProperty(value, 'tool') ??
+      readStringProperty(value, 'command') ??
       'tool',
     status:
-      getStringFromRecord(value, 'status') ?? getStringFromRecord(state, 'status') ?? 'updated',
-    title: getStringFromRecord(value, 'title') ?? undefined,
+      readStringProperty(value, 'status') ?? readStringProperty(state, 'status') ?? 'updated',
+    title: readStringProperty(value, 'title') ?? undefined,
     input: valueToText(input) ?? undefined,
     output: output ?? undefined,
     error: error ?? undefined
@@ -152,9 +151,7 @@ function contentItemsText(items: unknown[] | null): string | null {
       ?.map((item) =>
         typeof item === 'string'
           ? item
-          : isRecord(item)
-            ? (getStringFromRecord(item, 'text') ?? getStringFromRecord(item, 'url') ?? '')
-            : ''
+          : (readStringProperty(item, 'text') ?? readStringProperty(item, 'url') ?? '')
       )
       .filter(Boolean)
       .join('\n') || null
@@ -175,65 +172,65 @@ function partsToText(parts: ChatMessagePart[]): string {
     .join('\n')
 }
 function getDirectText(message: unknown): string | null {
-  return getStringFromRecord(message, 'text') ?? getStringFromRecord(message, 'content')
+  return readStringProperty(message, 'text') ?? readStringProperty(message, 'content')
 }
 function getMessageId(message: unknown): string | null {
-  const info = getRecordProperty(message, 'info')
+  const info = readObjectProperty(message, 'info')
   return (
-    getStringFromRecord(info, 'id') ??
-    getStringFromRecord(info, 'messageID') ??
-    getStringFromRecord(message, 'id') ??
-    getStringFromRecord(message, 'messageID')
+    readStringProperty(info, 'id') ??
+    readStringProperty(info, 'messageID') ??
+    readStringProperty(message, 'id') ??
+    readStringProperty(message, 'messageID')
   )
 }
 function getMessageRole(message: unknown): string | null {
-  const info = getRecordProperty(message, 'info')
+  const info = readObjectProperty(message, 'info')
   return (
-    getStringFromRecord(info, 'role') ??
-    getStringFromRecord(message, 'role') ??
-    getStringFromRecord(message, 'type')
+    readStringProperty(info, 'role') ??
+    readStringProperty(message, 'role') ??
+    readStringProperty(message, 'type')
   )
 }
 function getMessageParentID(message: unknown): string | null {
-  const info = getRecordProperty(message, 'info')
-  return getStringFromRecord(info, 'parentID') ?? getStringFromRecord(message, 'parentID')
+  const info = readObjectProperty(message, 'info')
+  return readStringProperty(info, 'parentID') ?? readStringProperty(message, 'parentID')
 }
 function getMessageTime(message: unknown): string | number | null {
-  const info = getRecordProperty(message, 'info')
-  const infoTime = getRecordProperty(info, 'time')
-  const time = getRecordProperty(message, 'time')
+  const info = readObjectProperty(message, 'info')
+  const infoTime = readObjectProperty(info, 'time')
+  const time = readObjectProperty(message, 'time')
   return (
-    getTimeFromRecord(infoTime, 'created') ??
-    getTimeFromRecord(infoTime, 'updated') ??
-    getTimeFromRecord(info, 'time') ??
-    getTimeFromRecord(info, 'createdAt') ??
-    getTimeFromRecord(time, 'created') ??
-    getTimeFromRecord(message, 'time')
+    readTimeProperty(infoTime, 'created') ??
+    readTimeProperty(infoTime, 'updated') ??
+    readTimeProperty(info, 'time') ??
+    readTimeProperty(info, 'createdAt') ??
+    readTimeProperty(time, 'created') ??
+    readTimeProperty(message, 'time')
   )
 }
-function getTimeFromRecord(value: unknown, property: string): string | number | null {
-  if (!isRecord(value) || !(property in value)) return null
-  const propertyValue = value[property]
+function readTimeProperty(value: unknown, property: string): string | number | null {
+  const propertyValue = readProperty(value, property)
   if (typeof propertyValue === 'string' && propertyValue.length > 0) return propertyValue
   if (typeof propertyValue === 'number') return propertyValue
   return null
 }
-function getStringFromRecord(value: unknown, property: string): string | null {
-  if (!isRecord(value) || !(property in value)) return null
-  const propertyValue = value[property]
+function readStringProperty(value: unknown, property: string): string | null {
+  const propertyValue = readProperty(value, property)
   return typeof propertyValue === 'string' && propertyValue.length > 0 ? propertyValue : null
 }
-function getProperty(value: unknown, property: string): unknown {
-  return isRecord(value) ? value[property] : undefined
+function readProperty(value: unknown, property: string): unknown {
+  if (typeof value !== 'object' || value === null) return undefined
+  return (value as { [key: string]: unknown })[property]
 }
-function getRecordProperty(value: unknown, property: string): Record<string, unknown> | null {
-  return isRecord(value) && isRecord(value[property]) ? value[property] : null
+function readObjectProperty(value: unknown, property: string): Record<string, unknown> | null {
+  const propertyValue = readProperty(value, property)
+  return typeof propertyValue === 'object' && propertyValue !== null
+    ? (propertyValue as Record<string, unknown>)
+    : null
 }
-function getArrayProperty(value: unknown, property: string): unknown[] | null {
-  return isRecord(value) && Array.isArray(value[property]) ? value[property] : null
-}
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+function readArrayProperty(value: unknown, property: string): unknown[] | null {
+  const propertyValue = readProperty(value, property)
+  return Array.isArray(propertyValue) ? propertyValue : null
 }
 function stringify(value: unknown): string {
   if (typeof value === 'string') return value
@@ -249,11 +246,5 @@ function firstPresent(...values: unknown[]): unknown {
 function valueToText(value: unknown): string | null {
   if (value === undefined || value === null) return null
   if (typeof value === 'string') return value.length > 0 ? value : null
-  if (isRecord(value))
-    return (
-      getStringFromRecord(value, 'message') ??
-      getStringFromRecord(value, 'text') ??
-      stringify(value)
-    )
-  return stringify(value)
+  return readStringProperty(value, 'message') ?? readStringProperty(value, 'text') ?? stringify(value)
 }

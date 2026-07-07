@@ -184,7 +184,7 @@ async function fetchSessionMessages(
 }
 
 export function isRenderableSession(session: OpenCodeSession | OpenCodeSessionDetails): boolean {
-  return getString(session, 'parentID') === null
+  return readStringProperty(session, 'parentID') === null
 }
 
 function isRenderableMessage(message: OpenCodeSessionMessage): boolean {
@@ -196,12 +196,12 @@ function compareMessages(a: OpenCodeSessionMessage, b: OpenCodeSessionMessage): 
 }
 
 function getMessageSortID(message: OpenCodeSessionMessage): string | null {
-  const info = isRecord(message.info) ? message.info : null
+  const info = readObjectProperty(message, 'info')
   return (
-    getString(info, 'id') ??
-    getString(info, 'messageID') ??
-    getString(message, 'id') ??
-    getString(message, 'messageID')
+    readStringProperty(info, 'id') ??
+    readStringProperty(info, 'messageID') ??
+    readStringProperty(message, 'id') ??
+    readStringProperty(message, 'messageID')
   )
 }
 
@@ -212,22 +212,37 @@ function logOpenCodeError(message: string, error: unknown, context: Record<strin
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) return error.message
   if (typeof error === 'string') return error
-  if (!isRecord(error)) return String(error)
-  const data = isRecord(error.data) ? error.data : null
+  const data = readObjectProperty(error, 'data')
   const message =
-    getString(error, 'message') ??
-    getString(data, 'message') ??
-    getString(error, '_tag') ??
-    getString(error, 'name')
-  return message ?? JSON.stringify(error)
+    readStringProperty(error, 'message') ??
+    readStringProperty(data, 'message') ??
+    readStringProperty(error, '_tag') ??
+    readStringProperty(error, 'name')
+  return message ?? stringifyUnknownError(error)
 }
 
-function getString(value: unknown, key: string): string | null {
-  if (!isRecord(value)) return null
-  const property = value[key]
+function readStringProperty(value: unknown, key: string): string | null {
+  const property = readProperty(value, key)
   return typeof property === 'string' && property.length > 0 ? property : null
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+function readObjectProperty(value: unknown, key: string): Record<string, unknown> | null {
+  const property = readProperty(value, key)
+  return typeof property === 'object' && property !== null
+    ? (property as Record<string, unknown>)
+    : null
+}
+
+function readProperty(value: unknown, key: string): unknown {
+  if (typeof value !== 'object' || value === null) return undefined
+  return (value as { [key: string]: unknown })[key]
+}
+
+function stringifyUnknownError(error: unknown): string {
+  try {
+    const serialized = JSON.stringify(error)
+    return typeof serialized === 'string' ? serialized : String(error)
+  } catch {
+    return String(error)
+  }
 }

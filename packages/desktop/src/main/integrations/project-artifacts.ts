@@ -50,6 +50,8 @@ type NormalizedLinkedGoogleDocRecord = {
   url: string | null
 }
 
+type JsonObject = { [key: string]: unknown }
+
 type FileStat = NonNullable<ReturnType<typeof lstatSync>>
 
 export type PersistGoogleDocDocumentArtifactInput = {
@@ -319,8 +321,8 @@ export function createDefaultProjectArtifactsConfig(): ProjectArtifactsConfig {
 }
 
 export function normalizeProjectArtifactsConfig(value: unknown): ProjectArtifactsConfig {
-  const config = isRecord(value) ? value : {}
-  const sessions = isRecord(config.sessions) ? config.sessions : {}
+  const config = getProjectArtifactsConfigFields(value)
+  const sessions = getProjectArtifactsSessions(config)
   const normalizedSessions: ProjectArtifactsConfig['sessions'] = {}
 
   for (const [rawSessionId, rawSessionDocs] of Object.entries(sessions)) {
@@ -520,25 +522,26 @@ function normalizeSessionLinkedDocs(value: unknown): LinkedGoogleDoc[] {
 }
 
 function normalizeStoredLinkedGoogleDoc(value: unknown): LinkedGoogleDoc | null {
-  if (!isRecord(value)) return null
+  const doc = getStoredLinkedGoogleDocFields(value)
+  if (!doc) return null
 
-  const id = normalizeStoredString(value.id)
+  const id = normalizeStoredString(doc.id)
   if (!id) return null
 
   const firstSeenAt =
-    normalizeStoredTimestamp(value.firstSeenAt) ?? normalizeStoredTimestamp(value.lastSeenAt) ?? 0
-  const lastSeenAt = normalizeStoredTimestamp(value.lastSeenAt) ?? firstSeenAt
+    normalizeStoredTimestamp(doc.firstSeenAt) ?? normalizeStoredTimestamp(doc.lastSeenAt) ?? 0
+  const lastSeenAt = normalizeStoredTimestamp(doc.lastSeenAt) ?? firstSeenAt
 
   return {
-    artifactPath: normalizeStoredArtifactPath(value.artifactPath),
+    artifactPath: normalizeStoredArtifactPath(doc.artifactPath),
     id,
-    title: normalizeStoredString(value.title),
-    url: normalizeStoredUrl(value.url),
-    listed: typeof value.listed === 'boolean' ? value.listed : true,
+    title: normalizeStoredString(doc.title),
+    url: normalizeStoredUrl(doc.url),
+    listed: typeof doc.listed === 'boolean' ? doc.listed : true,
     firstSeenAt,
     lastSeenAt,
-    firstMessageId: normalizeStoredString(value.firstMessageId),
-    lastMessageId: normalizeStoredString(value.lastMessageId)
+    firstMessageId: normalizeStoredString(doc.firstMessageId),
+    lastMessageId: normalizeStoredString(doc.lastMessageId)
   }
 }
 
@@ -562,13 +565,14 @@ function mergeLinkedGoogleDocs(
 function normalizeLinkedGoogleDocRecordInput(
   value: LinkedGoogleDocRecord
 ): NormalizedLinkedGoogleDocRecord {
-  if (!isRecord(value)) throw new Error('Linked Google Doc record must be an object.')
+  const doc = getLinkedGoogleDocRecordInputFields(value)
+  if (!doc) throw new Error('Linked Google Doc record must be an object.')
 
   return {
-    artifactPath: normalizeInputArtifactPath(value.artifactPath),
-    id: normalizeRequiredString(value.id, 'doc.id'),
-    title: normalizeOptionalString(value.title),
-    url: normalizeInputUrl(value.url)
+    artifactPath: normalizeInputArtifactPath(doc.artifactPath),
+    id: normalizeRequiredString(doc.id, 'doc.id'),
+    title: normalizeOptionalString(doc.title),
+    url: normalizeInputUrl(doc.url)
   }
 }
 
@@ -773,8 +777,29 @@ function isSecretLikeFieldName(name: string): boolean {
   )
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function getProjectArtifactsConfigFields(value: unknown): JsonObject | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null
+}
+
+function getProjectArtifactsSessions(config: JsonObject | null): JsonObject {
+  const sessions = config?.sessions
+  return typeof sessions === 'object' && sessions !== null && !Array.isArray(sessions)
+    ? (sessions as JsonObject)
+    : {}
+}
+
+function getStoredLinkedGoogleDocFields(value: unknown): JsonObject | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null
+}
+
+function getLinkedGoogleDocRecordInputFields(value: unknown): JsonObject | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
