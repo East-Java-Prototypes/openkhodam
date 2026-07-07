@@ -37,7 +37,9 @@ const markdownComponents: Components = {
     return <h1 className="mb-2 mt-3 text-base font-semibold leading-6 first:mt-0">{children}</h1>
   },
   h2({ children }) {
-    return <h2 className="mb-2 mt-3 text-[0.95rem] font-semibold leading-6 first:mt-0">{children}</h2>
+    return (
+      <h2 className="mb-2 mt-3 text-[0.95rem] font-semibold leading-6 first:mt-0">{children}</h2>
+    )
   },
   h3({ children }) {
     return <h3 className="mb-1.5 mt-2.5 text-sm font-semibold leading-5 first:mt-0">{children}</h3>

@@ -1198,7 +1198,9 @@ test('renders assistant markdown without changing user, reasoning, or tool text'
   const messageSurfaceBox = await elementBox(messageSurface, 'assistant markdown message surface')
   expect(tableContainerBox.width).toBeLessThanOrEqual(messageSurfaceBox.width)
   await expect(
-    markdownArticle.locator('img, blockquote, input[type="checkbox"], [data-raw-html-fixture="blocked"]')
+    markdownArticle.locator(
+      'img, blockquote, input[type="checkbox"], [data-raw-html-fixture="blocked"]'
+    )
   ).toHaveCount(0)
   await expect(markdownArticle).not.toContainText('unsupported raw html block')
 
