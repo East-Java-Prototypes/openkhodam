@@ -1776,17 +1776,15 @@ test('stops a just-created session without restoring the admitted prompt handoff
   appWindow,
   fakeOpenCodeServer
 }) => {
-  await waitForChatShell(appWindow)
-
-  const directoryInput = appWindow.getByLabel('Project directory')
-  const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
-  const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
-
-  await directoryInput.fill(fakeProjectDirectory)
-  await expect(openButton).toBeEnabled()
-  await openButton.click()
-  await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
+  await seedOpenedFakeProject(appWindow)
+  const fakeProjectLink = projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).first()
+  await expect(fakeProjectLink).toBeVisible()
+  await fakeProjectLink.click()
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/[^/]+$/
+  )
   await expectOpenedProjectRouteResolved(appWindow)
+  await expectChatComposerWithoutHelperCopy(appWindow)
 
   const sessionID = 'new-session-2'
   const prompt = 'Abort just-created session prompt'
