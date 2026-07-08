@@ -1777,12 +1777,13 @@ test('stops a just-created session without restoring the admitted prompt handoff
   fakeOpenCodeServer
 }) => {
   await waitForChatShell(appWindow)
-  await appWindow.evaluate(() => {
-    window.location.hash = '#/projects/fake-project'
-  })
-  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/fake-project$/
-  )
+  const fakeProjectLink = projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).first()
+  await expect(fakeProjectLink).toBeVisible()
+  const fakeProjectHash = await fakeProjectLink.evaluate((link) => new URL(link.href).hash)
+  await appWindow.evaluate((hash) => {
+    window.location.hash = hash
+  }, fakeProjectHash)
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toBe(fakeProjectHash)
   await expectOpenedProjectRouteResolved(appWindow)
 
   const sessionID = 'new-session-2'
@@ -1818,6 +1819,7 @@ test('stops a just-created session without restoring the admitted prompt handoff
   await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(
     0
   )
+  await expect(messageTranscript(appWindow).getByText(/^(aborted|interrupted)$/i)).toHaveCount(0)
 
   const sessionUrl = appWindow.url()
   await appWindow.reload()
@@ -1828,6 +1830,7 @@ test('stops a just-created session without restoring the admitted prompt handoff
   )
   await expect(appWindow.getByText(prompt, { exact: true })).toHaveCount(0)
   await expect(appWindow.getByText(`Fake response for: ${prompt}`)).toHaveCount(0)
+  await expect(messageTranscript(appWindow).getByText(/^(aborted|interrupted)$/i)).toHaveCount(0)
 
   await appWindow.getByLabel('Message OpenKhodam').fill('Prompt after new-session stop')
   await expect(appWindow.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
@@ -1891,6 +1894,7 @@ test('stops active session generation before delayed projection', async ({
   await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(
     0
   )
+  await expect(messageTranscript(appWindow).getByText(/^(aborted|interrupted)$/i)).toHaveCount(0)
   await appWindow.waitForTimeout(1_600)
   await expect(appWindow.getByText(`Fake response for: ${prompt}`)).toHaveCount(0)
 

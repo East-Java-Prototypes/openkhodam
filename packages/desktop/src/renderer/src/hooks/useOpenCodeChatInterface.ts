@@ -46,6 +46,12 @@ const emptyMessages: unknown[] = []
 
 type TimeValue = string | number | null
 
+type StoppedGeneration = {
+  directory: string | null
+  sessionID: string
+  at: number
+}
+
 export type OpenCodeHeartbeatStatus = {
   connected: boolean
   ariaLabel: string
@@ -296,6 +302,7 @@ export function useOpenCodeSessionRoute(
   const [promptText, setPromptText] = useState('')
   const [optimisticPrompts, setOptimisticPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
   const [awaitingPrompts, setAwaitingPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
+  const [stoppedGeneration, setStoppedGeneration] = useState<StoppedGeneration | null>(null)
   const queryClient = useQueryClient()
   const { sessionQuery } = useOpenCodeSession(directory, sessionID)
   const sessionStatusesQuery = useSessionStatuses(directory)
@@ -335,8 +342,21 @@ export function useOpenCodeSessionRoute(
   })
   const sessionEventErrors = sessionEventErrorsQuery.data
   const sessionEventError = sessionEventErrors.find(
-    (error) => error.sessionID === sessionID || (!error.sessionID && error.directory === directory)
+    (error) =>
+      isMatchingSessionEventError(error, directory, sessionID) &&
+      !isBenignStoppedGenerationFeedback(error.message, stoppedGeneration, {
+        directory: error.directory,
+        sessionID: error.sessionID,
+        at: error.at
+      })
   )
+  const abortSessionError = isBenignStoppedGenerationFeedback(
+    abortSessionMutation.error,
+    stoppedGeneration,
+    { directory: directory ?? null, sessionID: sessionID ?? null, at: Date.now() }
+  )
+    ? null
+    : abortSessionMutation.error
   const isSending = sendPromptMutation.isPending
   const isUndoingPrompt = undoPromptMutation.isPending
   const isStoppingGeneration = abortSessionMutation.isPending
@@ -496,7 +516,7 @@ export function useOpenCodeSessionRoute(
       sessionStatusesQuery.error,
       sendPromptMutation.error,
       undoPromptMutation.error,
-      abortSessionMutation.error,
+      abortSessionError,
       sessionEventError?.message
     ),
     successMessage: null,
@@ -552,19 +572,13 @@ export function useOpenCodeSessionRoute(
       )
     },
     stopGeneration: () => {
-      if (
-        !directory ||
-        !sessionID ||
-        !canSendToActiveSession ||
-        abortConnection === null ||
-        !isGenerationActive ||
-        isStoppingGeneration
-      )
-        return
-
+      if (!canStopGeneration || !sessionID) return
+      const stopped: StoppedGeneration = { directory: directory ?? null, sessionID, at: Date.now() }
+      setStoppedGeneration(stopped)
       abortSessionMutation.mutate(undefined, {
         onSuccess: () => {
           clearAdmittedPromptHandoff(sessionID)
+          removeBenignStoppedGenerationErrors(queryClient, stopped)
           setOptimisticPrompts((current) =>
             current.filter((prompt) => prompt.sessionID !== sessionID)
           )
@@ -575,6 +589,53 @@ export function useOpenCodeSessionRoute(
       })
     }
   }
+}
+
+function isMatchingSessionEventError(
+  error: OpenCodeSessionEventError,
+  directory: string | null | undefined,
+  sessionID: string | null | undefined
+): boolean {
+  return error.sessionID === sessionID || (!error.sessionID && error.directory === directory)
+}
+
+function removeBenignStoppedGenerationErrors(
+  queryClient: ReturnType<typeof useQueryClient>,
+  stoppedGeneration: StoppedGeneration
+): void {
+  queryClient.setQueryData<OpenCodeSessionEventError[]>(
+    openCodeSessionEventErrorsQueryKey,
+    (current = []) =>
+      current.filter(
+        (error) =>
+          !isBenignStoppedGenerationFeedback(error.message, stoppedGeneration, {
+            directory: error.directory,
+            sessionID: error.sessionID,
+            at: error.at
+          })
+      )
+  )
+}
+
+function isBenignStoppedGenerationFeedback(
+  error: unknown,
+  stoppedGeneration: StoppedGeneration | null,
+  source: { directory: string | null; sessionID: string | null; at: number }
+): boolean {
+  if (!stoppedGeneration) return false
+  if (!isSameStoppedGenerationSource(stoppedGeneration, source)) return false
+  if (source.at < stoppedGeneration.at - 1000 || source.at > stoppedGeneration.at + 30_000) {
+    return false
+  }
+  return /\b(aborted?|interrupt(?:ed)?)\b/i.test(formatUnknownError(error))
+}
+
+function isSameStoppedGenerationSource(
+  stoppedGeneration: StoppedGeneration,
+  source: { directory: string | null; sessionID: string | null }
+): boolean {
+  if (source.sessionID) return source.sessionID === stoppedGeneration.sessionID
+  return source.directory === stoppedGeneration.directory
 }
 
 function clearAdmittedPromptHandoff(sessionID: string | null | undefined): void {
