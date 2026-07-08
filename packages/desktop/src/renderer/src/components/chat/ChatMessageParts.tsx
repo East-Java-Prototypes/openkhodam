@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type JSX } from 'react'
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { cn } from '@/lib/utils'
 
 import type { ChatMessage, ChatMessagePart } from '../../hooks/useChatInterfaceData'
 import { MarkdownText } from './MarkdownText'
 
 type ChatMessageAuthor = ChatMessage['author']
+type ToolStatusTone = 'completed' | 'error' | 'updated'
 
 export function ChatMessageParts({
   author,
@@ -76,6 +78,8 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
   const openRef = useRef(Boolean(part.error))
   const correctionGenerationRef = useRef(0)
   const [open, setOpen] = useState(Boolean(part.error))
+  const statusLabel = part.status ?? (part.error ? 'error' : undefined)
+  const statusTone = getToolStatusTone(statusLabel, Boolean(part.error))
   const syncOpenRef = (nextOpen: boolean): void => {
     openRef.current = nextOpen
   }
@@ -133,12 +137,20 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
   return (
     <Collapsible
       open={open}
-      className={`border p-3 text-sm ${part.error ? 'border-destructive/70' : 'border-border bg-background/60'}`}
+      data-slot="tool-card"
+      data-status={statusLabel}
+      data-tone={statusTone}
+      className={cn(
+        'rounded-xl border p-2 text-sm shadow-sm',
+        statusTone === 'error'
+          ? 'border-destructive/50 bg-destructive/5'
+          : 'border-border/70 bg-muted/20'
+      )}
       aria-label={`Tool ${part.name}`}
       onOpenChange={handleOpenChange}
     >
       <CollapsibleTrigger
-        className="flex w-full flex-wrap items-center justify-between gap-2 text-left"
+        className="flex min-h-10 w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         aria-label={`Toggle details for tool ${part.name}`}
         ref={triggerRef}
         onClickCapture={(event) => {
@@ -151,18 +163,51 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
           beginOpenCorrection(event.currentTarget)
         }}
       >
-        <span className="flex flex-wrap items-center gap-2">
-          <span className="font-semibold">{part.title ?? part.name}</span>
-          {part.status ? (
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              {part.status}
+        <span className="flex min-w-0 flex-1 items-center gap-2.5">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-background/80 text-xs font-semibold text-muted-foreground shadow-sm">
+            {part.name.slice(0, 1).toUpperCase()}
+          </span>
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span
+              data-slot="tool-title"
+              className="truncate font-semibold leading-5 text-foreground"
+            >
+              {part.title ?? part.name}
+            </span>
+            {part.title ? (
+              <span
+                data-slot="tool-name"
+                className="truncate text-xs leading-4 text-muted-foreground"
+              >
+                {part.name}
+              </span>
+            ) : null}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          {statusLabel ? (
+            <span
+              data-slot="tool-status-badge"
+              data-tone={statusTone}
+              className={cn(
+                'rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium uppercase leading-4 tracking-wide',
+                statusTone === 'error'
+                  ? 'border-destructive/30 bg-destructive/10 text-destructive'
+                  : statusTone === 'completed'
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                    : 'border-border bg-background text-muted-foreground'
+              )}
+            >
+              {statusLabel}
             </span>
           ) : null}
+          <span data-slot="tool-detail-affordance" className="text-xs text-muted-foreground">
+            {open ? 'Hide details' : 'Show details'}
+          </span>
         </span>
-        <span className="text-xs text-muted-foreground">Details</span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="pt-3">
-        <div className="flex flex-col gap-3">
+      <CollapsibleContent className="px-2 pb-2 pt-2">
+        <div className="flex flex-col gap-2">
           {part.input ? <PartBlock label="Input" text={part.input} /> : null}
           {part.output ? <PartBlock label="Output" text={part.output} /> : null}
           {part.error ? <PartBlock label="Error" text={part.error} tone="error" /> : null}
@@ -170,6 +215,12 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
       </CollapsibleContent>
     </Collapsible>
   )
+}
+
+function getToolStatusTone(status: string | undefined, hasError: boolean): ToolStatusTone {
+  if (hasError || status?.toLowerCase() === 'error') return 'error'
+  if (status?.toLowerCase() === 'completed') return 'completed'
+  return 'updated'
 }
 
 function UnknownPart({
@@ -195,17 +246,32 @@ function PartBlock({
   tone?: 'default' | 'error'
 }): JSX.Element {
   return (
-    <div>
+    <section
+      data-slot="tool-detail-block"
+      data-tone={tone}
+      className={cn(
+        'rounded-lg border bg-background/80 p-2.5 shadow-inner',
+        tone === 'error' ? 'border-destructive/30 bg-destructive/5' : 'border-border/60'
+      )}
+    >
       <div
-        className={`mb-1 text-xs font-medium uppercase tracking-wide ${tone === 'error' ? 'text-destructive' : 'text-muted-foreground'}`}
+        data-slot="tool-detail-label"
+        className={cn(
+          'mb-1.5 text-xs font-medium uppercase tracking-wide',
+          tone === 'error' ? 'text-destructive' : 'text-muted-foreground'
+        )}
       >
         {label}
       </div>
       <pre
-        className={`whitespace-pre-wrap break-words font-mono text-xs leading-5 ${tone === 'error' ? 'text-destructive' : ''}`}
+        data-slot="tool-detail-text"
+        className={cn(
+          'max-w-full overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground/90',
+          tone === 'error' ? 'text-destructive' : ''
+        )}
       >
         {text}
       </pre>
-    </div>
+    </section>
   )
 }
