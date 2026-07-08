@@ -1777,13 +1777,15 @@ test('stops a just-created session without restoring the admitted prompt handoff
   fakeOpenCodeServer
 }) => {
   await waitForChatShell(appWindow)
-  const fakeProjectLink = projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).first()
-  await expect(fakeProjectLink).toBeVisible()
-  const fakeProjectHash = await fakeProjectLink.evaluate((link) => new URL(link.href).hash)
-  await appWindow.evaluate((hash) => {
-    window.location.hash = hash
-  }, fakeProjectHash)
-  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toBe(fakeProjectHash)
+
+  const directoryInput = appWindow.getByLabel('Project directory')
+  const openProjectForm = appWindow.getByRole('form', { name: 'Open project by directory' })
+  const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
+
+  await directoryInput.fill(fakeProjectDirectory)
+  await expect(openButton).toBeEnabled()
+  await openButton.click()
+  await expect.poll(() => appWindow.evaluate(() => window.location.hash)).toMatch(/\/projects\//)
   await expectOpenedProjectRouteResolved(appWindow)
 
   const sessionID = 'new-session-2'
