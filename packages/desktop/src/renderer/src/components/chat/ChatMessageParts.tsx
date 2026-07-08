@@ -141,7 +141,7 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
       data-status={statusLabel}
       data-tone={statusTone}
       className={cn(
-        'rounded-xl border p-2 text-sm shadow-sm',
+        'border p-2 text-sm shadow-sm',
         statusTone === 'error'
           ? 'border-destructive/50 bg-destructive/5'
           : 'border-border/70 bg-muted/20'
@@ -150,7 +150,7 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
       onOpenChange={handleOpenChange}
     >
       <CollapsibleTrigger
-        className="flex min-h-10 w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex min-h-10 w-full items-center justify-between gap-3 px-2 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         aria-label={`Toggle details for tool ${part.name}`}
         ref={triggerRef}
         onClickCapture={(event) => {
@@ -164,7 +164,7 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
         }}
       >
         <span className="flex min-w-0 flex-1 items-center gap-2.5">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-background/80 text-xs font-semibold text-muted-foreground shadow-sm">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-background/80 text-xs font-semibold text-muted-foreground shadow-sm">
             {part.name.slice(0, 1).toUpperCase()}
           </span>
           <span className="flex min-w-0 flex-col gap-0.5">
@@ -190,7 +190,7 @@ function ToolPart({ part }: { part: Extract<ChatMessagePart, { type: 'tool' }> }
               data-slot="tool-status-badge"
               data-tone={statusTone}
               className={cn(
-                'rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium uppercase leading-4 tracking-wide',
+                'border px-2 py-0.5 text-[0.6875rem] font-medium uppercase leading-4 tracking-wide',
                 statusTone === 'error'
                   ? 'border-destructive/30 bg-destructive/10 text-destructive'
                   : statusTone === 'completed'
@@ -250,7 +250,7 @@ function PartBlock({
       data-slot="tool-detail-block"
       data-tone={tone}
       className={cn(
-        'rounded-lg border bg-background/80 p-2.5 shadow-inner',
+        'border bg-background/80 p-2.5 shadow-inner',
         tone === 'error' ? 'border-destructive/30 bg-destructive/5' : 'border-border/60'
       )}
     >
