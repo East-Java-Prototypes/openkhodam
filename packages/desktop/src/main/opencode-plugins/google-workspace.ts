@@ -1,13 +1,17 @@
 import type {
   GoogleDocDocumentArtifact,
+  GoogleSheetCellValue,
   GoogleSheetSpreadsheetArtifact
 } from '../integrations/google-workspace-runtime'
 import {
   createGoogleDocDocumentPreview,
   createGoogleSheetSpreadsheetPreview,
   editGoogleDocDocument,
+  editGoogleSheetSpreadsheet,
   type GoogleDocsEditOperation,
   type GoogleDocsTextOccurrence,
+  type GoogleSheetsEditOperation,
+  type GoogleSheetsValueInputOption,
   type GoogleSheetsValueRenderOption,
   readGoogleDocDocument,
   readGoogleSheetSpreadsheet,
@@ -33,6 +37,17 @@ type GoogleSheetsReadToolArgs = {
   ranges?: string[]
   spreadsheetId?: string
   valueRenderOption?: string
+}
+
+type GoogleSheetsEditToolArgs = {
+  operation?: {
+    range?: string
+    rows?: unknown
+    type?: string
+    valueInputOption?: string
+    values?: unknown
+  }
+  spreadsheetId?: string
 }
 
 type GoogleDocsEditToolArgs = {
@@ -117,6 +132,24 @@ type GoogleSheetsReadToolDefinition = {
   execute: (args: GoogleSheetsReadToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
 }
 
+type GoogleSheetsEditToolDefinition = {
+  args: {
+    operation: {
+      additionalProperties: boolean
+      description: string
+      properties: Record<string, unknown>
+      required: string[]
+      type: 'object'
+    }
+    spreadsheetId: {
+      description: string
+      type: 'string'
+    }
+  }
+  description: string
+  execute: (args: GoogleSheetsEditToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
+}
+
 type GoogleDocsEditToolDefinition = {
   args: {
     documentId: {
@@ -140,6 +173,7 @@ type GoogleWorkspaceHooks = {
     google_docs_edit: GoogleDocsEditToolDefinition
     google_docs_read: GoogleDocsReadToolDefinition
     google_drive_search_files: GoogleDriveSearchFilesToolDefinition
+    google_sheets_edit: GoogleSheetsEditToolDefinition
     google_sheets_read: GoogleSheetsReadToolDefinition
   }
 }
@@ -234,6 +268,74 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
         })
       }
     },
+    google_sheets_edit: {
+      description:
+        'Edit a Google Sheets spreadsheet using narrow A1 range operations with the Google Workspace account connected in OpenKhodam Settings. Supports set_values, append_rows, and clear_range; writes directly with the connected account; rereads the affected range; persists the updated spreadsheet artifact; and returns a bounded updated-spreadsheet preview.',
+      args: {
+        spreadsheetId: {
+          description: 'The Google Sheets spreadsheet ID to edit.',
+          type: 'string'
+        },
+        operation: {
+          additionalProperties: false,
+          description:
+            'One Google Sheets edit operation. Use set_values with an A1 range and 2D values array; append_rows with an A1 range and 2D rows array; or clear_range with an A1 range. valueInputOption defaults to USER_ENTERED and may be RAW. Do not provide raw grid coordinates, formatting, or structural edits.',
+          properties: {
+            type: {
+              description: 'Operation type: set_values, append_rows, or clear_range.',
+              enum: ['set_values', 'append_rows', 'clear_range'],
+              type: 'string'
+            },
+            range: {
+              description:
+                "Required A1 notation range such as Summary!A1:C3 or 'Data Sheet'!B2:D4.",
+              type: 'string'
+            },
+            values: {
+              description:
+                '2D primitive values array for set_values. Cells must be strings, finite numbers, booleans, or null.',
+              items: {
+                items: { type: ['string', 'number', 'boolean', 'null'] },
+                type: 'array'
+              },
+              type: 'array'
+            },
+            rows: {
+              description:
+                '2D primitive rows array for append_rows. Cells must be strings, finite numbers, booleans, or null.',
+              items: {
+                items: { type: ['string', 'number', 'boolean', 'null'] },
+                type: 'array'
+              },
+              type: 'array'
+            },
+            valueInputOption: {
+              default: 'USER_ENTERED',
+              description:
+                'How Sheets should interpret written cell values for set_values or append_rows: USER_ENTERED or RAW. Defaults to USER_ENTERED.',
+              enum: ['USER_ENTERED', 'RAW'],
+              type: 'string'
+            }
+          },
+          required: ['type', 'range'],
+          type: 'object'
+        }
+      },
+      async execute(args, context) {
+        const spreadsheetId = stringArg(args.spreadsheetId)
+        const result = await editGoogleSheetSpreadsheet({
+          operation: toGoogleSheetsEditOperation(args.operation),
+          signal: context.abort,
+          spreadsheetId
+        })
+        await recordReadGoogleSheetArtifact(context, result.spreadsheet)
+
+        return JSON.stringify({
+          edit: result.edit,
+          spreadsheet: createGoogleSheetSpreadsheetPreview(result.spreadsheet)
+        })
+      }
+    },
     google_docs_edit: {
       description:
         'Edit a Google Docs document using semantic operations with the Google Workspace account connected in OpenKhodam Settings. Supports append_text, insert_after_text, insert_before_text, replace_text, and delete_text; writes directly with the connected account after resolving semantic targets; and returns a bounded updated-document preview.',
@@ -314,6 +416,54 @@ function valueRenderOptionArg(value: unknown): GoogleSheetsValueRenderOption | u
   }
 
   return value as GoogleSheetsValueRenderOption
+}
+
+function valueInputOptionArg(value: unknown): GoogleSheetsValueInputOption | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (value === 'USER_ENTERED' || value === 'RAW') return value
+
+  return value as GoogleSheetsValueInputOption
+}
+
+function toGoogleSheetsEditOperation(
+  value: GoogleSheetsEditToolArgs['operation']
+): GoogleSheetsEditOperation {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Google Sheets edit operation is required.')
+  }
+
+  if (value.type === 'set_values') {
+    return {
+      range: stringArg(value.range),
+      type: 'set_values',
+      valueInputOption: valueInputOptionArg(value.valueInputOption),
+      values: valuesArg(value.values)
+    }
+  }
+
+  if (value.type === 'append_rows') {
+    return {
+      range: stringArg(value.range),
+      rows: valuesArg(value.rows),
+      type: 'append_rows',
+      valueInputOption: valueInputOptionArg(value.valueInputOption)
+    }
+  }
+
+  if (value.type === 'clear_range') {
+    return {
+      range: stringArg(value.range),
+      type: 'clear_range'
+    }
+  }
+
+  throw new Error(
+    'Google Sheets edit operation type must be set_values, append_rows, or clear_range.'
+  )
+}
+
+function valuesArg(value: unknown): GoogleSheetCellValue[][] {
+  return Array.isArray(value) ? (value as GoogleSheetCellValue[][]) : []
 }
 
 function toGoogleDocsEditOperation(

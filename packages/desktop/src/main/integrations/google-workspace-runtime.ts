@@ -32,8 +32,9 @@ export type {
 export const GOOGLE_DRIVE_METADATA_READONLY_SCOPE =
   'https://www.googleapis.com/auth/drive.metadata.readonly'
 export const GOOGLE_DOCS_DOCUMENTS_SCOPE = 'https://www.googleapis.com/auth/documents'
-export const GOOGLE_SHEETS_SPREADSHEETS_SCOPE =
+export const GOOGLE_SHEETS_SPREADSHEETS_READONLY_SCOPE =
   'https://www.googleapis.com/auth/spreadsheets.readonly'
+export const GOOGLE_SHEETS_SPREADSHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
 
 const GOOGLE_DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files'
 const GOOGLE_DOCS_DOCUMENTS_URL = 'https://docs.googleapis.com/v1/documents'
@@ -57,6 +58,7 @@ const GOOGLE_SHEETS_VALUE_RENDER_OPTIONS = [
   'UNFORMATTED_VALUE',
   'FORMULA'
 ] as const
+const GOOGLE_SHEETS_VALUE_INPUT_OPTIONS = ['USER_ENTERED', 'RAW'] as const
 
 type Fetch = typeof fetch
 
@@ -125,7 +127,33 @@ type GoogleSheetsValuesBatchGetResponse = GoogleSheetsApiResponse & {
   valueRanges?: unknown[]
 }
 
+type GoogleSheetsValuesUpdateResponse = GoogleSheetsApiResponse & {
+  spreadsheetId?: string
+  updatedCells?: number
+  updatedColumns?: number
+  updatedRange?: string
+  updatedRows?: number
+}
+
+type GoogleSheetsValuesAppendResponse = GoogleSheetsApiResponse & {
+  spreadsheetId?: string
+  tableRange?: string
+  updates?: {
+    spreadsheetId?: string
+    updatedCells?: number
+    updatedColumns?: number
+    updatedRange?: string
+    updatedRows?: number
+  }
+}
+
+type GoogleSheetsValuesClearResponse = GoogleSheetsApiResponse & {
+  clearedRange?: string
+  spreadsheetId?: string
+}
+
 export type GoogleSheetsValueRenderOption = 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' | 'FORMULA'
+export type GoogleSheetsValueInputOption = 'USER_ENTERED' | 'RAW'
 
 export type GoogleDriveFileMetadata = {
   id: string
@@ -169,6 +197,57 @@ export type GoogleSheetsReadSpreadsheetInput = {
   signal?: AbortSignal
   spreadsheetId: string
   valueRenderOption?: GoogleSheetsValueRenderOption
+}
+
+export type GoogleSheetsEditSpreadsheetInput = {
+  configPath?: string
+  fetch?: Fetch
+  operation: GoogleSheetsEditOperation
+  signal?: AbortSignal
+  spreadsheetId: string
+}
+
+export type GoogleSheetsEditOperation =
+  | {
+      range: string
+      type: 'set_values'
+      valueInputOption?: GoogleSheetsValueInputOption
+      values: GoogleSheetCellValue[][]
+    }
+  | {
+      range: string
+      rows: GoogleSheetCellValue[][]
+      type: 'append_rows'
+      valueInputOption?: GoogleSheetsValueInputOption
+    }
+  | {
+      range: string
+      type: 'clear_range'
+    }
+
+export type GoogleSheetsEditSpreadsheetResult = {
+  edit: {
+    affectedRange: string
+    clearedRange: string | null
+    inputCellCount: number
+    inputColumnCount: number
+    inputRowCount: number
+    link: string | null
+    ok: true
+    operation: GoogleSheetsEditOperation['type']
+    previousCellCount: number
+    previousColumnCount: number
+    previousRowCount: number
+    rereadRange: string
+    requestedRange: string
+    spreadsheetId: string
+    title: string | null
+    updatedCells: number | null
+    updatedColumns: number | null
+    updatedRows: number | null
+    valueInputOption: GoogleSheetsValueInputOption | null
+  }
+  spreadsheet: GoogleSheetSpreadsheetArtifact
 }
 
 export type GoogleDocsEditDocumentInput = {
@@ -394,7 +473,7 @@ export async function readGoogleSheetSpreadsheet({
       'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Google Sheets access.',
     fetch: fetchImpl,
     missingScopeMessage: sheetsMissingScopeMessage(),
-    requiredScope: GOOGLE_SHEETS_SPREADSHEETS_SCOPE,
+    requiredScope: GOOGLE_SHEETS_SPREADSHEETS_READONLY_SCOPE,
     signal
   })
 
@@ -429,6 +508,77 @@ export async function readGoogleSheetSpreadsheet({
       resolvedSpreadsheetId,
       resolvedRanges
     )
+  }
+}
+
+export async function editGoogleSheetSpreadsheet({
+  configPath = process.env.OPENKHODAM_CONFIG_PATH,
+  fetch: fetchImpl = fetch,
+  operation,
+  signal,
+  spreadsheetId
+}: GoogleSheetsEditSpreadsheetInput): Promise<GoogleSheetsEditSpreadsheetResult> {
+  const resolvedSpreadsheetId = normalizeSpreadsheetId(spreadsheetId)
+  const normalizedOperation = normalizeGoogleSheetsEditOperation(operation)
+  const { token } = await getGoogleWorkspaceAccessToken({
+    configPath,
+    disconnectedToolName: 'google_sheets_edit',
+    expiredMessage:
+      'Google Workspace token is expired. Reconnect Google Workspace in Settings to refresh Google Sheets write access.',
+    fetch: fetchImpl,
+    missingScopeMessage: sheetsEditMissingScopeMessage(),
+    requiredScope: GOOGLE_SHEETS_SPREADSHEETS_SCOPE,
+    signal
+  })
+
+  const requestedRange = normalizedOperation.range
+  const metadata = await fetchGoogleSheetSpreadsheetMetadata({
+    fetch: fetchImpl,
+    signal,
+    spreadsheetId: resolvedSpreadsheetId,
+    token
+  })
+  const previousValues = await fetchGoogleSheetSpreadsheetValues({
+    fetch: fetchImpl,
+    ranges: [requestedRange],
+    signal,
+    spreadsheetId: resolvedSpreadsheetId,
+    token,
+    valueRenderOption: 'FORMATTED_VALUE'
+  })
+  const previousRange = extractGoogleSheetRangeArtifacts(previousValues, [requestedRange])[0]
+
+  const writeResult = await writeGoogleSheetSpreadsheetValues({
+    fetch: fetchImpl,
+    operation: normalizedOperation,
+    signal,
+    spreadsheetId: resolvedSpreadsheetId,
+    token
+  })
+  const rereadRange = getGoogleSheetsEditRereadRange(normalizedOperation, writeResult)
+  const updatedValues = await fetchGoogleSheetSpreadsheetValues({
+    fetch: fetchImpl,
+    ranges: [rereadRange],
+    signal,
+    spreadsheetId: resolvedSpreadsheetId,
+    token,
+    valueRenderOption: 'FORMATTED_VALUE'
+  })
+  const spreadsheet = toSafeGoogleSheetSpreadsheet(metadata, updatedValues, resolvedSpreadsheetId, [
+    rereadRange
+  ])
+
+  return {
+    edit: createGoogleSheetsEditSummary({
+      operation: normalizedOperation,
+      previousRange,
+      requestedRange,
+      rereadRange,
+      spreadsheet,
+      spreadsheetId: resolvedSpreadsheetId,
+      writeResult
+    }),
+    spreadsheet
   }
 }
 
@@ -569,6 +719,61 @@ export function createSheetsValuesBatchGetUrl({
   return url
 }
 
+export function createSheetsValuesUpdateUrl({
+  range,
+  spreadsheetId,
+  valueInputOption
+}: {
+  range: string
+  spreadsheetId: string
+  valueInputOption: GoogleSheetsValueInputOption
+}): URL {
+  const url = new URL(
+    `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(spreadsheetId)}/values/${encodeGoogleSheetsA1RangePath(range)}`
+  )
+  url.searchParams.set('valueInputOption', valueInputOption)
+  url.searchParams.set(
+    'fields',
+    'spreadsheetId,updatedRange,updatedRows,updatedColumns,updatedCells'
+  )
+  return url
+}
+
+export function createSheetsValuesAppendUrl({
+  range,
+  spreadsheetId,
+  valueInputOption
+}: {
+  range: string
+  spreadsheetId: string
+  valueInputOption: GoogleSheetsValueInputOption
+}): URL {
+  const url = new URL(
+    `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(spreadsheetId)}/values/${encodeGoogleSheetsA1RangePath(range)}:append`
+  )
+  url.searchParams.set('valueInputOption', valueInputOption)
+  url.searchParams.set('insertDataOption', 'INSERT_ROWS')
+  url.searchParams.set(
+    'fields',
+    'spreadsheetId,tableRange,updates(spreadsheetId,updatedRange,updatedRows,updatedColumns,updatedCells)'
+  )
+  return url
+}
+
+export function createSheetsValuesClearUrl({
+  range,
+  spreadsheetId
+}: {
+  range: string
+  spreadsheetId: string
+}): URL {
+  const url = new URL(
+    `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(spreadsheetId)}/values/${encodeGoogleSheetsA1RangePath(range)}:clear`
+  )
+  url.searchParams.set('fields', 'spreadsheetId,clearedRange')
+  return url
+}
+
 export function createGoogleDocDocumentPreview(
   document: GoogleDocDocumentArtifact
 ): GoogleDocDocumentPreviewArtifact {
@@ -687,6 +892,99 @@ async function fetchGoogleSheetSpreadsheetValues({
   const body = (await response.json().catch(() => ({}))) as GoogleSheetsValuesBatchGetResponse
   if (!response.ok) {
     throwGoogleApiFailure('Google Sheets values.batchGet', response.status, body)
+  }
+
+  return body
+}
+
+async function writeGoogleSheetSpreadsheetValues({
+  fetch: fetchImpl,
+  operation,
+  signal,
+  spreadsheetId,
+  token
+}: {
+  fetch: Fetch
+  operation: GoogleSheetsEditOperation
+  signal?: AbortSignal
+  spreadsheetId: string
+  token: GoogleWorkspaceTokenConfig
+}): Promise<
+  | GoogleSheetsValuesUpdateResponse
+  | GoogleSheetsValuesAppendResponse
+  | GoogleSheetsValuesClearResponse
+> {
+  if (operation.type === 'set_values') {
+    const response = await fetchImpl(
+      createSheetsValuesUpdateUrl({
+        range: operation.range,
+        spreadsheetId,
+        valueInputOption: operation.valueInputOption ?? 'USER_ENTERED'
+      }),
+      {
+        body: JSON.stringify({ majorDimension: 'ROWS', values: operation.values }),
+        headers: {
+          authorization: `Bearer ${token.accessToken}`,
+          'content-type': 'application/json'
+        },
+        method: 'PUT',
+        signal
+      }
+    )
+    const body = (await response.json().catch(() => ({}))) as GoogleSheetsValuesUpdateResponse
+    if (!response.ok) {
+      throwGoogleApiFailure('Google Sheets values.update', response.status, body, {
+        suppressProviderDiagnostics: true
+      })
+    }
+
+    return body
+  }
+
+  if (operation.type === 'append_rows') {
+    const response = await fetchImpl(
+      createSheetsValuesAppendUrl({
+        range: operation.range,
+        spreadsheetId,
+        valueInputOption: operation.valueInputOption ?? 'USER_ENTERED'
+      }),
+      {
+        body: JSON.stringify({ majorDimension: 'ROWS', values: operation.rows }),
+        headers: {
+          authorization: `Bearer ${token.accessToken}`,
+          'content-type': 'application/json'
+        },
+        method: 'POST',
+        signal
+      }
+    )
+    const body = (await response.json().catch(() => ({}))) as GoogleSheetsValuesAppendResponse
+    if (!response.ok) {
+      throwGoogleApiFailure('Google Sheets values.append', response.status, body, {
+        suppressProviderDiagnostics: true
+      })
+    }
+
+    return body
+  }
+
+  const response = await fetchImpl(
+    createSheetsValuesClearUrl({ range: operation.range, spreadsheetId }),
+    {
+      body: JSON.stringify({}),
+      headers: {
+        authorization: `Bearer ${token.accessToken}`,
+        'content-type': 'application/json'
+      },
+      method: 'POST',
+      signal
+    }
+  )
+  const body = (await response.json().catch(() => ({}))) as GoogleSheetsValuesClearResponse
+  if (!response.ok) {
+    throwGoogleApiFailure('Google Sheets values.clear', response.status, body, {
+      suppressProviderDiagnostics: true
+    })
   }
 
   return body
@@ -907,6 +1205,13 @@ function escapeDriveQueryString(value: string): string {
 }
 
 function hasScope(scopes: string[], requiredScope: string): boolean {
+  if (
+    requiredScope === GOOGLE_SHEETS_SPREADSHEETS_READONLY_SCOPE &&
+    scopes.includes(GOOGLE_SHEETS_SPREADSHEETS_SCOPE)
+  ) {
+    return true
+  }
+
   return scopes.includes(requiredScope)
 }
 
@@ -1043,6 +1348,10 @@ function sheetsMissingScopeMessage(): string {
   return 'Google Sheets access is not enabled. Reconnect Google Workspace in Settings with Sheets access enabled.'
 }
 
+function sheetsEditMissingScopeMessage(): string {
+  return 'Google Sheets write access is not enabled. Reconnect Google Workspace in Settings to grant Sheets read/write access.'
+}
+
 function normalizeGoogleSheetsValueRenderOption(value: unknown): GoogleSheetsValueRenderOption {
   if (value === undefined || value === null || value === '') return 'FORMATTED_VALUE'
   if (isGoogleSheetsValueRenderOption(value)) return value
@@ -1056,6 +1365,108 @@ function isGoogleSheetsValueRenderOption(value: unknown): value is GoogleSheetsV
   return (
     typeof value === 'string' &&
     (GOOGLE_SHEETS_VALUE_RENDER_OPTIONS as readonly string[]).includes(value)
+  )
+}
+
+function normalizeGoogleSheetsEditOperation(
+  operation: GoogleSheetsEditOperation
+): GoogleSheetsEditOperation {
+  if (!operation || typeof operation !== 'object') {
+    throw new Error('Google Sheets edit operation is required.')
+  }
+
+  if (operation.type === 'set_values') {
+    return {
+      range: normalizeGoogleSheetsEditRange(operation.range, operation.type),
+      type: 'set_values',
+      valueInputOption: normalizeGoogleSheetsValueInputOption(operation.valueInputOption),
+      values: normalizeGoogleSheetsEditValues(operation.values, operation.type, 'values')
+    }
+  }
+
+  if (operation.type === 'append_rows') {
+    return {
+      range: normalizeGoogleSheetsEditRange(operation.range, operation.type),
+      rows: normalizeGoogleSheetsEditValues(operation.rows, operation.type, 'rows'),
+      type: 'append_rows',
+      valueInputOption: normalizeGoogleSheetsValueInputOption(operation.valueInputOption)
+    }
+  }
+
+  if (operation.type === 'clear_range') {
+    return {
+      range: normalizeGoogleSheetsEditRange(operation.range, operation.type),
+      type: 'clear_range'
+    }
+  }
+
+  throw new Error(
+    'Google Sheets edit operation type must be set_values, append_rows, or clear_range.'
+  )
+}
+
+function normalizeGoogleSheetsEditRange(
+  range: unknown,
+  operationType: GoogleSheetsEditOperation['type']
+): string {
+  const normalized = typeof range === 'string' ? range.trim() : ''
+  if (!normalized) throw new Error(`Google Sheets ${operationType} requires an A1 range.`)
+  if (normalized.includes('\0')) throw new Error(`Google Sheets ${operationType} range is invalid.`)
+
+  return normalized
+}
+
+function normalizeGoogleSheetsValueInputOption(
+  value: unknown
+): GoogleSheetsValueInputOption | undefined {
+  if (value === undefined || value === null || value === '') return 'USER_ENTERED'
+  if (isGoogleSheetsValueInputOption(value)) return value
+
+  throw new Error('Google Sheets valueInputOption must be USER_ENTERED or RAW.')
+}
+
+function isGoogleSheetsValueInputOption(value: unknown): value is GoogleSheetsValueInputOption {
+  return (
+    typeof value === 'string' &&
+    (GOOGLE_SHEETS_VALUE_INPUT_OPTIONS as readonly string[]).includes(value)
+  )
+}
+
+function normalizeGoogleSheetsEditValues(
+  value: unknown,
+  operationType: Extract<GoogleSheetsEditOperation['type'], 'append_rows' | 'set_values'>,
+  fieldName: 'rows' | 'values'
+): GoogleSheetCellValue[][] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`Google Sheets ${operationType} requires ${fieldName} as a non-empty 2D array.`)
+  }
+
+  return value.map((row, rowIndex) => {
+    if (!Array.isArray(row)) {
+      throw new Error(
+        `Google Sheets ${operationType} ${fieldName} row ${rowIndex + 1} must be an array.`
+      )
+    }
+
+    return row.map((cell, columnIndex) =>
+      normalizeGoogleSheetsEditCellValue(cell, operationType, fieldName, rowIndex, columnIndex)
+    )
+  })
+}
+
+function normalizeGoogleSheetsEditCellValue(
+  value: unknown,
+  operationType: Extract<GoogleSheetsEditOperation['type'], 'append_rows' | 'set_values'>,
+  fieldName: 'rows' | 'values',
+  rowIndex: number,
+  columnIndex: number
+): GoogleSheetCellValue {
+  if (value === null) return null
+  if (typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+
+  throw new Error(
+    `Google Sheets ${operationType} ${fieldName} cell ${rowIndex + 1}:${columnIndex + 1} must be a string, number, boolean, or null.`
   )
 }
 
@@ -1089,6 +1500,151 @@ function createDefaultGoogleSheetsReadRanges(metadata: GoogleSheetsSpreadsheetRe
 
 function quoteGoogleSheetTitleForA1(title: string): string {
   return `'${title.replace(/'/g, "''")}'`
+}
+
+function encodeGoogleSheetsA1RangePath(range: string): string {
+  return encodeURIComponent(range).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  )
+}
+
+function getGoogleSheetsEditRereadRange(
+  operation: GoogleSheetsEditOperation,
+  writeResult:
+    | GoogleSheetsValuesUpdateResponse
+    | GoogleSheetsValuesAppendResponse
+    | GoogleSheetsValuesClearResponse
+): string {
+  return getGoogleSheetsEditAffectedRange(operation, writeResult) || operation.range
+}
+
+function getGoogleSheetsEditAffectedRange(
+  operation: GoogleSheetsEditOperation,
+  writeResult:
+    | GoogleSheetsValuesUpdateResponse
+    | GoogleSheetsValuesAppendResponse
+    | GoogleSheetsValuesClearResponse
+): string {
+  if (operation.type === 'append_rows') {
+    return (
+      normalizeOptionalGoogleApiString(
+        (writeResult as GoogleSheetsValuesAppendResponse).updates?.updatedRange
+      ) ?? operation.range
+    )
+  }
+  if (operation.type === 'clear_range') {
+    return (
+      normalizeOptionalGoogleApiString(
+        (writeResult as GoogleSheetsValuesClearResponse).clearedRange
+      ) ?? operation.range
+    )
+  }
+
+  return (
+    normalizeOptionalGoogleApiString(
+      (writeResult as GoogleSheetsValuesUpdateResponse).updatedRange
+    ) ?? operation.range
+  )
+}
+
+function createGoogleSheetsEditSummary({
+  operation,
+  previousRange,
+  requestedRange,
+  rereadRange,
+  spreadsheet,
+  spreadsheetId,
+  writeResult
+}: {
+  operation: GoogleSheetsEditOperation
+  previousRange: GoogleSheetRangeArtifact | undefined
+  requestedRange: string
+  rereadRange: string
+  spreadsheet: GoogleSheetSpreadsheetArtifact
+  spreadsheetId: string
+  writeResult:
+    | GoogleSheetsValuesUpdateResponse
+    | GoogleSheetsValuesAppendResponse
+    | GoogleSheetsValuesClearResponse
+}): GoogleSheetsEditSpreadsheetResult['edit'] {
+  const writeStats = getGoogleSheetsEditWriteStats(operation, writeResult)
+  const inputStats = getGoogleSheetsEditInputStats(operation)
+  return {
+    affectedRange: getGoogleSheetsEditAffectedRange(operation, writeResult),
+    clearedRange:
+      operation.type === 'clear_range'
+        ? normalizeOptionalGoogleApiString(
+            (writeResult as GoogleSheetsValuesClearResponse).clearedRange
+          )
+        : null,
+    inputCellCount: inputStats.cellCount,
+    inputColumnCount: inputStats.columnCount,
+    inputRowCount: inputStats.rowCount,
+    link: spreadsheet.link,
+    ok: true,
+    operation: operation.type,
+    previousCellCount: previousRange?.cellCount ?? 0,
+    previousColumnCount: previousRange?.columnCount ?? 0,
+    previousRowCount: previousRange?.rowCount ?? 0,
+    rereadRange,
+    requestedRange,
+    spreadsheetId: spreadsheet.id || spreadsheetId,
+    title: spreadsheet.title,
+    updatedCells: writeStats.updatedCells,
+    updatedColumns: writeStats.updatedColumns,
+    updatedRows: writeStats.updatedRows,
+    valueInputOption:
+      'valueInputOption' in operation ? (operation.valueInputOption ?? 'USER_ENTERED') : null
+  }
+}
+
+function getGoogleSheetsEditInputStats(operation: GoogleSheetsEditOperation): {
+  cellCount: number
+  columnCount: number
+  rowCount: number
+} {
+  if (operation.type === 'clear_range') {
+    return { cellCount: 0, columnCount: 0, rowCount: 0 }
+  }
+
+  const values = operation.type === 'set_values' ? operation.values : operation.rows
+  return {
+    rowCount: values.length,
+    columnCount: maxFiniteNumber(values.map((row) => row.length)) ?? 0,
+    cellCount: values.reduce((count, row) => count + row.length, 0)
+  }
+}
+
+function getGoogleSheetsEditWriteStats(
+  operation: GoogleSheetsEditOperation,
+  writeResult:
+    | GoogleSheetsValuesUpdateResponse
+    | GoogleSheetsValuesAppendResponse
+    | GoogleSheetsValuesClearResponse
+): {
+  updatedCells: number | null
+  updatedColumns: number | null
+  updatedRows: number | null
+} {
+  if (operation.type === 'append_rows') {
+    const updates = (writeResult as GoogleSheetsValuesAppendResponse).updates
+    return {
+      updatedCells: finiteNumberOrNull(updates?.updatedCells),
+      updatedColumns: finiteNumberOrNull(updates?.updatedColumns),
+      updatedRows: finiteNumberOrNull(updates?.updatedRows)
+    }
+  }
+  if (operation.type === 'clear_range') {
+    return { updatedCells: null, updatedColumns: null, updatedRows: null }
+  }
+
+  const updateResult = writeResult as GoogleSheetsValuesUpdateResponse
+  return {
+    updatedCells: finiteNumberOrNull(updateResult.updatedCells),
+    updatedColumns: finiteNumberOrNull(updateResult.updatedColumns),
+    updatedRows: finiteNumberOrNull(updateResult.updatedRows)
+  }
 }
 
 function toSafeGoogleSheetSpreadsheet(
@@ -1664,11 +2220,33 @@ function maxFiniteNumber(values: Array<number | null>): number | null {
 function throwGoogleApiFailure(
   operation: string,
   status: number,
-  body: GoogleDocsApiResponse | GoogleDriveFilesResponse | GoogleSheetsApiResponse
+  body: GoogleDocsApiResponse | GoogleDriveFilesResponse | GoogleSheetsApiResponse,
+  options: { suppressProviderDiagnostics?: boolean } = {}
 ): never {
-  const diagnostics = toGoogleApiFailureDiagnostics(operation, status, body.error)
+  const diagnostics = options.suppressProviderDiagnostics
+    ? createSuppressedGoogleApiFailureDiagnostics(operation, status)
+    : toGoogleApiFailureDiagnostics(operation, status, body.error)
   console.warn('Google Workspace API request failed', diagnostics)
   throw new Error(toGoogleApiFailureMessage(diagnostics))
+}
+
+function createSuppressedGoogleApiFailureDiagnostics(
+  operation: string,
+  status: number
+): {
+  code: string | null
+  message: string | null
+  operation: string
+  reason: string | null
+  status: number
+} {
+  return {
+    code: null,
+    message: null,
+    operation,
+    reason: null,
+    status
+  }
 }
 
 function toGoogleApiFailureDiagnostics(
