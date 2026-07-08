@@ -9,7 +9,7 @@ test('sends a prompt through the real OpenCode sidecar to a local fake provider'
   realOpenCode
 }) => {
   await waitForConnectedSidecar(appWindow)
-  await openWorkspaceProject(appWindow, realOpenCode.workspaceDir)
+  await openWorkspaceProject(appWindow, realOpenCode.workspaceDir, realOpenCode.workspaceName)
 
   const composer = appWindow.getByRole('form', { name: 'Chat prompt' })
   await expect(composer).toBeVisible()
@@ -49,19 +49,69 @@ async function waitForConnectedSidecar(page: Page): Promise<void> {
     .toBe('connected')
 }
 
-async function openWorkspaceProject(page: Page, workspaceDir: string): Promise<void> {
+async function openWorkspaceProject(
+  page: Page,
+  workspaceDir: string,
+  workspaceName: string
+): Promise<void> {
+  if (await isNonGlobalProjectRoute(page)) return
+  if (await openExistingWorkspaceProject(page, workspaceName)) return
+
+  await page.evaluate(() => {
+    window.location.hash = '#/'
+  })
+  if (await openExistingWorkspaceProject(page, workspaceName)) return
+
   const openProjectForm = page.getByRole('form', { name: 'Open project by directory' })
   const directoryInput = openProjectForm.getByLabel('Project directory')
   const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
 
-  await expect(openProjectForm).toBeVisible()
+  await expect(openProjectForm).toBeVisible({ timeout: 30_000 })
   await directoryInput.fill(workspaceDir)
   await expect(openButton).toBeEnabled()
   await openButton.click()
+  await waitForNonGlobalProjectRoute(page)
+}
+
+async function openExistingWorkspaceProject(page: Page, workspaceName: string): Promise<boolean> {
+  const namedProjectLink = page
+    .getByRole('navigation', { name: 'Projects' })
+    .getByRole('link', { name: workspaceName, exact: true })
+
+  if (await namedProjectLink.isVisible().catch(() => false)) {
+    await namedProjectLink.click()
+    await waitForNonGlobalProjectRoute(page)
+    return true
+  }
+
+  const projectLinks = page.locator('nav[aria-label="Projects"] a[href*="#/projects/"]')
+  const nonGlobalProjectLinkIndex = await projectLinks.evaluateAll((links) =>
+    links.findIndex((link) => {
+      const href = link.getAttribute('href') ?? ''
+      const label = link.getAttribute('aria-label') ?? link.textContent ?? ''
+      return (
+        /#\/projects\/(?!global(?:$|[/?#]))/.test(href) &&
+        !label.trim().startsWith('Start new conversation')
+      )
+    })
+  )
+
+  if (nonGlobalProjectLinkIndex < 0) return false
+  await projectLinks.nth(nonGlobalProjectLinkIndex).click()
+  await waitForNonGlobalProjectRoute(page)
+  return true
+}
+
+async function waitForNonGlobalProjectRoute(page: Page): Promise<void> {
   await expect
     .poll(() => page.evaluate(() => window.location.hash), {
       message: 'opening the temp workspace should route to its project',
       timeout: 30_000
     })
     .toMatch(/\/projects\/(?!global(?:$|[/?#]))/)
+}
+
+async function isNonGlobalProjectRoute(page: Page): Promise<boolean> {
+  const hash = await page.evaluate(() => window.location.hash)
+  return /\/projects\/(?!global(?:$|[/?#]))/.test(hash)
 }
