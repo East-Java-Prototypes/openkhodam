@@ -88,12 +88,15 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 }
 
 function streamChatCompletion(response: ServerResponse, modelID: string, text: string): void {
-  response.writeHead(200, corsHeaders({
-    'cache-control': 'no-cache',
-    connection: 'keep-alive',
-    'content-type': 'text/event-stream',
-    'x-accel-buffering': 'no'
-  }))
+  response.writeHead(
+    200,
+    corsHeaders({
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+      'content-type': 'text/event-stream',
+      'x-accel-buffering': 'no'
+    })
+  )
 
   writeSse(response, {
     id: 'chatcmpl-openkhodam-smoke',
