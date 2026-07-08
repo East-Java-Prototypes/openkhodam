@@ -46,9 +46,11 @@ const googleDriveToolName = 'google_drive_search_files'
 const googleDocsReadToolName = 'google_docs_read'
 const googleDocsEditToolName = 'google_docs_edit'
 const googleSheetsReadToolName = 'google_sheets_read'
+const googleSheetsEditToolName = 'google_sheets_edit'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 const googleSheetsSpreadsheetsScope = 'https://www.googleapis.com/auth/spreadsheets.readonly'
+const googleSheetsSpreadsheetsWriteScope = 'https://www.googleapis.com/auth/spreadsheets'
 
 type OpenKhodamPocPlugin = {
   'experimental.chat.system.transform': (
@@ -121,6 +123,35 @@ type GoogleWorkspacePlugin = {
           directory?: string
           sessionID?: string
           worktree?: string
+        }
+      ) => Promise<string>
+    }
+    google_sheets_edit: {
+      args: {
+        operation: {
+          properties: Record<string, unknown>
+          required: string[]
+        }
+        spreadsheetId: Record<string, unknown>
+      }
+      description: string
+      execute: (
+        args: {
+          operation?: {
+            range?: string
+            rows?: unknown
+            type?: string
+            valueInputOption?: string
+            values?: unknown
+          }
+          spreadsheetId?: string
+        },
+        context: {
+          abort?: AbortSignal
+          directory?: string
+          sessionID?: string
+          worktree?: string
+          ask?: (...args: unknown[]) => Promise<unknown>
         }
       ) => Promise<string>
     }
@@ -981,7 +1012,9 @@ test('requests the Google Sheets OAuth scope in the Workspace connect flow', asy
   )
 
   expect(runtimeSource).toContain('export const GOOGLE_SHEETS_SPREADSHEETS_SCOPE')
+  expect(runtimeSource).toContain('export const GOOGLE_SHEETS_SPREADSHEETS_READONLY_SCOPE')
   expect(runtimeSource).toContain(`'${googleSheetsSpreadsheetsScope}'`)
+  expect(runtimeSource).toContain(`'${googleSheetsSpreadsheetsWriteScope}'`)
   expect(integrationSource).toContain('GOOGLE_SHEETS_SPREADSHEETS_SCOPE')
   expect(integrationSource).toContain('GOOGLE_SCOPES = [')
   expect(integrationSource).toContain('GOOGLE_SHEETS_SPREADSHEETS_SCOPE')
@@ -1346,7 +1379,7 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
   }
 })
 
-test('registers only the read Google Sheets tool with bounded A1 schema', async () => {
+test('registers Google Sheets read and edit tools with bounded A1 schemas', async () => {
   const plugin = await loadGoogleWorkspacePlugin()
 
   expect(plugin.tool.google_sheets_read.description).toContain('google.sheet.spreadsheet')
@@ -1362,7 +1395,28 @@ test('registers only the read Google Sheets tool with bounded A1 schema', async 
     enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'],
     type: 'string'
   })
-  expect((plugin.tool as Record<string, unknown>).google_sheets_edit).toBeUndefined()
+  expect(plugin.tool.google_sheets_edit.description).toContain('writes directly')
+  expect(plugin.tool.google_sheets_edit.description).toContain('bounded')
+  expect(plugin.tool.google_sheets_edit.description).not.toMatch(/approval/i)
+  expect(plugin.tool.google_sheets_edit.args.spreadsheetId).toMatchObject({ type: 'string' })
+  expect(plugin.tool.google_sheets_edit.args.operation.required).toEqual(['type', 'range'])
+  expect(plugin.tool.google_sheets_edit.args.operation.properties.type).toMatchObject({
+    enum: ['set_values', 'append_rows', 'clear_range'],
+    type: 'string'
+  })
+  expect(plugin.tool.google_sheets_edit.args.operation.properties.range).toMatchObject({
+    type: 'string'
+  })
+  expect(plugin.tool.google_sheets_edit.args.operation.properties.valueInputOption).toMatchObject({
+    default: 'USER_ENTERED',
+    enum: ['USER_ENTERED', 'RAW'],
+    type: 'string'
+  })
+  const operationSchemaText = JSON.stringify(plugin.tool.google_sheets_edit.args.operation)
+  expect(operationSchemaText).not.toContain('startIndex')
+  expect(operationSchemaText).not.toContain('endIndex')
+  expect(operationSchemaText).not.toContain('sheetId')
+  expect(operationSchemaText).not.toContain('gridRange')
 })
 
 test('reads explicit Google Sheets ranges through Sheets API and persists a spreadsheet artifact', async () => {
@@ -1808,6 +1862,494 @@ test('logs sanitized Google Sheets API failures without request bodies or cell c
     expect(warningText).not.toContain('refresh-token')
     expect(warningText).not.toContain('request-body-should-not-log')
     expect(warningText).not.toContain('sensitive-cell-should-not-log')
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('writes Google Sheets edits directly and persists refreshed spreadsheet artifacts', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-edit-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const spreadsheetId = 'sheet/edit?:unsafe'
+  const encodedSpreadsheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`
+  const events: string[] = []
+  const batchGetCallsByRange = new Map<string, number>()
+  const writeBodies = new Map<string, unknown>()
+  const writeUrls = new Map<string, URL>()
+  let askCalls = 0
+
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleSheetsSpreadsheetsWriteScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'sheets-edit-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const parsed = new URL(url)
+
+    if (url.startsWith(`${encodedSpreadsheetUrl}/values:batchGet`)) {
+      const range = parsed.searchParams.getAll('ranges')[0] ?? ''
+      const count = (batchGetCallsByRange.get(range) ?? 0) + 1
+      batchGetCallsByRange.set(range, count)
+      events.push(`values.batchGet:${range}:${count}`)
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer sheets-edit-access-token'
+      )
+
+      const valuesByRange: Record<string, unknown[][]> = {
+        'Summary!A1:B2':
+          count === 1
+            ? [['Old', 1]]
+            : [
+                ['Name', 'Amount'],
+                ['Launch', 42]
+              ],
+        'Summary!A:C': [['Existing', 'Row']],
+        'Summary!A3:B3': [['Appended', true]],
+        'Summary!C1:C2': count === 1 ? [['sensitive-before-clear'], ['old value']] : []
+      }
+
+      return new Response(
+        JSON.stringify({
+          spreadsheetId,
+          valueRanges: [
+            {
+              range,
+              majorDimension: 'ROWS',
+              values: valuesByRange[range] ?? []
+            }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith(`${encodedSpreadsheetUrl}/values/`)) {
+      const rangePath = parsed.pathname.split('/values/')[1] ?? ''
+      const requestBody = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer sheets-edit-access-token'
+      )
+      expect(new Headers(init?.headers).get('content-type')).toBe('application/json')
+
+      if (rangePath === 'Summary%21A1%3AB2') {
+        events.push('values.update')
+        writeBodies.set('set_values', requestBody)
+        writeUrls.set('set_values', parsed)
+        expect(init?.method).toBe('PUT')
+        return new Response(
+          JSON.stringify({
+            spreadsheetId,
+            updatedRange: 'Summary!A1:B2',
+            updatedRows: 2,
+            updatedColumns: 2,
+            updatedCells: 4
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      }
+
+      if (rangePath === 'Summary%21A%3AC:append') {
+        events.push('values.append')
+        writeBodies.set('append_rows', requestBody)
+        writeUrls.set('append_rows', parsed)
+        expect(init?.method).toBe('POST')
+        return new Response(
+          JSON.stringify({
+            spreadsheetId,
+            tableRange: 'Summary!A1:C2',
+            updates: {
+              spreadsheetId,
+              updatedRange: 'Summary!A3:B3',
+              updatedRows: 1,
+              updatedColumns: 2,
+              updatedCells: 2
+            }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      }
+
+      if (rangePath === 'Summary%21C1%3AC2:clear') {
+        events.push('values.clear')
+        writeBodies.set('clear_range', requestBody)
+        writeUrls.set('clear_range', parsed)
+        expect(init?.method).toBe('POST')
+        return new Response(
+          JSON.stringify({
+            spreadsheetId,
+            clearedRange: 'Summary!C1:C2'
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      }
+    }
+
+    if (url.startsWith(encodedSpreadsheetUrl)) {
+      events.push('spreadsheets.get')
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer sheets-edit-access-token'
+      )
+      return new Response(
+        JSON.stringify({
+          spreadsheetId,
+          spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`,
+          properties: { title: 'Editable Sheet' },
+          sheets: [
+            {
+              properties: {
+                sheetId: 11,
+                title: 'Summary',
+                index: 0,
+                sheetType: 'GRID',
+                gridProperties: { rowCount: 20, columnCount: 5 }
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const context = {
+      ask: async () => {
+        askCalls += 1
+        throw new Error('google_sheets_edit should not call context.ask')
+      },
+      directory: projectPath,
+      sessionID: 'session-sheets-edit'
+    }
+
+    const setOutput = JSON.parse(
+      await plugin.tool.google_sheets_edit.execute(
+        {
+          spreadsheetId,
+          operation: {
+            range: ' Summary!A1:B2 ',
+            type: 'set_values',
+            valueInputOption: 'RAW',
+            values: [
+              ['Name', 'Amount'],
+              ['Launch', 42]
+            ]
+          }
+        },
+        context
+      )
+    ) as {
+      edit: Record<string, unknown>
+      spreadsheet: { ranges: Array<{ range: string; values: unknown[][] }> }
+    }
+    const appendOutput = JSON.parse(
+      await plugin.tool.google_sheets_edit.execute(
+        {
+          spreadsheetId,
+          operation: {
+            range: 'Summary!A:C',
+            rows: [['Appended', true]],
+            type: 'append_rows'
+          }
+        },
+        context
+      )
+    ) as {
+      edit: Record<string, unknown>
+      spreadsheet: { ranges: Array<{ range: string; values: unknown[][] }> }
+    }
+    const clearOutput = JSON.parse(
+      await plugin.tool.google_sheets_edit.execute(
+        {
+          spreadsheetId,
+          operation: {
+            range: 'Summary!C1:C2',
+            type: 'clear_range'
+          }
+        },
+        context
+      )
+    ) as {
+      edit: Record<string, unknown>
+      spreadsheet: { ranges: Array<{ range: string; values: unknown[][] }> }
+    }
+
+    expect(events).toEqual([
+      'spreadsheets.get',
+      'values.batchGet:Summary!A1:B2:1',
+      'values.update',
+      'values.batchGet:Summary!A1:B2:2',
+      'spreadsheets.get',
+      'values.batchGet:Summary!A:C:1',
+      'values.append',
+      'values.batchGet:Summary!A3:B3:1',
+      'spreadsheets.get',
+      'values.batchGet:Summary!C1:C2:1',
+      'values.clear',
+      'values.batchGet:Summary!C1:C2:2'
+    ])
+    expect(askCalls).toBe(0)
+    expect(writeUrls.get('set_values')?.pathname).toBe(
+      `/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/Summary%21A1%3AB2`
+    )
+    expect(writeUrls.get('set_values')?.searchParams.get('valueInputOption')).toBe('RAW')
+    expect(writeUrls.get('append_rows')?.pathname).toBe(
+      `/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/Summary%21A%3AC:append`
+    )
+    expect(writeUrls.get('append_rows')?.searchParams.get('valueInputOption')).toBe('USER_ENTERED')
+    expect(writeUrls.get('append_rows')?.searchParams.get('insertDataOption')).toBe('INSERT_ROWS')
+    expect(writeUrls.get('clear_range')?.pathname).toBe(
+      `/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/Summary%21C1%3AC2:clear`
+    )
+    expect(writeBodies.get('set_values')).toEqual({
+      majorDimension: 'ROWS',
+      values: [
+        ['Name', 'Amount'],
+        ['Launch', 42]
+      ]
+    })
+    expect(writeBodies.get('append_rows')).toEqual({
+      majorDimension: 'ROWS',
+      values: [['Appended', true]]
+    })
+    expect(writeBodies.get('clear_range')).toEqual({})
+
+    expect(setOutput.edit).toMatchObject({
+      affectedRange: 'Summary!A1:B2',
+      inputCellCount: 4,
+      inputColumnCount: 2,
+      inputRowCount: 2,
+      ok: true,
+      operation: 'set_values',
+      previousCellCount: 2,
+      previousColumnCount: 2,
+      previousRowCount: 1,
+      rereadRange: 'Summary!A1:B2',
+      requestedRange: 'Summary!A1:B2',
+      spreadsheetId,
+      updatedCells: 4,
+      updatedColumns: 2,
+      updatedRows: 2,
+      valueInputOption: 'RAW'
+    })
+    expect(setOutput.spreadsheet.ranges[0]).toMatchObject({
+      range: 'Summary!A1:B2',
+      values: [
+        ['Name', 'Amount'],
+        ['Launch', 42]
+      ]
+    })
+    expect(appendOutput.edit).toMatchObject({
+      affectedRange: 'Summary!A3:B3',
+      inputCellCount: 2,
+      ok: true,
+      operation: 'append_rows',
+      rereadRange: 'Summary!A3:B3',
+      requestedRange: 'Summary!A:C',
+      updatedCells: 2,
+      updatedColumns: 2,
+      updatedRows: 1,
+      valueInputOption: 'USER_ENTERED'
+    })
+    expect(appendOutput.spreadsheet.ranges[0]).toMatchObject({
+      range: 'Summary!A3:B3',
+      values: [['Appended', true]]
+    })
+    expect(clearOutput.edit).toMatchObject({
+      affectedRange: 'Summary!C1:C2',
+      clearedRange: 'Summary!C1:C2',
+      inputCellCount: 0,
+      ok: true,
+      operation: 'clear_range',
+      previousCellCount: 2,
+      rereadRange: 'Summary!C1:C2',
+      requestedRange: 'Summary!C1:C2',
+      updatedCells: null,
+      valueInputOption: null
+    })
+    expect(clearOutput.spreadsheet.ranges[0]).toMatchObject({
+      range: 'Summary!C1:C2',
+      values: []
+    })
+    expect(JSON.stringify(clearOutput)).not.toContain('sensitive-before-clear')
+
+    const fullArtifactPath = expectedGoogleSheetArtifactAbsolutePath(projectPath, spreadsheetId)
+    const fullArtifact = JSON.parse(await readFile(fullArtifactPath, 'utf8')) as Record<
+      string,
+      unknown
+    >
+    expect(fullArtifact).toMatchObject({
+      id: spreadsheetId,
+      schemaVersion: 1,
+      title: 'Editable Sheet',
+      type: 'google.sheet.spreadsheet'
+    })
+    expect(fullArtifact).not.toHaveProperty('preview')
+    expect(fullArtifact).toHaveProperty('ranges')
+    expect(typeof fullArtifact.cachedAt).toBe('number')
+    expect(String(fullArtifactPath)).toContain('.openkhodam/artifacts/google-sheets')
+    expect(String(fullArtifactPath)).not.toContain(spreadsheetId)
+    await expect(stat(join(projectPath, '.openkhodam', 'artifacts.json'))).rejects.toThrow()
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('logs sanitized Google Sheets write failures without request bodies or cell contents', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-edit-failure-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+  const events: string[] = []
+  let updateBody: unknown = null
+  const multilineCell = 'Sensitive line one\nline two\twith tab'
+  const escapedCell = 'Escaped "quote" and \\ slash'
+  const repeatedWhitespaceCell = 'Repeated   whitespace\n\tcell'
+  const longCell = `LONG_SECRET_${'z'.repeat(350)}`
+  const jsonEscapedCell = JSON.stringify(escapedCell).slice(1, -1)
+  const normalizedMultilineCell = 'Sensitive line one line two with tab'
+  const normalizedRepeatedWhitespaceCell = 'Repeated whitespace cell'
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleSheetsSpreadsheetsWriteScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'sheets-edit-failure-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (
+      url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/sheet-conflict/values:batchGet')
+    ) {
+      events.push('values.batchGet')
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Bearer sheets-edit-failure-token'
+      )
+      return new Response(
+        JSON.stringify({
+          spreadsheetId: 'sheet-conflict',
+          valueRanges: [{ range: 'Summary!A1:B1', majorDimension: 'ROWS', values: [['Before']] }]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/sheet-conflict/values/')) {
+      events.push('values.update')
+      updateBody = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 409,
+            errors: [{ reason: `conflict ${normalizedRepeatedWhitespaceCell}` }],
+            message: `Sheet changed before write: ${multilineCell} ${longCell}.`,
+            status: `ABORTED ${jsonEscapedCell}`
+          },
+          requestBody: 'request-body-should-not-log',
+          values: [[multilineCell, escapedCell, repeatedWhitespaceCell, longCell]]
+        }),
+        { status: 409, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/sheet-conflict')) {
+      events.push('spreadsheets.get')
+      return new Response(
+        JSON.stringify({
+          spreadsheetId: 'sheet-conflict',
+          properties: { title: 'Conflict Sheet' },
+          sheets: [{ properties: { title: 'Summary', index: 0, sheetType: 'GRID' } }]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    let thrownMessage = ''
+    try {
+      await plugin.tool.google_sheets_edit.execute(
+        {
+          spreadsheetId: 'sheet-conflict',
+          operation: {
+            range: 'Summary!A1:B1',
+            type: 'set_values',
+            values: [[multilineCell, escapedCell, repeatedWhitespaceCell, longCell]]
+          }
+        },
+        {}
+      )
+    } catch (error) {
+      thrownMessage = error instanceof Error ? error.message : String(error)
+    }
+    expect(thrownMessage).toBe('Google Sheets values.update failed (HTTP 409).')
+
+    expect(events).toEqual(['spreadsheets.get', 'values.batchGet', 'values.update'])
+    expect(updateBody).toEqual({
+      majorDimension: 'ROWS',
+      values: [[multilineCell, escapedCell, repeatedWhitespaceCell, longCell]]
+    })
+    expect(warnings).toEqual([
+      [
+        'Google Workspace API request failed',
+        {
+          code: null,
+          message: null,
+          operation: 'Google Sheets values.update',
+          reason: null,
+          status: 409
+        }
+      ]
+    ])
+    const publicFailureText = JSON.stringify([warnings, thrownMessage])
+    expect(publicFailureText).not.toContain('sheets-edit-failure-token')
+    expect(publicFailureText).not.toContain('refresh-token')
+    expect(publicFailureText).not.toContain('request-body-should-not-log')
+    expect(publicFailureText).not.toContain(multilineCell)
+    expect(publicFailureText).not.toContain(normalizedMultilineCell)
+    expect(publicFailureText).not.toContain(escapedCell)
+    expect(publicFailureText).not.toContain(jsonEscapedCell)
+    expect(publicFailureText).not.toContain(repeatedWhitespaceCell)
+    expect(publicFailureText).not.toContain(normalizedRepeatedWhitespaceCell)
+    expect(publicFailureText).not.toContain(longCell)
+    expect(publicFailureText).not.toContain('LONG_SECRET_')
   } finally {
     console.warn = originalWarn
     globalThis.fetch = originalFetch
@@ -3949,6 +4491,52 @@ test('returns a clear reconnect error when the Google Sheets scope is missing', 
   }
 })
 
+test('returns a clear reconnect error when Google Sheets write scope is missing for edits', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-edit-missing-scope-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalFetch = globalThis.fetch
+  let fetchCalls = 0
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleSheetsSpreadsheetsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-readonly-sheets-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async () => {
+    fetchCalls += 1
+    throw new Error('google_sheets_edit should not call Google APIs without write scope')
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      plugin.tool.google_sheets_edit.execute(
+        {
+          spreadsheetId: 'sheet-1',
+          operation: { range: 'Summary!A1:B1', type: 'set_values', values: [['new value']] }
+        },
+        {}
+      )
+    ).rejects.toThrow(
+      'Google Sheets write access is not enabled. Reconnect Google Workspace in Settings to grant Sheets read/write access.'
+    )
+    expect(fetchCalls).toBe(0)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
 async function loadGoogleWorkspacePlugin(): Promise<GoogleWorkspacePlugin> {
   const pluginModule = (await import(pathToFileURL(builtGoogleWorkspacePluginPath).href)) as Record<
     string,
@@ -4111,8 +4699,8 @@ async function expectOpenCodeLoadsPlugins(pluginPaths: string[]): Promise<void> 
     expect(JSON.parse(body) as string[]).toContain(googleDocsReadToolName)
     expect(JSON.parse(body) as string[]).toContain(googleDocsEditToolName)
     expect(JSON.parse(body) as string[]).toContain(googleSheetsReadToolName)
+    expect(JSON.parse(body) as string[]).toContain(googleSheetsEditToolName)
     expect(JSON.parse(body) as string[]).not.toContain('google_docs_append_text')
-    expect(JSON.parse(body) as string[]).not.toContain('google_sheets_edit')
     expect(server.logs()).not.toMatch(/failed to load plugin/i)
   } finally {
     await server.stop()
