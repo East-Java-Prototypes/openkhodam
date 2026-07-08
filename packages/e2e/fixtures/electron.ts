@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { startFakeOpenCodeServer, type FakeOpenCodeServer } from './opencode-server'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
+const appEntryPoint = join(testDir, '../../desktop/out/main/index.js')
 
 type Fixtures = {
   electronApp: ElectronApplication
@@ -62,7 +63,7 @@ export const test = base.extend<Fixtures & Options>({
     }
 
     const app = await electron.launch({
-      args: [join(testDir, '../../desktop/out/main/index.js')],
+      args: [...headlessLinuxArgs(), appEntryPoint],
       env
     })
 
@@ -76,5 +77,10 @@ export const test = base.extend<Fixtures & Options>({
     await use(window)
   }
 })
+
+function headlessLinuxArgs(): string[] {
+  if (process.platform !== 'linux' || process.env.DISPLAY) return []
+  return ['--disable-gpu', '--ozone-platform=headless']
+}
 
 export { expect } from '@playwright/test'
