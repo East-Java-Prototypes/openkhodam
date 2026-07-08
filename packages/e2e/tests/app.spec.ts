@@ -1240,7 +1240,7 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
         }),
       { message: 'empty reasoning parts should not render visible part rows' }
     )
-    .toBe(4)
+    .toBe(7)
   const readTool = appWindow.locator('[aria-label="Tool read"]')
   await expect(readTool).toHaveAttribute('data-slot', 'tool-card')
   await expect(readTool).toHaveAttribute('data-status', 'completed')
@@ -1258,6 +1258,124 @@ test('renders structured v1 and v2 message parts', async ({ appWindow }) => {
   await readTool.getByRole('button', { name: 'Toggle details for tool read' }).click()
   await expect(readTool.locator('[data-slot="tool-detail-affordance"]')).toHaveText('Show details')
   await expect(readTool).not.toContainText('V1 fixture tool output')
+  const driveSearchTool = appWindow.locator('[aria-label="Tool google_drive_search_files"]')
+  await expect(driveSearchTool).toHaveAttribute('data-slot', 'tool-card')
+  await expect(driveSearchTool).toHaveAttribute('data-status', 'completed')
+  await expect(driveSearchTool.locator('[data-slot="tool-title"]')).toHaveText(
+    'Google Drive search'
+  )
+  await expect(driveSearchTool.locator('[data-slot="tool-name"]')).toHaveText(
+    'google_drive_search_files'
+  )
+  await expect(driveSearchTool.locator('[data-slot="tool-detail-affordance"]')).toHaveText(
+    'Show details'
+  )
+  await driveSearchTool
+    .getByRole('button', { name: 'Toggle details for tool google_drive_search_files' })
+    .click()
+  const driveSearchSummary = driveSearchTool.locator('[data-slot="google-workspace-tool-summary"]')
+  await expect(driveSearchSummary).toHaveAttribute('data-tool-name', 'google_drive_search_files')
+  await expect(driveSearchSummary).toContainText('Query')
+  await expect(driveSearchSummary).toContainText('roadmap notes')
+  await expect(driveSearchSummary).toContainText('Limit')
+  await expect(driveSearchSummary).toContainText('2')
+  await expect(driveSearchSummary).toContainText('Returned files')
+  await expect(driveSearchSummary).toContainText('Roadmap Notes')
+  await expect(driveSearchSummary).toContainText('Roadmap Budget')
+  await expect(driveSearchSummary).toContainText('Google Docs document')
+  await expect(driveSearchSummary).toContainText('Google Sheets spreadsheet')
+  await expect(
+    driveSearchSummary.getByRole('link', { name: 'Roadmap Notes', exact: true })
+  ).toHaveAttribute('href', 'https://docs.google.com/document/d/drive-doc-1/edit')
+  await expect(driveSearchTool.locator('[data-slot="tool-detail-label"]')).toHaveText([
+    'Input',
+    'Output'
+  ])
+  await expect(
+    driveSearchTool
+      .locator('pre[data-slot="tool-detail-text"]')
+      .filter({ hasText: '"query":"roadmap notes"' })
+  ).toBeVisible()
+  await expect(
+    driveSearchTool.locator('pre[data-slot="tool-detail-text"]').filter({ hasText: '"files":' })
+  ).toBeVisible()
+  const googleDocsReadTool = appWindow.locator('[aria-label="Tool google_docs_read"]')
+  await expect(googleDocsReadTool).toHaveAttribute('data-slot', 'tool-card')
+  await expect(googleDocsReadTool.locator('[data-slot="tool-title"]')).toHaveText(
+    'Google Docs read'
+  )
+  await expect(googleDocsReadTool.locator('[data-slot="tool-name"]')).toHaveText('google_docs_read')
+  await googleDocsReadTool
+    .getByRole('button', { name: 'Toggle details for tool google_docs_read' })
+    .click()
+  const googleDocsReadSummary = googleDocsReadTool.locator(
+    '[data-slot="google-workspace-tool-summary"]'
+  )
+  await expect(googleDocsReadSummary).toHaveAttribute('data-tool-name', 'google_docs_read')
+  await expect(googleDocsReadSummary).toContainText('Read Fixture Doc')
+  await expect(
+    googleDocsReadSummary.getByRole('link', { name: 'Read Fixture Doc', exact: true })
+  ).toHaveAttribute('href', 'https://docs.google.com/document/d/doc-read-1/edit')
+  await expect(googleDocsReadSummary).toContainText('doc-read-1')
+  await expect(googleDocsReadSummary).toContainText('rev-read-1')
+  await expect(googleDocsReadSummary).toContainText('2/2 blocks')
+  await expect(googleDocsReadSummary).toContainText('60 chars')
+  await expect(googleDocsReadSummary).toContainText('complete')
+  await expect(googleDocsReadSummary).toContainText(
+    'Read fixture first paragraph. Read fixture second paragraph.'
+  )
+  await expect(googleDocsReadTool.locator('[data-slot="tool-detail-label"]')).toHaveText([
+    'Input',
+    'Output'
+  ])
+  await expect(
+    googleDocsReadTool
+      .locator('pre[data-slot="tool-detail-text"]')
+      .filter({ hasText: '"documentId":"doc-read-1"' })
+  ).toBeVisible()
+  await expect(
+    googleDocsReadTool
+      .locator('pre[data-slot="tool-detail-text"]')
+      .filter({ hasText: '"title":"Read Fixture Doc"' })
+  ).toBeVisible()
+  const googleDocsEditTool = appWindow.locator('[aria-label="Tool google_docs_edit"]')
+  await expect(googleDocsEditTool).toHaveAttribute('data-slot', 'tool-card')
+  await expect(googleDocsEditTool.locator('[data-slot="tool-title"]')).toHaveText(
+    'Google Docs edit'
+  )
+  await expect(googleDocsEditTool.locator('[data-slot="tool-name"]')).toHaveText('google_docs_edit')
+  await googleDocsEditTool
+    .getByRole('button', { name: 'Toggle details for tool google_docs_edit' })
+    .click()
+  const googleDocsEditSummary = googleDocsEditTool.locator(
+    '[data-slot="google-workspace-tool-summary"]'
+  )
+  await expect(googleDocsEditSummary).toHaveAttribute('data-tool-name', 'google_docs_edit')
+  await expect(googleDocsEditSummary).toContainText('insert after text')
+  await expect(googleDocsEditSummary).toContainText('Edited Fixture Doc')
+  await expect(
+    googleDocsEditSummary.getByRole('link', { name: 'Edited Fixture Doc', exact: true })
+  ).toHaveAttribute('href', 'https://docs.google.com/document/d/doc-edit-1/edit')
+  await expect(googleDocsEditSummary).toContainText('Inserted 5 chars')
+  await expect(googleDocsEditSummary).toContainText('Deleted 0 chars')
+  await expect(googleDocsEditSummary).toContainText('Delta +5')
+  await expect(googleDocsEditSummary).toContainText('TODO')
+  await expect(googleDocsEditSummary).toContainText('1/1 blocks')
+  await expect(googleDocsEditSummary).toContainText('9 chars')
+  await expect(googleDocsEditTool.locator('[data-slot="tool-detail-label"]')).toHaveText([
+    'Input',
+    'Output'
+  ])
+  await expect(
+    googleDocsEditTool
+      .locator('pre[data-slot="tool-detail-text"]')
+      .filter({ hasText: '"type":"insert_after_text"' })
+  ).toBeVisible()
+  await expect(
+    googleDocsEditTool
+      .locator('pre[data-slot="tool-detail-text"]')
+      .filter({ hasText: '"textLengthDelta":5' })
+  ).toBeVisible()
   await expect(appWindow.getByText('Unsupported part: future-part')).toBeVisible()
   await expect(appWindow.getByText('Running the v2 shell check.')).toBeVisible()
   const bashTool = appWindow.locator('[aria-label="Tool bash"]')

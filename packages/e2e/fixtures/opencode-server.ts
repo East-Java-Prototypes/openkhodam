@@ -72,6 +72,93 @@ const structuredAssistantMarkdownText = [
 ].join('\n')
 const structuredReasoningText = 'Need **file context** before responding.'
 const structuredToolOutput = 'V1 fixture tool output with **literal tool markdown**'
+const googleDriveSearchOutput = JSON.stringify({
+  files: [
+    {
+      id: 'drive-doc-1',
+      mimeType: 'application/vnd.google-apps.document',
+      modifiedTime: '2026-07-08T10:00:00.000Z',
+      name: 'Roadmap Notes',
+      webViewLink: 'https://docs.google.com/document/d/drive-doc-1/edit'
+    },
+    {
+      id: 'drive-sheet-1',
+      mimeType: 'application/vnd.google-apps.spreadsheet',
+      modifiedTime: '2026-07-07T09:30:00.000Z',
+      name: 'Roadmap Budget',
+      webViewLink: 'https://docs.google.com/spreadsheets/d/drive-sheet-1/edit'
+    }
+  ]
+})
+const googleDocsReadOutput = JSON.stringify({
+  document: {
+    body: {
+      blocks: [
+        {
+          id: 'body-block-1',
+          ordinal: 1,
+          text: 'Read fixture first paragraph.\n',
+          type: 'paragraph'
+        },
+        {
+          id: 'body-block-2',
+          ordinal: 2,
+          text: 'Read fixture second paragraph.\n',
+          type: 'paragraph'
+        }
+      ]
+    },
+    id: 'doc-read-1',
+    link: 'https://docs.google.com/document/d/doc-read-1/edit',
+    preview: {
+      includedBlockCount: 2,
+      totalBlockCount: 2,
+      totalTextLength: 60,
+      truncated: false
+    },
+    revision: 'rev-read-1',
+    text: 'Read fixture first paragraph.\nRead fixture second paragraph.',
+    title: 'Read Fixture Doc',
+    type: 'google.doc.document'
+  }
+})
+const googleDocsEditOutput = JSON.stringify({
+  document: {
+    body: {
+      blocks: [
+        {
+          id: 'body-block-1',
+          ordinal: 1,
+          text: 'TODO done\n',
+          type: 'paragraph'
+        }
+      ]
+    },
+    id: 'doc-edit-1',
+    link: 'https://docs.google.com/document/d/doc-edit-1/edit',
+    preview: {
+      includedBlockCount: 1,
+      totalBlockCount: 1,
+      totalTextLength: 9,
+      truncated: false
+    },
+    revision: 'rev-edit-2',
+    text: 'TODO done',
+    title: 'Edited Fixture Doc',
+    type: 'google.doc.document'
+  },
+  edit: {
+    deletedTextLength: 0,
+    documentId: 'doc-edit-1',
+    insertedTextLength: 5,
+    link: 'https://docs.google.com/document/d/doc-edit-1/edit',
+    ok: true,
+    operation: 'insert_after_text',
+    revision: 'rev-edit-2',
+    textLengthDelta: 5,
+    title: 'Edited Fixture Doc'
+  }
+})
 const providers = {
   all: [
     {
@@ -416,6 +503,33 @@ function structuredV1AssistantMessage(id: string, parentID: string): unknown {
         status: 'completed',
         input: { filePath: 'README.md' },
         output: structuredToolOutput
+      },
+      {
+        id: `${id}-google-drive-search`,
+        type: 'tool',
+        name: 'google_drive_search_files',
+        status: 'completed',
+        input: { limit: 2, query: 'roadmap notes' },
+        output: googleDriveSearchOutput
+      },
+      {
+        id: `${id}-google-docs-read`,
+        type: 'tool',
+        name: 'google_docs_read',
+        status: 'completed',
+        input: { documentId: 'doc-read-1' },
+        output: googleDocsReadOutput
+      },
+      {
+        id: `${id}-google-docs-edit`,
+        type: 'tool',
+        name: 'google_docs_edit',
+        status: 'completed',
+        input: {
+          documentId: 'doc-edit-1',
+          operation: { match: 'TODO', occurrence: 'last', text: ' done', type: 'insert_after_text' }
+        },
+        output: googleDocsEditOutput
       },
       { id: `${id}-step-finish`, type: 'step-finish', text: 'Hidden v1 step finish marker' },
       { id: `${id}-unknown`, type: 'future-part', detail: 'V1 unknown fixture' }
