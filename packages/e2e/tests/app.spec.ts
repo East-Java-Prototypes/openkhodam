@@ -1777,7 +1777,12 @@ test('stops a just-created session without restoring the admitted prompt handoff
   fakeOpenCodeServer
 }) => {
   await waitForChatShell(appWindow)
-  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await appWindow.evaluate(() => {
+    window.location.hash = '#/projects/fake-project'
+  })
+  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
+    /\/projects\/fake-project$/
+  )
   await expectOpenedProjectRouteResolved(appWindow)
 
   const sessionID = 'new-session-2'
