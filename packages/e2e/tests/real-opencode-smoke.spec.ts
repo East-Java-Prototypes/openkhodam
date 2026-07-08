@@ -9,7 +9,7 @@ test('sends a prompt through the real OpenCode sidecar to a local fake provider'
   realOpenCode
 }) => {
   await waitForConnectedSidecar(appWindow)
-  await openWorkspaceProject(appWindow, realOpenCode.workspaceName)
+  await openWorkspaceProject(appWindow, realOpenCode.workspaceDir)
 
   const composer = appWindow.getByRole('form', { name: 'Chat prompt' })
   await expect(composer).toBeVisible()
@@ -49,17 +49,19 @@ async function waitForConnectedSidecar(page: Page): Promise<void> {
     .toBe('connected')
 }
 
-async function openWorkspaceProject(page: Page, workspaceName: string): Promise<void> {
-  const projectLink = page
-    .getByRole('navigation', { name: 'Projects' })
-    .getByRole('link', { name: workspaceName, exact: true })
+async function openWorkspaceProject(page: Page, workspaceDir: string): Promise<void> {
+  const openProjectForm = page.getByRole('form', { name: 'Open project by directory' })
+  const directoryInput = openProjectForm.getByLabel('Project directory')
+  const openButton = openProjectForm.getByRole('button', { name: 'Open', exact: true })
 
-  await expect(projectLink).toBeVisible({ timeout: 45_000 })
-  await projectLink.click()
+  await expect(openProjectForm).toBeVisible()
+  await directoryInput.fill(workspaceDir)
+  await expect(openButton).toBeEnabled()
+  await openButton.click()
   await expect
     .poll(() => page.evaluate(() => window.location.hash), {
       message: 'opening the temp workspace should route to its project',
       timeout: 30_000
     })
-    .toMatch(/\/projects\//)
+    .toMatch(/\/projects\/(?!global(?:$|[/?#]))/)
 }

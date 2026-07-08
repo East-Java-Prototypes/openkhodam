@@ -54,8 +54,20 @@ export const test = base.extend<RealOpenCodeFixtures>({
       fakeProvider = await startFakeProvider()
       await mkdir(workspaceDir, { recursive: true })
       await mkdir(profileDir, { recursive: true })
-      await writeFile(join(workspaceDir, 'README.md'), '# OpenKhodam real sidecar smoke workspace\n')
+      await writeFile(
+        join(workspaceDir, 'README.md'),
+        '# OpenKhodam real sidecar smoke workspace\n'
+      )
       await execFileAsync('git', ['init', '--quiet'], { cwd: workspaceDir })
+      await execFileAsync('git', ['config', 'user.email', 'smoke@example.test'], {
+        cwd: workspaceDir
+      })
+      await execFileAsync('git', ['config', 'user.name', 'OpenKhodam Smoke'], {
+        cwd: workspaceDir
+      })
+      await execFileAsync('git', ['commit', '--allow-empty', '--quiet', '-m', 'root'], {
+        cwd: workspaceDir
+      })
       await writeFile(
         join(workspaceDir, 'opencode.json'),
         `${JSON.stringify(createOpenCodeConfig(fakeProvider.url), null, 2)}\n`,
