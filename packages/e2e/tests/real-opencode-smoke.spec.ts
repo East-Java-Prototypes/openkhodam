@@ -57,6 +57,9 @@ async function openWorkspaceProject(page: Page, workspaceDir: string): Promise<v
   expect(projectID, 'OpenCode should return a concrete temp workspace project id').not.toBe('')
   expect(projectID, 'temp workspace should not resolve to the global project').not.toBe('global')
 
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await waitForConnectedSidecar(page)
+
   await page.evaluate((id) => {
     window.location.hash = `#/projects/${encodeURIComponent(id)}`
   }, projectID)
