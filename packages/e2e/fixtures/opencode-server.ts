@@ -4,6 +4,8 @@ export type FakeOpenCodeServer = {
   url: string
   getPromptRequests: () => FakePromptRequest[]
   getRequestEvents: () => string[]
+  getConnectedProviders: () => string[]
+  setConnectedProviders: (providerIDs: string[]) => void
   close: () => Promise<void>
 }
 
@@ -48,6 +50,8 @@ const connectedProviderID = 'fake-provider'
 const connectedModelID = 'fake-connected-model'
 const disconnectedProviderID = 'offline-provider'
 const disconnectedModelID = 'offline-model'
+const oauthProviderID = 'oauth-provider'
+const oauthModelID = 'oauth-model'
 const structuredUserPrompt = 'Structured fixture user prompt with **literal user markdown**'
 const structuredAssistantMarkdownText = [
   'Inspecting project files.',
@@ -78,32 +82,74 @@ const structuredAssistantMarkdownText = [
 ].join('\n')
 const structuredReasoningText = 'Need **file context** before responding.'
 const structuredToolOutput = 'V1 fixture tool output with **literal tool markdown**'
-const providers = {
-  all: [
+const providerCatalog = [
+  {
+    id: connectedProviderID,
+    name: 'Connected Fake Provider',
+    source: 'api',
+    env: [],
+    options: {},
+    models: {
+      [connectedModelID]: createProviderModel(connectedModelID, 'Connected Fake Model', {
+        low: {},
+        high: {}
+      }),
+      'fake-alt-model': createProviderModel('fake-alt-model', 'Connected Alternate Model')
+    }
+  },
+  {
+    id: disconnectedProviderID,
+    name: 'Disconnected Provider',
+    source: 'api',
+    env: [],
+    options: {},
+    models: {
+      [disconnectedModelID]: createProviderModel(disconnectedModelID, 'Disconnected Hidden Model')
+    }
+  },
+  {
+    id: oauthProviderID,
+    name: 'OAuth Provider',
+    source: 'api',
+    env: [],
+    options: {},
+    models: {
+      [oauthModelID]: createProviderModel(oauthModelID, 'OAuth Fixture Model')
+    }
+  }
+]
+const providerAuthMethods = {
+  [connectedProviderID]: [{ type: 'api', label: 'API key' }],
+  [disconnectedProviderID]: [
     {
-      id: connectedProviderID,
-      name: 'Connected Fake Provider',
-      env: [],
-      models: {
-        [connectedModelID]: createProviderModel(connectedModelID, 'Connected Fake Model', {
-          low: {},
-          high: {}
-        }),
-        'fake-alt-model': createProviderModel('fake-alt-model', 'Connected Alternate Model')
-      }
-    },
-    {
-      id: disconnectedProviderID,
-      name: 'Disconnected Provider',
-      env: [],
-      models: {
-        [disconnectedModelID]: createProviderModel(disconnectedModelID, 'Disconnected Hidden Model')
-      }
+      type: 'api',
+      label: 'API key',
+      prompts: [
+        {
+          type: 'text',
+          key: 'workspace',
+          message: 'Workspace label',
+          placeholder: 'Production workspace'
+        },
+        {
+          type: 'select',
+          key: 'region',
+          message: 'Region',
+          options: [
+            { label: 'US', value: 'us', hint: 'United States' },
+            { label: 'EU', value: 'eu', hint: 'Europe' }
+          ]
+        }
+      ]
     }
   ],
-  connected: [connectedProviderID],
-  default: { [connectedProviderID]: connectedModelID }
+  [oauthProviderID]: [
+    { type: 'oauth', label: 'OAuth code' },
+    { type: 'oauth', label: 'OAuth auto' }
+  ]
 }
+const connectedProviderIDs = new Set<string>()
+const pendingOAuth = new Map<string, { method: 'auto' | 'code'; methodIndex: number }>()
 const agents = [
   createAgent('build', 'Primary fake build agent', 'primary'),
   createAgent('plan', 'All-mode fake planning agent', 'all'),
@@ -126,7 +172,8 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     if (request.method === 'OPTIONS') return preflight(response)
-    const body = request.method === 'POST' ? await readJson(request) : null
+    const body =
+      request.method === 'POST' || request.method === 'PUT' ? await readJson(request) : null
 
     if (request.method === 'GET' && url.pathname === '/global/health') {
       return json(response, { healthy: true, version: 'fake-stable' })
@@ -138,7 +185,62 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       return json(response, projectForDirectory(url.searchParams.get('directory') ?? directory))
     }
     if (request.method === 'GET' && url.pathname === '/provider') {
-      return json(response, providers)
+      return json(response, currentProviders())
+    }
+    if (request.method === 'GET' && url.pathname === '/provider/auth') {
+      return json(response, providerAuthMethods)
+    }
+    const authorizeMatch = url.pathname.match(/^\/provider\/([^/]+)\/oauth\/authorize$/)
+    if (request.method === 'POST' && authorizeMatch) {
+      const providerID = authorizeMatch[1]
+      const methodIndex = typeof body?.method === 'number' ? body.method : 0
+      const method =
+        providerAuthMethods[providerID as keyof typeof providerAuthMethods]?.[methodIndex]
+      if (!method || method.type !== 'oauth') {
+        return json(response, { message: 'OAuth method not found.' }, 400)
+      }
+      const authorizationMethod = methodIndex === 1 ? 'auto' : 'code'
+      pendingOAuth.set(providerID, { method: authorizationMethod, methodIndex })
+      return json(response, {
+        url: `https://auth.example.test/${providerID}?method=${methodIndex}`,
+        method: authorizationMethod,
+        instructions:
+          authorizationMethod === 'auto'
+            ? 'Confirm this OAuth code: OAUTH-AUTO-CODE'
+            : 'Open the OAuth fixture and paste the returned code.'
+      })
+    }
+    const callbackMatch = url.pathname.match(/^\/provider\/([^/]+)\/oauth\/callback$/)
+    if (request.method === 'POST' && callbackMatch) {
+      const providerID = callbackMatch[1]
+      const pending = pendingOAuth.get(providerID)
+      if (!pending) return json(response, { message: 'OAuth authorization was not started.' }, 400)
+      if (pending.method === 'code' && typeof body?.code !== 'string') {
+        return json(response, { message: 'OAuth code is required.' }, 400)
+      }
+      pendingOAuth.delete(providerID)
+      connectedProviderIDs.add(providerID)
+      return json(response, true)
+    }
+    const authMatch = url.pathname.match(/^\/auth\/([^/]+)$/)
+    if (request.method === 'PUT' && authMatch) {
+      const providerID = authMatch[1]
+      if (!providerCatalog.some((provider) => provider.id === providerID)) {
+        return json(response, { message: 'Provider not found.' }, 404)
+      }
+      if (body?.type !== 'api' || typeof body?.key !== 'string' || body.key.length === 0) {
+        return json(response, { message: 'API key auth is required.' }, 400)
+      }
+      connectedProviderIDs.add(providerID)
+      return json(response, true)
+    }
+    if (request.method === 'DELETE' && authMatch) {
+      connectedProviderIDs.delete(authMatch[1])
+      pendingOAuth.delete(authMatch[1])
+      return json(response, true)
+    }
+    if (request.method === 'POST' && url.pathname === '/global/dispose') {
+      return json(response, true)
     }
     if (request.method === 'GET' && url.pathname === '/api/agent') {
       return json(response, { location: { directory }, data: agents })
@@ -261,6 +363,15 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     url: `http://127.0.0.1:${address.port}`,
     getPromptRequests: () => [...promptRequests],
     getRequestEvents: () => [...requestEvents],
+    getConnectedProviders: () => [...connectedProviderIDs],
+    setConnectedProviders: (providerIDs) => {
+      connectedProviderIDs.clear()
+      for (const providerID of providerIDs) {
+        if (providerCatalog.some((provider) => provider.id === providerID)) {
+          connectedProviderIDs.add(providerID)
+        }
+      }
+    },
     close: () => new Promise((resolve) => server.close(() => resolve()))
   }
 }
@@ -306,11 +417,36 @@ function projectForDirectory(projectDirectory: string): typeof project {
   }
 }
 
+function currentProviders(): {
+  all: typeof providerCatalog
+  connected: string[]
+  default: Record<string, string>
+} {
+  return {
+    all: providerCatalog,
+    connected: [...connectedProviderIDs],
+    default: currentProviderDefaults()
+  }
+}
+
+function currentProviderDefaults(): Record<string, string> {
+  const defaults: Record<string, string> = {}
+  if (connectedProviderIDs.has(connectedProviderID))
+    defaults[connectedProviderID] = connectedModelID
+  if (connectedProviderIDs.has(disconnectedProviderID))
+    defaults[disconnectedProviderID] = disconnectedModelID
+  if (connectedProviderIDs.has(oauthProviderID)) defaults[oauthProviderID] = oauthModelID
+  return defaults
+}
+
 function resetState(): void {
   sessions.clear()
   messages.clear()
   pendingPrompts.clear()
   sessionStatuses.clear()
+  pendingOAuth.clear()
+  connectedProviderIDs.clear()
+  connectedProviderIDs.add(connectedProviderID)
   promptRequests.length = 0
   requestEvents.length = 0
   promptIdSequence = 0
@@ -609,7 +745,9 @@ function isConnectedModel(model: any): boolean {
   if (!model || typeof model !== 'object' || Array.isArray(model)) return false
   const keys = Object.keys(model)
   if (keys.length !== 2 || !keys.includes('providerID') || !keys.includes('modelID')) return false
-  return model.providerID === connectedProviderID && model.modelID in providers.all[0].models
+  if (!connectedProviderIDs.has(model.providerID)) return false
+  const provider = providerCatalog.find((provider) => provider.id === model.providerID)
+  return Boolean(provider && model.modelID in provider.models)
 }
 
 function isVisibleAgent(agentID: any): boolean {
@@ -627,9 +765,10 @@ function isValidVariant(model: any, variant: any): boolean {
   if (variant === undefined || variant === null) return true
   if (typeof variant !== 'string') return false
   if (!isConnectedModel(model)) return false
-  const providerModel = (
-    providers.all[0].models as Record<string, { variants?: Record<string, unknown> }>
-  )[model.modelID]
+  const provider = providerCatalog.find((provider) => provider.id === model.providerID)
+  const providerModel = provider?.models[model.modelID] as
+    | { variants?: Record<string, unknown> }
+    | undefined
   return Boolean(providerModel.variants && variant in providerModel.variants)
 }
 
@@ -655,6 +794,6 @@ function corsHeaders(headers: Record<string, string> = {}): Record<string, strin
     ...headers,
     'access-control-allow-origin': '*',
     'access-control-allow-headers': 'content-type, authorization, x-requested-with',
-    'access-control-allow-methods': 'GET, POST, OPTIONS'
+    'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS'
   }
 }

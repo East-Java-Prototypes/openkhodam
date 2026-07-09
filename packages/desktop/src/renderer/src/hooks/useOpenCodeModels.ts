@@ -65,14 +65,7 @@ export function useOpenCodeModels(directory: string | null | undefined) {
   const selectionDirectory = directory ?? null
 
   const modelsQuery = useQuery({
-    queryKey: [
-      ...openCodeQueryKeys.all,
-      'providers',
-      status.url,
-      status.pid,
-      status.updatedAt,
-      directory
-    ],
+    queryKey: openCodeQueryKeys.providerList(status, directory),
     queryFn: async (): Promise<ProviderListResponse> => {
       const response = await client!.provider.list({ directory: directory! })
       if (response.error) throw response.error

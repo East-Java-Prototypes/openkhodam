@@ -656,6 +656,17 @@ async function installGoogleWorkspaceOAuthCapture(electronApp: ElectronApplicati
   )
 }
 
+async function installProviderOAuthCapture(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(({ shell }) => {
+    const globalObject = globalThis as any
+    globalObject.__providerOAuthCapture = { authUrl: null }
+    shell.openExternal = async (url: string) => {
+      globalObject.__providerOAuthCapture.authUrl = String(url)
+      return undefined
+    }
+  })
+}
+
 test('renders the built desktop chat shell', async ({ appWindow }) => {
   await waitForChatShell(appWindow)
   await expect(
@@ -2244,6 +2255,10 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   await expect(appWindow.getByText('Renderer HTTP', { exact: true })).toBeVisible()
   await expect(appWindow.getByRole('button', { name: /^(Restart|Restarting)$/ })).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'Providers' })).toBeVisible()
+  await expect(appWindow.getByText('Connected Fake Provider')).toBeVisible()
+  await expect(appWindow.getByText('Disconnected Provider')).toBeVisible()
+  await expect(appWindow.getByText('OAuth Provider')).toBeVisible()
   await expect(
     appWindow.getByText(googleWorkspaceNotConfiguredMessage, { exact: true })
   ).toBeVisible()
@@ -2254,6 +2269,141 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/#\/$/)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(appWindow.getByText('OpenCode', { exact: true })).toHaveCount(0)
+})
+
+test('connects and disconnects OpenCode API-key providers from settings without persisting secrets', async ({
+  appWindow,
+  electronApp
+}) => {
+  const userDataPath = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+  const appConfigPath = join(userDataPath, 'openkhodam-config.json')
+  const providerSecret = 'sk-provider-secret-fixture'
+
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await expect(providersSection).toBeVisible()
+  await expect(providersSection.getByText('Connected Fake Provider')).toBeVisible()
+  await expect(providersSection.getByText('Disconnected Provider')).toBeVisible()
+
+  const disconnectedRow = providersSection
+    .getByRole('listitem')
+    .filter({ hasText: 'Disconnected Provider' })
+  await expect(disconnectedRow.getByText('Disconnected', { exact: true })).toBeVisible()
+  await disconnectedRow.getByRole('button', { name: 'Connect provider', exact: true }).click()
+
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Disconnected Provider' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: /API key/ }).click()
+  await dialog.getByLabel('Workspace label').fill('Fixture workspace')
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
+  await dialog.getByRole('button', { name: 'US' }).click()
+  await dialog.getByLabel('API key').fill(providerSecret)
+  await dialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(dialog.getByText('Disconnected Provider connected.', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+
+  await expect(
+    disconnectedRow.getByRole('button', { name: 'Disconnect provider', exact: true })
+  ).toBeVisible()
+  await expect(disconnectedRow.getByText('Connected', { exact: true })).toBeVisible()
+
+  const configRaw = (await readOptionalFile(appConfigPath)) ?? ''
+  const artifactsRaw = (await readOptionalFile(projectArtifactsFile)) ?? ''
+  expect(configRaw).not.toContain(providerSecret)
+  expect(artifactsRaw).not.toContain(providerSecret)
+
+  await disconnectedRow.getByRole('button', { name: 'Disconnect provider', exact: true }).click()
+  await expect(
+    disconnectedRow.getByRole('button', { name: 'Connect provider', exact: true })
+  ).toBeVisible()
+  await expect(disconnectedRow.getByText('Disconnected', { exact: true })).toBeVisible()
+})
+
+test('connects an OpenCode OAuth provider from settings using the fixture OAuth callback', async ({
+  appWindow,
+  electronApp
+}) => {
+  await installProviderOAuthCapture(electronApp)
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  const oauthRow = providersSection.getByRole('listitem').filter({ hasText: 'OAuth Provider' })
+  await expect(oauthRow.getByText('Disconnected', { exact: true })).toBeVisible()
+  await oauthRow.getByRole('button', { name: 'Connect provider', exact: true }).click()
+
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect OAuth Provider' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'OAuth code' }).click()
+  await expect(dialog.getByRole('link', { name: 'Open authorization link' })).toBeVisible()
+
+  const authUrl = await waitForMainProcessValue(async () =>
+    electronApp.evaluate(() => (globalThis as any).__providerOAuthCapture?.authUrl ?? null)
+  )
+  expect(authUrl).toBe('https://auth.example.test/oauth-provider?method=0')
+
+  await dialog.getByLabel('Authorization code').fill('fixture-oauth-code')
+  await dialog.getByRole('button', { name: 'Complete OAuth', exact: true }).click()
+  await expect(dialog.getByText('OAuth Provider connected.', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+  await expect(
+    oauthRow.getByRole('button', { name: 'Disconnect provider', exact: true })
+  ).toBeVisible()
+  await expect(oauthRow.getByText('Connected', { exact: true })).toBeVisible()
+})
+
+test('opens provider onboarding from the empty model picker and refreshes connected models', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  fakeOpenCodeServer.setConnectedProviders([])
+  await seedOpenedFakeProject(appWindow)
+  await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+  await expectOpenedProjectRouteResolved(appWindow)
+
+  const composer = appWindow.getByRole('form', { name: 'Chat prompt' })
+  await expect(composer.getByLabel('OpenCode model')).toHaveCount(0)
+  await expect(
+    composer.getByRole('button', { name: 'Connect provider', exact: true })
+  ).toBeVisible()
+  await composer.getByRole('button', { name: 'Connect provider', exact: true }).click()
+
+  const providerDialog = appWindow.getByRole('dialog', { name: 'Connect OpenCode provider' })
+  await expect(providerDialog).toBeVisible()
+  await providerDialog.getByRole('button', { name: /Disconnected Provider/ }).click()
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Disconnected Provider' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: /API key/ }).click()
+  await dialog.getByLabel('Workspace label').fill('CTA workspace')
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
+  await dialog.getByRole('button', { name: 'US' }).click()
+  await dialog.getByLabel('API key').fill('sk-empty-model-cta-secret')
+  await dialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(dialog.getByText('Disconnected Provider connected.', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+
+  const modelPicker = composer.getByLabel('OpenCode model')
+  await expect(modelPicker).toBeVisible()
+  await expect(modelPicker).toHaveValue('Disconnected Provider · Disconnected Hidden Model')
+
+  const prompt = 'Connected after provider CTA prompt'
+  await sendPrompt(appWindow, prompt)
+  await expect
+    .poll(
+      () =>
+        fakeOpenCodeServer.getPromptRequests().find((request) => request.text === prompt) ?? null
+    )
+    .toMatchObject({
+      text: prompt,
+      model: { providerID: 'offline-provider', modelID: 'offline-model' }
+    })
 })
 
 test.describe('Google Workspace settings gating', () => {

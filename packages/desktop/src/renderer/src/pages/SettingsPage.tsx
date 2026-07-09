@@ -11,6 +11,7 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
+import { ProvidersSection } from '../components/providers/ProvidersSection'
 import { openCodeQueryKeys, openCodeSidecarState } from '../hooks/opencode/sidecar'
 import { getOpenCodeAuthorizationHeader, useOpenCodeSdk } from '../hooks/opencode/client'
 import { getThemeMode, setThemeMode, subscribeToTheme, type ThemeMode } from '../theme'
@@ -26,6 +27,10 @@ function SettingsPage(): JSX.Element {
   const googleWorkspaceQuery = useQuery({
     queryKey: ['google-workspace', 'status'],
     queryFn: window.api.getGoogleWorkspaceStatus
+  })
+  const openedProjectFoldersQuery = useQuery({
+    queryKey: ['projects', 'opened-folders', 'settings'],
+    queryFn: window.api.listOpenedProjectFolders
   })
   const rendererHttpHealthQuery = useQuery({
     queryKey: ['opencode', 'renderer-http-health', status.updatedAt],
@@ -71,6 +76,7 @@ function SettingsPage(): JSX.Element {
     rendererHttpHealthQuery.data,
     rendererHttpHealthQuery.error
   )
+  const providerDirectory = openedProjectFoldersQuery.data?.[0]?.directory ?? null
 
   return (
     <section
@@ -101,6 +107,8 @@ function SettingsPage(): JSX.Element {
             onCancel={() => cancelGoogleWorkspaceConnect.mutate()}
             onDisconnect={() => disconnectGoogleWorkspace.mutate()}
           />
+
+          <ProvidersSection directory={providerDirectory} />
 
           <OpenCodeServerView
             status={status}
