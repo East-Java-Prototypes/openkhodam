@@ -23,6 +23,15 @@ const arbitraryLinkedDocUrl = 'https://example.test/document/d/arbitrary-linked-
 const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
 const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
+const unsupportedSlashCommands = [
+  '/redo',
+  '/new',
+  '/compact',
+  '/fork',
+  '/share',
+  '/terminal',
+  '/mcp'
+]
 const removedComposerHelperCopy = [
   'Send to the selected session.',
   'Select a connected OpenCode model before sending.',
@@ -494,6 +503,44 @@ async function sendPrompt(page: Page, prompt: string): Promise<void> {
   await page.getByLabel('Message OpenKhodam').fill(prompt)
   await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
   await page.getByRole('button', { name: 'Send' }).click()
+}
+
+async function fakeSessionMessageTexts(
+  fakeOpenCodeServer: { url: string },
+  sessionID: string
+): Promise<string[]> {
+  const response = await fetch(`${fakeOpenCodeServer.url}/session/${sessionID}/message`)
+  expect(response.ok).toBe(true)
+  const messages = (await response.json()) as unknown[]
+  return messages.flatMap((message) => fakeMessageTextParts(message))
+}
+
+function fakeMessageTextParts(message: unknown): string[] {
+  if (!isRecord(message) || !Array.isArray(message.parts)) return []
+  return message.parts.flatMap((part) => {
+    if (!isRecord(part)) return []
+    return typeof part.text === 'string' ? [part.text] : []
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+async function expectSlashCommandPopoverShowsOnlyUndo(page: Page): Promise<Locator> {
+  const popover = page.getByRole('dialog', { name: 'Slash commands' })
+
+  await expect(popover).toBeVisible()
+  await expect(popover.getByText('/undo', { exact: true })).toBeVisible()
+  await expect(popover.getByText('Undo last prompt', { exact: true })).toBeVisible()
+  await expect(
+    popover.getByText('Revert the last prompt and restore it to the composer.', { exact: true })
+  ).toBeVisible()
+  for (const command of unsupportedSlashCommands) {
+    await expect(popover.getByText(command, { exact: true })).toHaveCount(0)
+  }
+
+  return popover
 }
 
 async function articleTexts(page: Page): Promise<string[]> {
@@ -1722,6 +1769,144 @@ test('shows optimistic prompt before delayed stable message projection', async (
     appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
   ).toHaveCount(0)
   await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toHaveCount(1)
+})
+
+test('shows and filters only the undo slash command in the active session composer', async ({
+  appWindow
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  await promptInput.fill('/')
+  const popover = await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
+
+  await promptInput.fill('/un')
+  await expect(popover).toBeVisible()
+  await expect(popover.getByText('/undo', { exact: true })).toBeVisible()
+
+  await promptInput.fill('/zz')
+  await expect(popover).toBeVisible()
+  await expect(popover.getByText('/undo', { exact: true })).toHaveCount(0)
+  await expect(popover.getByText('No slash commands available.', { exact: true })).toBeVisible()
+})
+
+test('executes undo by clicking the slash command and restores the prompt text', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const transcript = messageTranscript(appWindow)
+  await promptInput.fill('/')
+  const popover = await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
+  await popover.getByText('/undo', { exact: true }).click()
+
+  await expect(promptInput).toHaveValue('Seeded user prompt')
+  await expect(transcript.getByText('Seeded user prompt', { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText('Seeded assistant response', { exact: true })).toHaveCount(0)
+  await expect(transcript.getByRole('article')).toHaveCount(0)
+  await expect
+    .poll(() => fakeSessionMessageTexts(fakeOpenCodeServer, 'seeded-session'))
+    .toEqual(expect.arrayContaining(['Seeded user prompt', 'Seeded assistant response']))
+})
+
+test('executes undo by keyboard selection and exact slash submit', async ({ appWindow }) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const transcript = messageTranscript(appWindow)
+
+  await promptInput.fill('/un')
+  await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
+  await promptInput.press('Enter')
+  await expect(promptInput).toHaveValue('Seeded user prompt')
+  await expect(transcript.getByText('Seeded assistant response', { exact: true })).toHaveCount(0)
+
+  const exactUndoPrompt = 'Prompt restored from exact undo submit'
+  await sendPrompt(appWindow, exactUndoPrompt)
+  await expect(appWindow.getByText(`Fake response for: ${exactUndoPrompt}`)).toBeVisible()
+
+  await promptInput.fill('/undo')
+  await expect(appWindow.getByRole('button', { name: 'Send' })).toBeEnabled()
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+
+  await expect(promptInput).toHaveValue(exactUndoPrompt)
+  await expect(transcript.getByText(exactUndoPrompt, { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText(`Fake response for: ${exactUndoPrompt}`)).toHaveCount(0)
+})
+
+test('repeated undo targets the previous visible user prompt while preserving server history', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const firstPrompt = 'First repeated undo prompt'
+  const secondPrompt = 'Second repeated undo prompt'
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const transcript = messageTranscript(appWindow)
+
+  await sendPrompt(appWindow, firstPrompt)
+  await expect(transcript.getByText(`Fake response for: ${firstPrompt}`)).toBeVisible()
+  await sendPrompt(appWindow, secondPrompt)
+  await expect(transcript.getByText(`Fake response for: ${secondPrompt}`)).toBeVisible()
+
+  await promptInput.fill('/undo')
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(promptInput).toHaveValue(secondPrompt)
+  await expect(transcript.getByText(secondPrompt, { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText(`Fake response for: ${secondPrompt}`)).toHaveCount(0)
+  await expect(transcript.getByText(firstPrompt, { exact: true })).toBeVisible()
+
+  await promptInput.fill('/undo')
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(promptInput).toHaveValue(firstPrompt)
+  await expect(transcript.getByText(firstPrompt, { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText(`Fake response for: ${firstPrompt}`)).toHaveCount(0)
+  await expect(transcript.getByText('Seeded user prompt', { exact: true })).toBeVisible()
+  await expect(transcript.getByText('Seeded assistant response', { exact: true })).toBeVisible()
+
+  await expect
+    .poll(() => fakeSessionMessageTexts(fakeOpenCodeServer, 'seeded-session'))
+    .toEqual(
+      expect.arrayContaining([
+        firstPrompt,
+        `Fake response for: ${firstPrompt}`,
+        secondPrompt,
+        `Fake response for: ${secondPrompt}`
+      ])
+    )
+})
+
+test('aborts a pending prompt before undo revert and restores that prompt', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const prompt = 'Pending prompt undone before projection'
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const transcript = messageTranscript(appWindow)
+
+  await promptInput.fill(prompt)
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toBeVisible()
+
+  await promptInput.fill('/undo')
+  await expect(appWindow.getByRole('button', { name: 'Send' })).toBeEnabled()
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+
+  await expect(promptInput).toHaveValue(prompt)
+  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(
+    0
+  )
+  await expect(transcript.getByText(prompt, { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText(`Fake response for: ${prompt}`)).toHaveCount(0)
+  await expect(transcript.getByText('Seeded user prompt', { exact: true })).toBeVisible()
+  await expect
+    .poll(() => fakeOpenCodeServer.getRequestEvents())
+    .toEqual(['prompt:seeded-session', 'abort:seeded-session', 'revert:seeded-session'])
 })
 
 test('sends the chat composer with Enter while Shift+Enter stays multiline', async ({

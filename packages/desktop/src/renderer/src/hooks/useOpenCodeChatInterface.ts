@@ -11,7 +11,8 @@ import {
   type OpenCodePromptOptions,
   type OpenCodeAdmittedPrompt,
   useSendOpenCodePrompt,
-  useStartOpenCodeConversation
+  useStartOpenCodeConversation,
+  useUndoOpenCodePrompt
 } from './useOpenCodeChat'
 import {
   openCodeSessionEventErrorsQueryKey,
@@ -110,7 +111,9 @@ export type OpenCodeSessionRouteState = {
   promptText: string
   isLoading: boolean
   isSending: boolean
+  isUndoingPrompt: boolean
   canSendPrompt: boolean
+  canUndoPrompt: boolean
   emptyMessage: string | null
   transcriptStatusMessage: string | null
   errorMessage: string | null
@@ -133,6 +136,7 @@ export type OpenCodeSessionRouteState = {
   isLoadingAgents: boolean
   setPromptText: (value: string) => void
   sendPrompt: () => void
+  undoLastPrompt: () => void
 }
 
 export type OpenCodeChatInterfaceState = OpenCodeChatShellState &
@@ -307,6 +311,10 @@ export function useOpenCodeSessionRoute(
     directory,
     sessionID
   )
+  const { undoPromptMutation, connection: undoConnection } = useUndoOpenCodePrompt(
+    directory,
+    sessionID
+  )
   const messages = messagesQuery.data ?? emptyMessages
   const sessionEventErrorsQuery = useQuery({
     queryKey: openCodeSessionEventErrorsQueryKey,
@@ -322,14 +330,27 @@ export function useOpenCodeSessionRoute(
     (error) => error.sessionID === sessionID || (!error.sessionID && error.directory === directory)
   )
   const isSending = sendPromptMutation.isPending
+  const isUndoingPrompt = undoPromptMutation.isPending
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
+  const revertMessageID = activeSession ? getSessionRevertMessageID(fetchedSession) : null
 
   const mappedMessages = useMemo(() => messages.map(mapMessage).filter(isChatMessage), [messages])
   const refetchMessages = messagesQuery.refetch
+  const visibleStableMessages = useMemo(
+    () => filterMessagesBeforeRevert(mappedMessages, revertMessageID),
+    [mappedMessages, revertMessageID]
+  )
   const visibleMessages = useMemo(
     () =>
-      activeSession ? appendOptimisticPrompts(mappedMessages, optimisticPrompts, sessionID) : [],
-    [activeSession, mappedMessages, optimisticPrompts, sessionID]
+      activeSession
+        ? appendOptimisticPrompts(
+            visibleStableMessages,
+            optimisticPrompts,
+            sessionID,
+            revertMessageID
+          )
+        : [],
+    [activeSession, optimisticPrompts, revertMessageID, sessionID, visibleStableMessages]
   )
   const isAwaitingAssistantResponse = useMemo(() => {
     const sessionStatus = sessionID ? sessionStatusesQuery.data?.[sessionID] : undefined
@@ -351,6 +372,10 @@ export function useOpenCodeSessionRoute(
     sessionStatusesQuery.isSuccess,
     visibleMessages
   ])
+  const lastVisibleUserPrompt = useMemo(
+    () => findLastVisibleUserPrompt(visibleMessages, sessionID),
+    [sessionID, visibleMessages]
+  )
 
   useEffect(() => {
     if (!admittedPrompt || admittedPrompt.sessionID !== sessionID) return
@@ -418,6 +443,7 @@ export function useOpenCodeSessionRoute(
     isLoading:
       (sessionQuery.isLoading && activeSessionFromList === null) || messagesQuery.isLoading,
     isSending,
+    isUndoingPrompt,
     canSendPrompt:
       Boolean(directory) &&
       promptText.trim().length > 0 &&
@@ -425,7 +451,14 @@ export function useOpenCodeSessionRoute(
       !agents.isLoading &&
       canSendToActiveSession &&
       sendConnection !== null &&
-      !isSending,
+      !isSending &&
+      !isUndoingPrompt,
+    canUndoPrompt:
+      Boolean(directory) &&
+      canSendToActiveSession &&
+      undoConnection !== null &&
+      lastVisibleUserPrompt !== null &&
+      !isUndoingPrompt,
     emptyMessage: getSessionEmptyMessage(
       sessionID,
       sessionQuery.isSuccess,
@@ -442,6 +475,7 @@ export function useOpenCodeSessionRoute(
       activeSession ? null : sessionQuery.error,
       messagesQuery.error,
       sendPromptMutation.error,
+      undoPromptMutation.error,
       sessionEventError?.message
     ),
     successMessage: null,
@@ -478,18 +512,100 @@ export function useOpenCodeSessionRoute(
           }
         })
       }
+    },
+    undoLastPrompt: () => {
+      if (!activeSession || !lastVisibleUserPrompt) return
+      undoPromptMutation.mutate(
+        { messageID: lastVisibleUserPrompt.messageID },
+        {
+          onSuccess: () => {
+            setOptimisticPrompts((current) =>
+              removePromptByMessageID(current, lastVisibleUserPrompt.messageID)
+            )
+            setAwaitingPrompts((current) =>
+              removePromptByMessageID(current, lastVisibleUserPrompt.messageID)
+            )
+            setPromptText(lastVisibleUserPrompt.text)
+          }
+        }
+      )
     }
   }
+}
+
+type UndoPromptTarget = {
+  messageID: string
+  text: string
+}
+
+function findLastVisibleUserPrompt(
+  messages: ChatMessage[],
+  sessionID: string | null | undefined
+): UndoPromptTarget | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message || message.author !== 'user') continue
+    return {
+      messageID: undoMessageID(message, sessionID),
+      text: promptTextFromMessage(message)
+    }
+  }
+
+  return null
+}
+
+function undoMessageID(message: ChatMessage, sessionID: string | null | undefined): string {
+  const optimisticPrefix = sessionID ? `optimistic-${sessionID}-` : null
+  if (optimisticPrefix && message.id.startsWith(optimisticPrefix)) {
+    return message.id.slice(optimisticPrefix.length)
+  }
+
+  return message.id
+}
+
+function promptTextFromMessage(message: ChatMessage): string {
+  const text = message.parts
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('')
+
+  return text || message.content
+}
+
+function filterMessagesBeforeRevert(
+  messages: ChatMessage[],
+  revertMessageID: string | null
+): ChatMessage[] {
+  if (!revertMessageID) return messages
+
+  const revertIndex = messages.findIndex((message) => message.id === revertMessageID)
+  if (revertIndex !== -1) return messages.slice(0, revertIndex)
+
+  return messages.filter((message) => isMessageBeforeRevert(message.id, revertMessageID))
+}
+
+function isMessageBeforeRevert(messageID: string, revertMessageID: string | null): boolean {
+  if (!revertMessageID) return true
+  return messageID.localeCompare(revertMessageID) < 0
+}
+
+function getSessionRevertMessageID(
+  session: OpenCodeSessionDetails | null | undefined
+): string | null {
+  const revert = getRecordProperty(session, 'revert')
+  return getStringFromRecord(revert, 'messageID') ?? getStringFromRecord(session, 'revertMessageID')
 }
 
 function appendOptimisticPrompts(
   messages: ChatMessage[],
   optimisticPrompts: OpenCodeAdmittedPrompt[],
-  sessionID: string | null | undefined
+  sessionID: string | null | undefined,
+  revertMessageID: string | null
 ): ChatMessage[] {
   const pending = optimisticPrompts.filter(
     (prompt) =>
       prompt.sessionID === sessionID &&
+      isMessageBeforeRevert(prompt.id, revertMessageID) &&
       !messages.some(
         (message) => message.author === 'user' && isProjectedPromptMessage(message, prompt)
       )
@@ -517,6 +633,15 @@ function addUniquePrompt(
 
 function promptKey(prompt: OpenCodeAdmittedPrompt): string {
   return `${prompt.sessionID}:${prompt.id}`
+}
+
+function removePromptByMessageID(
+  prompts: OpenCodeAdmittedPrompt[],
+  messageID: string
+): OpenCodeAdmittedPrompt[] {
+  return prompts.filter(
+    (prompt) => prompt.id !== messageID && optimisticPromptMessageID(prompt) !== messageID
+  )
 }
 
 function optimisticPromptMessageID(prompt: OpenCodeAdmittedPrompt): string {

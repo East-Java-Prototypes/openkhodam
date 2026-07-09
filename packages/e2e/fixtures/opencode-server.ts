@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 export type FakeOpenCodeServer = {
   url: string
   getPromptRequests: () => FakePromptRequest[]
+  getRequestEvents: () => string[]
   close: () => Promise<void>
 }
 
@@ -24,6 +25,7 @@ const pendingPrompts = new Map<
 >()
 const sessionStatuses = new Map<string, { type: 'busy' | 'retry' }>()
 const promptRequests: FakePromptRequest[] = []
+const requestEvents: string[] = []
 let promptIdSequence = 0
 let newSessionSequence = 1
 let stableMessageSequence = 0
@@ -113,6 +115,7 @@ type FakeSession = {
   id: string
   title: string
   parentID?: string
+  revert?: { messageID: string; partID?: string }
   directory: string
   time: { created: number; updated: number }
   location: { directory: string }
@@ -193,6 +196,8 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       if (!isValidVariant(body?.model, body?.variant)) {
         return json(response, { message: 'prompt variant must belong to the selected model' }, 400)
       }
+      cleanupSessionRevert(sessionID)
+      requestEvents.push(`prompt:${sessionID}`)
       promptRequests.push({
         sessionID,
         text,
@@ -208,6 +213,35 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       ])
       sessionStatuses.set(sessionID, { type: 'busy' })
       return json(response, {})
+    }
+    const abortMatch = url.pathname.match(/^\/session\/([^/]+)\/abort$/)
+    if (request.method === 'POST' && abortMatch) {
+      const sessionID = abortMatch[1]
+      const session = sessions.get(sessionID)
+      if (!session) {
+        return json(response, { _tag: 'SessionNotFoundError', message: 'Session not found.' }, 404)
+      }
+
+      requestEvents.push(`abort:${sessionID}`)
+      pendingPrompts.delete(sessionID)
+      session.time.updated = Date.now()
+      return json(response, session)
+    }
+    const revertMatch = url.pathname.match(/^\/session\/([^/]+)\/revert$/)
+    if (request.method === 'POST' && revertMatch) {
+      const sessionID = revertMatch[1]
+      const session = sessions.get(sessionID)
+      if (!session) {
+        return json(response, { _tag: 'SessionNotFoundError', message: 'Session not found.' }, 404)
+      }
+      if (typeof body?.messageID !== 'string' || body.messageID.length === 0) {
+        return json(response, { message: 'messageID is required' }, 400)
+      }
+
+      requestEvents.push(`revert:${sessionID}`)
+      setSessionRevertMarker(session, body.messageID, body?.partID)
+      session.time.updated = Date.now()
+      return json(response, session)
     }
     const messagesMatch = url.pathname.match(/^\/session\/([^/]+)\/message$/)
     if (request.method === 'GET' && messagesMatch) {
@@ -226,8 +260,39 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
   return {
     url: `http://127.0.0.1:${address.port}`,
     getPromptRequests: () => [...promptRequests],
+    getRequestEvents: () => [...requestEvents],
     close: () => new Promise((resolve) => server.close(() => resolve()))
   }
+}
+
+function setSessionRevertMarker(session: FakeSession, messageID: string, partID: unknown): void {
+  session.revert = {
+    messageID,
+    ...(typeof partID === 'string' && partID.length > 0 ? { partID } : {})
+  }
+}
+
+function cleanupSessionRevert(sessionID: string): void {
+  const session = sessions.get(sessionID)
+  if (!session?.revert) return
+  const revertMessageID = session.revert.messageID
+
+  const existing = messages.get(sessionID) ?? []
+  messages.set(
+    sessionID,
+    existing.filter((message) => {
+      const messageID = getMessageID(message)
+      return messageID ? messageID.localeCompare(revertMessageID) < 0 : true
+    })
+  )
+
+  const pending = pendingPrompts.get(sessionID) ?? []
+  const remaining = pending.filter((prompt) => prompt.id.localeCompare(revertMessageID) < 0)
+  if (remaining.length) pendingPrompts.set(sessionID, remaining)
+  else pendingPrompts.delete(sessionID)
+
+  delete session.revert
+  session.time.updated = Date.now()
 }
 
 function projectForDirectory(projectDirectory: string): typeof project {
@@ -247,6 +312,7 @@ function resetState(): void {
   pendingPrompts.clear()
   sessionStatuses.clear()
   promptRequests.length = 0
+  requestEvents.length = 0
   promptIdSequence = 0
   newSessionSequence = 1
   stableMessageSequence = 0
@@ -513,6 +579,22 @@ function getPromptText(body: any): string {
     ? body.parts.find((part: any) => part?.type === 'text' && typeof part?.text === 'string')
     : null
   return textPart?.text ?? ''
+}
+
+function getMessageID(message: unknown): string | null {
+  if (!isRecord(message)) return null
+  const info = isRecord(message.info) ? message.info : null
+  return getString(info, 'id') ?? getString(message, 'id')
+}
+
+function getString(value: Record<string, unknown> | null, property: string): string | null {
+  if (!value) return null
+  const propertyValue = value[property]
+  return typeof propertyValue === 'string' && propertyValue.length > 0 ? propertyValue : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
 
 function hasValidPartIDs(body: any): boolean {
