@@ -81,19 +81,18 @@ async function waitForConnectedSidecar(page: Page): Promise<void> {
 }
 
 async function openWorkspaceProject(page: Page, workspaceDir: string): Promise<string> {
-  await routeToRootProjectOpenShell(page)
+  const project = await openWorkspaceThroughOpenCode(page, workspaceDir)
+  const projectID = typeof project.id === 'string' ? project.id : ''
+  expect(projectID, 'OpenCode should return a concrete temp workspace project id').not.toBe('')
+  expect(projectID, 'temp workspace should not resolve to the global project').not.toBe('global')
 
-  const openProjectForm = page.getByRole('form', { name: 'Open project by directory' })
-  await expect(
-    openProjectForm,
-    'root project-open form should be ready before opening the temp workspace through the app'
-  ).toBeVisible({ timeout: 45_000 })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await waitForConnectedSidecar(page)
+  await page.evaluate((id) => {
+    window.location.hash = `#/projects/${encodeURIComponent(id)}`
+  }, projectID)
 
-  await page.getByLabel('Project directory').fill(workspaceDir)
-  await expect(openProjectForm.getByRole('button', { name: 'Open', exact: true })).toBeEnabled()
-  await openProjectForm.getByRole('button', { name: 'Open', exact: true }).click()
-
-  const projectID = await waitForNonGlobalProjectRoute(page)
+  await waitForNonGlobalProjectRoute(page)
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toBeVisible({
     timeout: 45_000
   })
@@ -101,22 +100,10 @@ async function openWorkspaceProject(page: Page, workspaceDir: string): Promise<s
   return projectID
 }
 
-async function routeToRootProjectOpenShell(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    window.location.hash = '#/'
-  })
-  await expect
-    .poll(() => page.evaluate(() => window.location.hash), {
-      message: 'root route should be active before using the app project-open flow',
-      timeout: 10_000
-    })
-    .toBe('#/')
-}
-
 async function waitForNonGlobalProjectRoute(page: Page): Promise<string> {
   await expect
     .poll(() => page.evaluate(() => window.location.hash), {
-      message: 'opening the temp workspace through the app should route to its project',
+      message: 'opening the temp workspace through OpenCode should route to its project',
       timeout: 45_000
     })
     .toMatch(/\/projects\/(?!global(?:$|[/?#]))/)
@@ -124,6 +111,28 @@ async function waitForNonGlobalProjectRoute(page: Page): Promise<string> {
   const projectID = getProjectIDFromHash(await page.evaluate(() => window.location.hash))
   expect(projectID, 'temp workspace route should include a concrete project id').not.toBeNull()
   return projectID!
+}
+
+async function openWorkspaceThroughOpenCode(
+  page: Page,
+  workspaceDir: string
+): Promise<{ id?: unknown; worktree?: unknown }> {
+  return page.evaluate(async (directory) => {
+    const connection = await window.api.getOpenCodeConnection()
+    const authorization = btoa(`${connection.username}:${connection.password}`)
+    const response = await fetch(
+      `${connection.url}/project/current?directory=${encodeURIComponent(directory)}`,
+      { headers: { authorization: `Basic ${authorization}` } }
+    )
+
+    if (!response.ok) {
+      throw new Error(
+        `OpenCode project/current failed: ${response.status} ${await response.text()}`
+      )
+    }
+
+    return (await response.json()) as { id?: unknown; worktree?: unknown }
+  }, workspaceDir)
 }
 
 async function waitForOpenCodeProjectModelReadiness(

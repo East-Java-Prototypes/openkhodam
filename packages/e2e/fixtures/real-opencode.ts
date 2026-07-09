@@ -23,6 +23,7 @@ import {
 const testDir = dirname(fileURLToPath(import.meta.url))
 const appEntryPoint = join(testDir, '../../desktop/out/main/index.js')
 const execFileAsync = promisify(execFile)
+const fakeProviderApiKey = 'openkhodam-e2e-fake-key'
 
 type RealOpenCodeFixtures = {
   realOpenCode: RealOpenCodeContext
@@ -122,7 +123,7 @@ function createOpenCodeConfig(fakeProviderUrl: string): unknown {
         name: fakeProviderName,
         npm: '@ai-sdk/openai-compatible',
         options: {
-          apiKey: 'openkhodam-e2e-fake-key',
+          apiKey: fakeProviderApiKey,
           baseURL: fakeProviderUrl,
           timeout: 15_000
         },
@@ -141,6 +142,15 @@ function createOpenCodeConfig(fakeProviderUrl: string): unknown {
   }
 }
 
+function createOpenCodeAuthContent(): unknown {
+  return {
+    [fakeProviderID]: {
+      type: 'api',
+      key: fakeProviderApiKey
+    }
+  }
+}
+
 function createElectronEnv(realOpenCode: RealOpenCodeContext): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
   clearOpenCodeEnv(env)
@@ -150,7 +160,7 @@ function createElectronEnv(realOpenCode: RealOpenCodeContext): NodeJS.ProcessEnv
     ...env,
     HOME: realOpenCode.profileDir,
     NODE_ENV: 'test',
-    OPENCODE_AUTH_CONTENT: '{}',
+    OPENCODE_AUTH_CONTENT: JSON.stringify(createOpenCodeAuthContent()),
     OPENCODE_CONFIG_CONTENT: JSON.stringify(createOpenCodeConfig(realOpenCode.fakeProvider.url)),
     OPENCODE_DISABLE_AUTOUPDATE: '1',
     OPENCODE_DISABLE_MODELS_FETCH: '1',
