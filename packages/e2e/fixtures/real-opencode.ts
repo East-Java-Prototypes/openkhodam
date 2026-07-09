@@ -87,7 +87,7 @@ export const test = base.extend<RealOpenCodeFixtures>({
       })
     } finally {
       await fakeProvider?.close()
-      await rm(tempRoot, { recursive: true, force: true })
+      await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
     }
   },
 
