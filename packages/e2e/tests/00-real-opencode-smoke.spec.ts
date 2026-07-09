@@ -81,8 +81,13 @@ async function waitForConnectedSidecar(page: Page): Promise<void> {
 }
 
 async function openWorkspaceProject(page: Page, workspaceDir: string): Promise<string> {
+  await routeToRootProjectOpenShell(page)
+
   const openProjectForm = page.getByRole('form', { name: 'Open project by directory' })
-  await expect(openProjectForm).toBeVisible()
+  await expect(
+    openProjectForm,
+    'root project-open form should be ready before opening the temp workspace through the app'
+  ).toBeVisible({ timeout: 45_000 })
 
   await page.getByLabel('Project directory').fill(workspaceDir)
   await expect(openProjectForm.getByRole('button', { name: 'Open', exact: true })).toBeEnabled()
@@ -94,6 +99,18 @@ async function openWorkspaceProject(page: Page, workspaceDir: string): Promise<s
   })
   await expect(page.getByText('Project not found.').first()).toHaveCount(0)
   return projectID
+}
+
+async function routeToRootProjectOpenShell(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.location.hash = '#/'
+  })
+  await expect
+    .poll(() => page.evaluate(() => window.location.hash), {
+      message: 'root route should be active before using the app project-open flow',
+      timeout: 10_000
+    })
+    .toBe('#/')
 }
 
 async function waitForNonGlobalProjectRoute(page: Page): Promise<string> {
