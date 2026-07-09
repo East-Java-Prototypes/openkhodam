@@ -85,6 +85,7 @@ type GoogleWorkspacePlugin = {
         context: {
           abort?: AbortSignal
           directory?: string
+          messageID?: string
           sessionID?: string
           worktree?: string
         }
@@ -97,6 +98,7 @@ type GoogleWorkspacePlugin = {
         context: {
           abort?: AbortSignal
           directory?: string
+          messageID?: string
           sessionID?: string
           worktree?: string
         }
@@ -121,6 +123,7 @@ type GoogleWorkspacePlugin = {
         context: {
           abort?: AbortSignal
           directory?: string
+          messageID?: string
           sessionID?: string
           worktree?: string
         }
@@ -149,6 +152,7 @@ type GoogleWorkspacePlugin = {
         context: {
           abort?: AbortSignal
           directory?: string
+          messageID?: string
           sessionID?: string
           worktree?: string
           ask?: (...args: unknown[]) => Promise<unknown>
@@ -400,7 +404,7 @@ test('stores project session linked Google Workspace artifacts with stable path 
   }
 })
 
-test('gets or creates linked Google Docs and backfills artifact paths only when needed', async () => {
+test('gets or creates linked Google Docs while updating message provenance when present', async () => {
   const { getOrCreateLinkedGoogleDoc, ProjectArtifactsFileStore } =
     loadDesktopModule<ProjectArtifactsModule>(
       '../../desktop/src/main/integrations/project-artifacts'
@@ -423,7 +427,21 @@ test('gets or creates linked Google Docs and backfills artifact paths only when 
     })
     const firstFileContents = await readFile(store.filePath, 'utf8')
 
-    const existing = await getOrCreateLinkedGoogleDoc({
+    const existingWithoutMessage = await getOrCreateLinkedGoogleDoc({
+      doc: {
+        id: 'doc-1',
+        title: 'Updated Launch Plan',
+        url: 'https://docs.google.com/document/d/doc-1/edit'
+      },
+      projectDirectory: projectPath,
+      sessionId: 'session-1'
+    })
+
+    expect(existingWithoutMessage).toEqual(created)
+    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([created])
+    expect(await readFile(store.filePath, 'utf8')).toBe(firstFileContents)
+
+    const rerecorded = await getOrCreateLinkedGoogleDoc({
       doc: {
         id: 'doc-1',
         title: 'Updated Launch Plan',
@@ -434,9 +452,15 @@ test('gets or creates linked Google Docs and backfills artifact paths only when 
       sessionId: 'session-1'
     })
 
-    expect(existing).toEqual(created)
-    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([created])
-    expect(await readFile(store.filePath, 'utf8')).toBe(firstFileContents)
+    expect(rerecorded).toMatchObject({
+      artifactPath: null,
+      firstMessageId: 'message-1',
+      firstSeenAt: created.firstSeenAt,
+      id: 'doc-1',
+      lastMessageId: 'message-2',
+      title: 'Updated Launch Plan',
+      type: 'google.doc.document'
+    })
 
     const withArtifactPath = await getOrCreateLinkedGoogleDoc({
       doc: {
@@ -1657,7 +1681,9 @@ test('reads explicit Google Sheets ranges through Sheets API and persists a spre
     expect(artifacts.sessions['session-sheets']).toHaveLength(1)
     expect(artifacts.sessions['session-sheets']?.[0]).toMatchObject({
       artifactPath: expectedGoogleSheetArtifactPath(spreadsheetId),
+      firstMessageId: null,
       id: spreadsheetId,
+      lastMessageId: null,
       listed: true,
       title: 'Sheets Plan',
       type: 'google.sheet.spreadsheet',
@@ -2216,7 +2242,9 @@ test('writes Google Sheets edits directly and persists refreshed spreadsheet art
     expect(artifacts.sessions['session-sheets-edit']).toHaveLength(1)
     expect(artifacts.sessions['session-sheets-edit']?.[0]).toMatchObject({
       artifactPath: expectedGoogleSheetArtifactPath(spreadsheetId),
+      firstMessageId: null,
       id: spreadsheetId,
+      lastMessageId: null,
       listed: true,
       title: 'Editable Sheet',
       type: 'google.sheet.spreadsheet',
@@ -3859,6 +3887,165 @@ test('records linked Google Docs from directory context when worktree is root-li
       title: 'Updated Docs Plan'
     })
     expect(docsCalls).toBe(2)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('records tool-call message provenance for linked Google Docs and Sheets artifacts', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-workspace-provenance-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documentId = 'provenance-doc'
+  const spreadsheetId = 'provenance-sheet'
+  const encodedSpreadsheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`
+  let docsCalls = 0
+  let sheetMetadataCalls = 0
+  let sheetValuesCalls = 0
+
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, googleSheetsSpreadsheetsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'provenance-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+
+    if (url.startsWith(`https://docs.googleapis.com/v1/documents/${documentId}`)) {
+      docsCalls += 1
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer provenance-access-token')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: createGoogleDocParagraphs([`Provenance Docs ${docsCalls}\n`])
+          },
+          documentId,
+          revisionId: `doc-rev-${docsCalls}`,
+          title: `Provenance Doc ${docsCalls}`
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith(`${encodedSpreadsheetUrl}/values:batchGet`)) {
+      sheetValuesCalls += 1
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer provenance-access-token')
+      return new Response(
+        JSON.stringify({
+          spreadsheetId,
+          valueRanges: [
+            {
+              range: 'Summary!A1:B2',
+              majorDimension: 'ROWS',
+              values: [['Run', sheetValuesCalls]]
+            }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    if (url.startsWith(encodedSpreadsheetUrl)) {
+      sheetMetadataCalls += 1
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer provenance-access-token')
+      return new Response(
+        JSON.stringify({
+          spreadsheetId,
+          spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`,
+          properties: { title: `Provenance Sheet ${sheetMetadataCalls}` },
+          sheets: [
+            {
+              properties: {
+                sheetId: 1,
+                title: 'Summary',
+                index: 0,
+                sheetType: 'GRID',
+                gridProperties: { rowCount: 10, columnCount: 2 }
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const firstContext = {
+      directory: projectPath,
+      messageID: 'assistant-message-1',
+      sessionID: 'session-provenance'
+    }
+    const secondContext = {
+      ...firstContext,
+      messageID: 'assistant-message-2'
+    }
+
+    await plugin.tool.google_docs_read.execute({ documentId }, firstContext)
+    await plugin.tool.google_sheets_read.execute(
+      { spreadsheetId, ranges: ['Summary!A1:B2'] },
+      firstContext
+    )
+    await plugin.tool.google_docs_read.execute({ documentId }, secondContext)
+    await plugin.tool.google_sheets_read.execute(
+      { spreadsheetId, ranges: ['Summary!A1:B2'] },
+      secondContext
+    )
+
+    expect(docsCalls).toBe(2)
+    expect(sheetMetadataCalls).toBe(2)
+    expect(sheetValuesCalls).toBe(2)
+
+    const artifacts = JSON.parse(
+      await readFile(join(projectPath, '.openkhodam', 'artifacts.json'), 'utf8')
+    ) as {
+      sessions: Record<string, Array<Record<string, unknown>>>
+    }
+    const sessionArtifacts = artifacts.sessions['session-provenance'] ?? []
+    expect(sessionArtifacts).toHaveLength(2)
+    expect(
+      sessionArtifacts.find(
+        (artifact) => artifact.id === documentId && artifact.type === 'google.doc.document'
+      )
+    ).toMatchObject({
+      artifactPath: expectedGoogleDocArtifactPath(documentId),
+      firstMessageId: 'assistant-message-1',
+      id: documentId,
+      lastMessageId: 'assistant-message-2',
+      listed: true,
+      title: 'Provenance Doc 2',
+      url: `https://docs.google.com/document/d/${documentId}/edit`
+    })
+    expect(
+      sessionArtifacts.find(
+        (artifact) => artifact.id === spreadsheetId && artifact.type === 'google.sheet.spreadsheet'
+      )
+    ).toMatchObject({
+      artifactPath: expectedGoogleSheetArtifactPath(spreadsheetId),
+      firstMessageId: 'assistant-message-1',
+      id: spreadsheetId,
+      lastMessageId: 'assistant-message-2',
+      listed: true,
+      title: 'Provenance Sheet 2',
+      url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`
+    })
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
