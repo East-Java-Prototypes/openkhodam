@@ -25,6 +25,10 @@ export type OpenCodeAdmittedPrompt = {
   text: string
 }
 
+export type OpenCodeUndoPromptOptions = {
+  messageID: string
+}
+
 export function useSendOpenCodePrompt(
   directory: string | null | undefined,
   sessionID: string | null | undefined
@@ -130,6 +134,55 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
   })
 
   return { status, statusQuery, connection, connectionQuery, startConversationMutation }
+}
+
+export function useUndoOpenCodePrompt(
+  directory: string | null | undefined,
+  sessionID: string | null | undefined
+) {
+  const queryClient = useQueryClient()
+  const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
+
+  const undoPromptMutation = useMutation({
+    mutationFn: async (options: OpenCodeUndoPromptOptions) => {
+      if (connection === null) throw new Error('OpenCode sidecar is not connected.')
+      if (!directory) throw new Error('Select a project before undoing a prompt.')
+      if (!sessionID) throw new Error('Select a session before undoing a prompt.')
+      if (!options.messageID) throw new Error('Select a prompt to undo.')
+
+      await client!.session.abort({ sessionID, directory }).catch(() => undefined)
+
+      const response = await client!.session.revert({
+        sessionID,
+        directory,
+        messageID: options.messageID
+      })
+      if (response.error) throw response.error
+
+      return {
+        sessionID,
+        messageID: options.messageID,
+        session: response.data
+      }
+    },
+    onSuccess: async ({ sessionID, session }) => {
+      if (session) {
+        queryClient.setQueryData(openCodeSessionQueryKey(status, directory, sessionID), session)
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) }),
+        queryClient.invalidateQueries({
+          queryKey: openCodeSessionQueryKey(status, directory, sessionID)
+        }),
+        queryClient.invalidateQueries({
+          queryKey: sessionMessagesQueryKey(status, directory, sessionID)
+        })
+      ])
+    }
+  })
+
+  return { status, statusQuery, connection, connectionQuery, undoPromptMutation }
 }
 
 function createOptimisticMessageID(): string {

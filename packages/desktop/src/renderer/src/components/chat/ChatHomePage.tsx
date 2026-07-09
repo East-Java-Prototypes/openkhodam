@@ -41,6 +41,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport
 } from '@/components/ui/message-scroller'
+import { Popover, PopoverContent } from '@/components/ui/popover'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -93,6 +94,12 @@ const ActionPaneControlsContext = createContext<ActionPaneControlsContextValue |
 const emptyChatMessages: ChatMessage[] = []
 const emptyLinkedGoogleArtifacts: LinkedGoogleArtifact[] = []
 const noop = (): void => {}
+const undoSlashCommand = {
+  value: 'undo',
+  trigger: '/undo',
+  title: 'Undo last prompt',
+  description: 'Revert the last prompt and restore it to the composer.'
+}
 
 export function ChatHomePage({
   shell,
@@ -829,7 +836,10 @@ export function ActiveChatPanel({
                 setPromptText={session.setPromptText}
                 sendPrompt={session.sendPrompt}
                 canSendPrompt={session.canSendPrompt}
+                canUndoPrompt={session.canUndoPrompt}
                 isSending={session.isSending}
+                isUndoingPrompt={session.isUndoingPrompt}
+                undoLastPrompt={session.undoLastPrompt}
                 modelOptions={session.modelOptions}
                 agentOptions={session.agentOptions}
                 effortOptions={session.effortOptions}
@@ -1121,7 +1131,10 @@ function ChatPromptComposer({
   setPromptText,
   sendPrompt,
   canSendPrompt,
+  canUndoPrompt = false,
   isSending,
+  isUndoingPrompt = false,
+  undoLastPrompt = noop,
   modelOptions,
   agentOptions,
   effortOptions,
@@ -1138,7 +1151,10 @@ function ChatPromptComposer({
   setPromptText: (value: string) => void
   sendPrompt: () => void
   canSendPrompt: boolean
+  canUndoPrompt?: boolean
   isSending: boolean
+  isUndoingPrompt?: boolean
+  undoLastPrompt?: () => void
   modelOptions: OpenCodeModelOption[]
   agentOptions: OpenCodeAgentOption[]
   effortOptions: OpenCodeModelEffortOption[]
@@ -1151,14 +1167,68 @@ function ChatPromptComposer({
   isLoadingModels: boolean
   isLoadingAgents: boolean
 }): JSX.Element {
+  const composerAnchorRef = useRef<HTMLDivElement | null>(null)
+  const [activeSlashCommandValue, setActiveSlashCommandValue] = useState<string | null>(
+    undoSlashCommand.value
+  )
+  const isExactUndoCommand = promptText.trim().toLowerCase() === undoSlashCommand.trigger
+  const canRunUndoCommand = canUndoPrompt && !isUndoingPrompt
+  const slashCommandQuery = getSlashCommandQuery(promptText)
+  const filteredSlashCommands = useMemo(() => {
+    if (slashCommandQuery === null || !canRunUndoCommand) return []
+    return undoSlashCommand.value.startsWith(slashCommandQuery) ? [undoSlashCommand] : []
+  }, [canRunUndoCommand, slashCommandQuery])
+  const isSlashCommandPopoverOpen = slashCommandQuery !== null
+  const canSubmitPrompt = isExactUndoCommand ? canRunUndoCommand : canSendPrompt
+  const isComposerBusy = isSending || isUndoingPrompt
+
+  useEffect(() => {
+    if (!isSlashCommandPopoverOpen) return
+    const firstCommand = filteredSlashCommands[0]
+    if (!firstCommand) {
+      setActiveSlashCommandValue(null)
+      return
+    }
+    setActiveSlashCommandValue((current) =>
+      filteredSlashCommands.some((command) => command.value === current)
+        ? current
+        : firstCommand.value
+    )
+  }, [filteredSlashCommands, isSlashCommandPopoverOpen])
+
+  const executeUndoCommand = (): void => {
+    if (!canRunUndoCommand) return
+    undoLastPrompt()
+  }
+
   const submitPrompt = (): void => {
+    if (isExactUndoCommand) {
+      executeUndoCommand()
+      return
+    }
     if (!canSendPrompt) return
     sendPrompt()
   }
 
   const handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key !== 'Enter') return
     if (event.nativeEvent.isComposing) return
+
+    if (isSlashCommandPopoverOpen) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        setActiveSlashCommandValue(filteredSlashCommands[0]?.value ?? null)
+        return
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        if (filteredSlashCommands.length > 0) executeUndoCommand()
+        else submitPrompt()
+        return
+      }
+    }
+
+    if (event.key !== 'Enter') return
     if (event.shiftKey) return
 
     event.preventDefault()
@@ -1178,53 +1248,119 @@ function ChatPromptComposer({
       <label className="sr-only" htmlFor="chat-prompt">
         Message OpenKhodam
       </label>
-      <InputGroup className="h-auto min-w-0 bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100">
-        <InputGroupTextarea
-          id="chat-prompt"
-          className="min-h-24 text-sm"
-          placeholder="Ask about this project..."
-          value={promptText}
-          onChange={(event) => setPromptText(event.currentTarget.value)}
-          onKeyDown={handlePromptKeyDown}
-          disabled={isSending}
-        />
-        <InputGroupAddon align="block-end" className="flex-wrap justify-between gap-2 border-t">
-          <div
-            className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
-            onClick={(event) => event.stopPropagation()}
-          >
-            {agentOptions.length > 0 ? (
-              <AgentPickerCombobox
-                options={agentOptions}
-                selectedAgentID={selectedAgentID}
-                setSelectedAgentID={setSelectedAgentID}
-                disabled={isSending || isLoadingAgents}
-              />
-            ) : null}
-            {modelOptions.length > 0 ? (
-              <ModelPickerCombobox
-                options={modelOptions}
-                selectedModelID={selectedModelID}
-                setSelectedModelID={setSelectedModelID}
-                disabled={isSending || isLoadingModels}
-              />
-            ) : null}
-            {effortOptions.length > 0 ? (
-              <EffortPickerCombobox
-                options={effortOptions}
-                selectedEffortID={selectedEffortID}
-                setSelectedEffortID={setSelectedEffortID}
-                disabled={isSending || isLoadingModels}
-              />
-            ) : null}
+      <Popover open={isSlashCommandPopoverOpen}>
+        <InputGroup
+          ref={composerAnchorRef}
+          className="h-auto min-w-0 bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100"
+        >
+          <InputGroupTextarea
+            id="chat-prompt"
+            className="min-h-24 text-sm"
+            placeholder="Ask about this project..."
+            value={promptText}
+            onChange={(event) => setPromptText(event.currentTarget.value)}
+            onKeyDown={handlePromptKeyDown}
+            disabled={isComposerBusy}
+            aria-controls={isSlashCommandPopoverOpen ? 'chat-slash-command-popover' : undefined}
+            aria-expanded={isSlashCommandPopoverOpen}
+            aria-haspopup="listbox"
+          />
+          <InputGroupAddon align="block-end" className="flex-wrap justify-between gap-2 border-t">
+            <div
+              className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {agentOptions.length > 0 ? (
+                <AgentPickerCombobox
+                  options={agentOptions}
+                  selectedAgentID={selectedAgentID}
+                  setSelectedAgentID={setSelectedAgentID}
+                  disabled={isComposerBusy || isLoadingAgents}
+                />
+              ) : null}
+              {modelOptions.length > 0 ? (
+                <ModelPickerCombobox
+                  options={modelOptions}
+                  selectedModelID={selectedModelID}
+                  setSelectedModelID={setSelectedModelID}
+                  disabled={isComposerBusy || isLoadingModels}
+                />
+              ) : null}
+              {effortOptions.length > 0 ? (
+                <EffortPickerCombobox
+                  options={effortOptions}
+                  selectedEffortID={selectedEffortID}
+                  setSelectedEffortID={setSelectedEffortID}
+                  disabled={isComposerBusy || isLoadingModels}
+                />
+              ) : null}
+            </div>
+            <InputGroupButton type="submit" disabled={!canSubmitPrompt}>
+              {isUndoingPrompt ? 'Undoing…' : isSending ? 'Sending…' : 'Send'}
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
+        <PopoverContent
+          id="chat-slash-command-popover"
+          role="dialog"
+          aria-label="Slash commands"
+          anchor={composerAnchorRef}
+          side="top"
+          align="start"
+          sideOffset={8}
+          className="w-[min(32rem,calc(100vw-2rem))] gap-0 p-0"
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <div className="flex max-h-72 flex-col overflow-y-auto py-1" role="presentation">
+            {filteredSlashCommands.length > 0 ? (
+              <div role="group" aria-label="Commands">
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">Commands</div>
+                <div role="listbox" aria-label="Slash commands">
+                  {filteredSlashCommands.map((command) => (
+                    <button
+                      key={command.value}
+                      type="button"
+                      role="option"
+                      aria-label={`${command.trigger} ${command.title}`}
+                      aria-selected={activeSlashCommandValue === command.value}
+                      className={cn(
+                        'flex min-h-10 w-full cursor-default items-start gap-2 px-2 py-2 text-left text-xs outline-hidden select-none hover:bg-muted focus-visible:bg-muted focus-visible:text-foreground',
+                        activeSlashCommandValue === command.value
+                          ? 'bg-muted text-foreground'
+                          : null
+                      )}
+                      onClick={executeUndoCommand}
+                      onPointerMove={() => setActiveSlashCommandValue(command.value)}
+                    >
+                      <span className="flex min-w-0 flex-col gap-1">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="font-medium">{command.trigger}</span>
+                          <span className="truncate">{command.title}</span>
+                        </span>
+                        <span className="truncate text-muted-foreground">
+                          {command.description}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="px-2 py-6 text-center text-xs" role="status">
+                No slash commands available.
+              </div>
+            )}
           </div>
-          <InputGroupButton type="submit" disabled={!canSendPrompt}>
-            {isSending ? 'Sending…' : 'Send'}
-          </InputGroupButton>
-        </InputGroupAddon>
-      </InputGroup>
+        </PopoverContent>
+      </Popover>
     </form>
   )
+}
+
+function getSlashCommandQuery(promptText: string): string | null {
+  if (!promptText.startsWith('/')) return null
+  const query = promptText.slice(1).trimStart().toLowerCase()
+  return query.includes(' ') ? '__unsupported__' : query
 }
 
 function AgentPickerCombobox({
