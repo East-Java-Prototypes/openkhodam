@@ -61,6 +61,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 
 import type { ChatMessage, ChatProject, ProjectChat } from '../../hooks/useChatInterfaceData'
+import { ProviderConnectDialog } from '../providers/ProviderConnectDialog'
 import { ChatActionPane } from './ChatActionPane'
 import { ChatMessageParts } from './ChatMessageParts'
 import type {
@@ -851,6 +852,7 @@ export function ActiveChatPanel({
                 setSelectedEffortID={session.setSelectedEffortID}
                 isLoadingModels={session.isLoadingModels}
                 isLoadingAgents={session.isLoadingAgents}
+                projectDirectory={project?.selectedDirectory ?? null}
               />
             ) : null)}
         </section>
@@ -926,6 +928,7 @@ export function ProjectRouteActivePane({
             setSelectedEffortID={startConversation.setSelectedEffortID}
             isLoadingModels={startConversation.isLoadingModels}
             isLoadingAgents={startConversation.isLoadingAgents}
+            projectDirectory={project?.selectedDirectory ?? null}
           />
         ) : null
       }
@@ -1145,7 +1148,8 @@ function ChatPromptComposer({
   selectedEffortID,
   setSelectedEffortID,
   isLoadingModels,
-  isLoadingAgents
+  isLoadingAgents,
+  projectDirectory
 }: {
   promptText: string
   setPromptText: (value: string) => void
@@ -1166,6 +1170,7 @@ function ChatPromptComposer({
   setSelectedEffortID: (value: string | null) => void
   isLoadingModels: boolean
   isLoadingAgents: boolean
+  projectDirectory?: string | null
 }): JSX.Element {
   const composerAnchorRef = useRef<HTMLDivElement | null>(null)
   const [activeSlashCommandValue, setActiveSlashCommandValue] = useState<string | null>(
@@ -1206,6 +1211,7 @@ function ChatPromptComposer({
     undoLastPrompt()
   }
 
+  const [isProviderDialogOpen, setProviderDialogOpen] = useState(false)
   const submitPrompt = (): void => {
     if (isExactUndoCommand) {
       executeUndoCommand()
@@ -1302,6 +1308,15 @@ function ChatPromptComposer({
                   setSelectedModelID={setSelectedModelID}
                   disabled={isComposerBusy || isLoadingModels}
                 />
+              ) : !isLoadingModels ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setProviderDialogOpen(true)}
+                  disabled={isComposerBusy}
+                >
+                  Connect provider
+                </Button>
               ) : null}
               {effortOptions.length > 0 ? (
                 <EffortPickerCombobox
@@ -1371,6 +1386,13 @@ function ChatPromptComposer({
           </div>
         </PopoverContent>
       </Popover>
+      {isProviderDialogOpen ? (
+        <ProviderConnectDialog
+          open={isProviderDialogOpen}
+          onOpenChange={setProviderDialogOpen}
+          directory={projectDirectory ?? null}
+        />
+      ) : null}
     </form>
   )
 }

@@ -17,7 +17,31 @@ export const openCodeQueryKeys = {
   all: ['opencode'] as const,
   sidecarStatus: () => [...openCodeQueryKeys.all, 'sidecar-status'] as const,
   sidecarConnection: (updatedAt: number) =>
-    [...openCodeQueryKeys.all, 'sidecar-connection', updatedAt] as const
+    [...openCodeQueryKeys.all, 'sidecar-connection', updatedAt] as const,
+  providerLists: () => [...openCodeQueryKeys.all, 'providers'] as const,
+  providerList: (
+    status: Pick<OpenCodeSidecarStatus, 'url' | 'pid' | 'updatedAt'>,
+    directory: string | null | undefined
+  ) =>
+    [
+      ...openCodeQueryKeys.providerLists(),
+      status.url,
+      status.pid,
+      status.updatedAt,
+      directory ?? null
+    ] as const,
+  providerAuthMethods: () => [...openCodeQueryKeys.all, 'provider-auth-methods'] as const,
+  providerAuthMethodsFor: (
+    status: Pick<OpenCodeSidecarStatus, 'url' | 'pid' | 'updatedAt'>,
+    directory: string | null | undefined
+  ) =>
+    [
+      ...openCodeQueryKeys.providerAuthMethods(),
+      status.url,
+      status.pid,
+      status.updatedAt,
+      directory ?? null
+    ] as const
 }
 
 export const initialOpenCodeSidecarStatus: OpenCodeSidecarStatus = {
