@@ -15,6 +15,8 @@ import {
 } from '../integrations/google-workspace-runtime'
 import {
   deleteGoogleDocDocumentArtifact,
+  deleteGoogleSheetSpreadsheetArtifact,
+  getOrCreateLinkedGoogleArtifact,
   getOrCreateLinkedGoogleDoc,
   persistGoogleDocDocumentArtifact,
   persistGoogleSheetSpreadsheetArtifact
@@ -61,6 +63,11 @@ type PersistedReadGoogleWorkspaceArtifact = GoogleWorkspaceArtifactSessionContex
   artifactPath: string
   created: boolean
 }
+
+type DeletePersistedGoogleWorkspaceArtifact = (input: {
+  artifactPath: string
+  projectDirectory: string
+}) => Promise<{ deleted: boolean }>
 
 type GoogleDriveSearchFilesToolDefinition = {
   args: {
@@ -395,12 +402,17 @@ async function recordReadGoogleDocArtifact(
       sessionId: persisted.sessionId
     })
   } catch {
-    const artifactCleanedUp = await cleanupCreatedGoogleDocArtifact({
+    const artifactCleanedUp = await cleanupCreatedGoogleWorkspaceArtifact({
       artifactPath: persisted.artifactPath,
       createdArtifact: persisted.created,
-      docId: document.id,
-      projectDirectory: persisted.projectDirectory,
-      sessionId: persisted.sessionId
+      deleteArtifact: deleteGoogleDocDocumentArtifact,
+      failureDetails: {
+        docId: document.id,
+        reason: 'artifact_cleanup_failed',
+        sessionId: persisted.sessionId
+      },
+      failureMessage: 'Failed to clean up Google Doc artifact after record failure',
+      projectDirectory: persisted.projectDirectory
     })
     console.warn('Failed to record linked Google Doc artifact', {
       artifactCleanedUp,
@@ -415,7 +427,7 @@ async function recordReadGoogleSheetArtifact(
   context: GoogleWorkspaceToolContext,
   spreadsheet: GoogleSheetSpreadsheetArtifact
 ): Promise<void> {
-  await persistReadGoogleWorkspaceArtifact({
+  const persisted = await persistReadGoogleWorkspaceArtifact({
     context,
     failureDetails: {
       reason: 'artifact_persist_failed',
@@ -428,6 +440,40 @@ async function recordReadGoogleSheetArtifact(
         spreadsheet
       })
   })
+  if (!persisted) return
+
+  try {
+    await getOrCreateLinkedGoogleArtifact({
+      artifact: {
+        artifactPath: persisted.artifactPath,
+        id: spreadsheet.id,
+        title: spreadsheet.title,
+        type: 'google.sheet.spreadsheet',
+        url: spreadsheet.link
+      },
+      projectDirectory: persisted.projectDirectory,
+      sessionId: persisted.sessionId
+    })
+  } catch {
+    const artifactCleanedUp = await cleanupCreatedGoogleWorkspaceArtifact({
+      artifactPath: persisted.artifactPath,
+      createdArtifact: persisted.created,
+      deleteArtifact: deleteGoogleSheetSpreadsheetArtifact,
+      failureDetails: {
+        reason: 'artifact_cleanup_failed',
+        sessionId: persisted.sessionId,
+        spreadsheetId: spreadsheet.id
+      },
+      failureMessage: 'Failed to clean up Google Sheet artifact after record failure',
+      projectDirectory: persisted.projectDirectory
+    })
+    console.warn('Failed to record linked Google Sheet artifact', {
+      artifactCleanedUp,
+      reason: 'artifact_record_failed',
+      sessionId: persisted.sessionId,
+      spreadsheetId: spreadsheet.id
+    })
+  }
 }
 
 async function persistReadGoogleWorkspaceArtifact(input: {
@@ -461,33 +507,31 @@ function getGoogleWorkspaceArtifactSessionContext(
   return { projectDirectory, sessionId }
 }
 
-async function cleanupCreatedGoogleDocArtifact({
+async function cleanupCreatedGoogleWorkspaceArtifact({
   artifactPath,
   createdArtifact,
-  docId,
-  projectDirectory,
-  sessionId
+  deleteArtifact,
+  failureDetails,
+  failureMessage,
+  projectDirectory
 }: {
   artifactPath: string
   createdArtifact: boolean
-  docId: string
+  deleteArtifact: DeletePersistedGoogleWorkspaceArtifact
+  failureDetails: Record<string, string>
+  failureMessage: string
   projectDirectory: string
-  sessionId: string
 }): Promise<boolean | null> {
   if (!createdArtifact) return null
 
   try {
-    const result = await deleteGoogleDocDocumentArtifact({
+    const result = await deleteArtifact({
       artifactPath,
       projectDirectory
     })
     return result.deleted
   } catch {
-    console.warn('Failed to clean up Google Doc artifact after record failure', {
-      docId,
-      reason: 'artifact_cleanup_failed',
-      sessionId
-    })
+    console.warn(failureMessage, failureDetails)
     return false
   }
 }

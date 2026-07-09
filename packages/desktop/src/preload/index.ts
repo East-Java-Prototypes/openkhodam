@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
   GoogleWorkspaceIntegrationStatus,
+  LinkedGoogleArtifact,
   LinkedGoogleDoc,
   OpenProjectFolderInput,
   OpenCodeConnection,
@@ -9,9 +10,12 @@ import type {
   OpenedProjectFolder,
   ProjectArtifactsConfig,
   ProjectArtifactsListInput,
+  ProjectSessionLinkedGoogleArtifactsListInput,
   ProjectSessionLinkedDocsListInput,
+  RecordLinkedGoogleArtifactInput,
   RecordLinkedGoogleDocInput,
   RemoveProjectFolderInput,
+  UpdateLinkedGoogleArtifactListingInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 
@@ -51,14 +55,30 @@ const api = {
     ipcRenderer.invoke('projects:remove-opened-folder', input),
   listProjectArtifacts: (input: ProjectArtifactsListInput): Promise<ProjectArtifactsConfig> =>
     ipcRenderer.invoke('project-artifacts:list-project', input),
+  listSessionLinkedGoogleArtifacts: (
+    input: ProjectSessionLinkedGoogleArtifactsListInput
+  ): Promise<LinkedGoogleArtifact[]> =>
+    ipcRenderer.invoke('project-artifacts:list-session-google-artifacts', input),
   listSessionLinkedDocs: (input: ProjectSessionLinkedDocsListInput): Promise<LinkedGoogleDoc[]> =>
     ipcRenderer.invoke('project-artifacts:list-session-docs', input),
+  recordLinkedGoogleArtifact: (
+    input: RecordLinkedGoogleArtifactInput
+  ): Promise<LinkedGoogleArtifact> =>
+    ipcRenderer.invoke('project-artifacts:record-linked-google-artifact', input),
   recordLinkedGoogleDoc: (input: RecordLinkedGoogleDocInput): Promise<LinkedGoogleDoc> =>
     ipcRenderer.invoke('project-artifacts:record-linked-doc', input),
+  delistLinkedGoogleArtifact: (
+    input: UpdateLinkedGoogleArtifactListingInput
+  ): Promise<LinkedGoogleArtifact | null> =>
+    ipcRenderer.invoke('project-artifacts:delist-linked-google-artifact', input),
   delistLinkedGoogleDoc: (
     input: UpdateLinkedGoogleDocListingInput
   ): Promise<LinkedGoogleDoc | null> =>
     ipcRenderer.invoke('project-artifacts:delist-linked-doc', input),
+  relistLinkedGoogleArtifact: (
+    input: UpdateLinkedGoogleArtifactListingInput
+  ): Promise<LinkedGoogleArtifact | null> =>
+    ipcRenderer.invoke('project-artifacts:relist-linked-google-artifact', input),
   relistLinkedGoogleDoc: (
     input: UpdateLinkedGoogleDocListingInput
   ): Promise<LinkedGoogleDoc | null> =>
