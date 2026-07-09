@@ -59,7 +59,10 @@ export type OpenProjectFolderInput = {
 
 export type RemoveProjectFolderInput = OpenProjectFolderInput
 
-export type LinkedGoogleDoc = {
+export type LinkedGoogleArtifactType = 'google.doc.document' | 'google.sheet.spreadsheet'
+
+export type LinkedGoogleArtifact = {
+  type: LinkedGoogleArtifactType
   artifactPath: string | null
   id: string
   title: string | null
@@ -71,12 +74,17 @@ export type LinkedGoogleDoc = {
   lastMessageId: string | null
 }
 
-export type LinkedGoogleDocRecord = {
+export type LinkedGoogleArtifactRecord = {
+  type?: LinkedGoogleArtifactType
   artifactPath?: string | null
   id: string
   title?: string | null
   url?: string | null
 }
+
+export type LinkedGoogleDoc = LinkedGoogleArtifact
+
+export type LinkedGoogleDocRecord = LinkedGoogleArtifactRecord
 
 export type GoogleDocBodyBlock = {
   id: string
@@ -174,22 +182,33 @@ export type PersistedGoogleSheetSpreadsheetArtifact = GoogleSheetSpreadsheetArti
 
 export type ProjectArtifactsConfig = {
   version: 1
-  sessions: Record<string, LinkedGoogleDoc[]>
+  sessions: Record<string, LinkedGoogleArtifact[]>
 }
 
 export type ProjectArtifactsListInput = {
   projectDirectory: string
 }
 
-export type ProjectSessionLinkedDocsListInput = ProjectArtifactsListInput & {
+export type ProjectSessionLinkedGoogleArtifactsListInput = ProjectArtifactsListInput & {
   sessionId: string
 }
 
-export type RecordLinkedGoogleDocInput = ProjectSessionLinkedDocsListInput & {
+export type ProjectSessionLinkedDocsListInput = ProjectSessionLinkedGoogleArtifactsListInput
+
+export type RecordLinkedGoogleArtifactInput = ProjectSessionLinkedGoogleArtifactsListInput & {
+  messageId?: string | null
+  artifact: LinkedGoogleArtifactRecord
+}
+
+export type RecordLinkedGoogleDocInput = ProjectSessionLinkedGoogleArtifactsListInput & {
   messageId?: string | null
   doc: LinkedGoogleDocRecord
 }
 
-export type UpdateLinkedGoogleDocListingInput = ProjectSessionLinkedDocsListInput & {
-  id: string
-}
+export type UpdateLinkedGoogleArtifactListingInput =
+  ProjectSessionLinkedGoogleArtifactsListInput & {
+    id: string
+    type?: LinkedGoogleArtifactType
+  }
+
+export type UpdateLinkedGoogleDocListingInput = UpdateLinkedGoogleArtifactListingInput

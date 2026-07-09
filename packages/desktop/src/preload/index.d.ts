@@ -1,6 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   GoogleWorkspaceIntegrationStatus,
+  LinkedGoogleArtifact,
   LinkedGoogleDoc,
   OpenProjectFolderInput,
   OpenCodeConnection,
@@ -8,14 +9,18 @@ import type {
   OpenedProjectFolder,
   ProjectArtifactsConfig,
   ProjectArtifactsListInput,
+  ProjectSessionLinkedGoogleArtifactsListInput,
   ProjectSessionLinkedDocsListInput,
+  RecordLinkedGoogleArtifactInput,
   RecordLinkedGoogleDocInput,
   RemoveProjectFolderInput,
+  UpdateLinkedGoogleArtifactListingInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 
 export type {
   GoogleWorkspaceIntegrationStatus,
+  LinkedGoogleArtifact,
   LinkedGoogleDoc,
   OpenCodeConnection,
   OpenCodeSidecarStatus
@@ -39,11 +44,23 @@ export type OpenKhodamAPI = {
     input: RemoveProjectFolderInput
   ) => Promise<OpenedProjectFolder | null>
   listProjectArtifacts: (input: ProjectArtifactsListInput) => Promise<ProjectArtifactsConfig>
+  listSessionLinkedGoogleArtifacts: (
+    input: ProjectSessionLinkedGoogleArtifactsListInput
+  ) => Promise<LinkedGoogleArtifact[]>
   listSessionLinkedDocs: (input: ProjectSessionLinkedDocsListInput) => Promise<LinkedGoogleDoc[]>
+  recordLinkedGoogleArtifact: (
+    input: RecordLinkedGoogleArtifactInput
+  ) => Promise<LinkedGoogleArtifact>
   recordLinkedGoogleDoc: (input: RecordLinkedGoogleDocInput) => Promise<LinkedGoogleDoc>
+  delistLinkedGoogleArtifact: (
+    input: UpdateLinkedGoogleArtifactListingInput
+  ) => Promise<LinkedGoogleArtifact | null>
   delistLinkedGoogleDoc: (
     input: UpdateLinkedGoogleDocListingInput
   ) => Promise<LinkedGoogleDoc | null>
+  relistLinkedGoogleArtifact: (
+    input: UpdateLinkedGoogleArtifactListingInput
+  ) => Promise<LinkedGoogleArtifact | null>
   relistLinkedGoogleDoc: (
     input: UpdateLinkedGoogleDocListingInput
   ) => Promise<LinkedGoogleDoc | null>

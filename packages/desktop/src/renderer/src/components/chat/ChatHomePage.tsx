@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { LinkedGoogleDoc } from '@openkhodam/ui/types'
+import type { LinkedGoogleArtifact } from '@openkhodam/ui/types'
 import {
   createContext,
   useCallback,
@@ -91,7 +91,7 @@ type ActionPaneControlsContextValue = {
 const ActionPaneControlsContext = createContext<ActionPaneControlsContextValue | null>(null)
 
 const emptyChatMessages: ChatMessage[] = []
-const emptyLinkedDocs: LinkedGoogleDoc[] = []
+const emptyLinkedGoogleArtifacts: LinkedGoogleArtifact[] = []
 const noop = (): void => {}
 
 export function ChatHomePage({
@@ -743,13 +743,13 @@ function ProjectChatListItem({
 export function ActiveChatPanel({
   project,
   session,
-  linkedDocs = emptyLinkedDocs,
+  linkedGoogleArtifacts = emptyLinkedGoogleArtifacts,
   composer,
   composerErrorMessage
 }: {
   project?: OpenCodeProjectRouteState
   session?: OpenCodeSessionRouteState
-  linkedDocs?: LinkedGoogleDoc[]
+  linkedGoogleArtifacts?: LinkedGoogleArtifact[]
   composer?: ReactNode
   composerErrorMessage?: string | null
 }): JSX.Element {
@@ -856,7 +856,7 @@ export function ActiveChatPanel({
         onResize={handleActionPaneResize}
       >
         {isActionPaneOpen ? (
-          <ChatActionPane linkedDocs={linkedDocs} />
+          <ChatActionPane linkedGoogleArtifacts={linkedGoogleArtifacts} />
         ) : (
           <CollapsedActionPaneRail onRestore={() => handleActionPaneOpenChange(true)} />
         )}
@@ -927,13 +927,19 @@ export function ProjectRouteActivePane({
 export function SessionRouteActivePane({
   project,
   session,
-  linkedDocs
+  linkedGoogleArtifacts
 }: {
   project?: OpenCodeProjectRouteState
   session: OpenCodeSessionRouteState
-  linkedDocs: LinkedGoogleDoc[]
+  linkedGoogleArtifacts: LinkedGoogleArtifact[]
 }): JSX.Element {
-  return <ActiveChatPanel linkedDocs={linkedDocs} project={project} session={session} />
+  return (
+    <ActiveChatPanel
+      linkedGoogleArtifacts={linkedGoogleArtifacts}
+      project={project}
+      session={session}
+    />
+  )
 }
 
 function ChatMessageList({
