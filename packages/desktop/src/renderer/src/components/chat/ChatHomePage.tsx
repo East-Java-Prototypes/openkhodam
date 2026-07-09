@@ -1034,7 +1034,7 @@ function AssistantThinkingRow(): JSX.Element {
           <MessageHeader className="px-0 capitalize">assistant</MessageHeader>
           <div
             data-slot="message-surface"
-            className="max-w-2xl min-w-0 border border-border bg-card/60 px-4 py-3 text-sm text-muted-foreground shadow-sm"
+            className="max-w-2xl min-w-0 text-sm text-muted-foreground"
           >
             Thinking…
           </div>
@@ -1094,10 +1094,10 @@ function ChatMessageBubble({
           <div
             data-slot="message-surface"
             className={cn(
-              'max-w-2xl min-w-0 border px-4 py-3 text-sm shadow-sm',
+              'max-w-2xl min-w-0 text-sm',
               isUser
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'border-border bg-card text-card-foreground'
+                ? 'border border-primary bg-primary px-4 py-3 text-primary-foreground shadow-sm'
+                : 'text-foreground'
             )}
           >
             <ChatMessageParts author={message.author} parts={message.parts} />

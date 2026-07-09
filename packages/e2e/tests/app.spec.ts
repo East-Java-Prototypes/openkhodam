@@ -59,6 +59,17 @@ const terminalProjectRouteState = (page: Page): Locator =>
 const resizeTestViewport = { width: 1200, height: 700 }
 
 type ElementBox = NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>
+type MessageSurfaceBubbleStyles = {
+  hasVisibleBorder: boolean
+  hasBackground: boolean
+  hasShadow: boolean
+  hasPadding: boolean
+  backgroundColor: string
+  borderStyles: string[]
+  borderWidths: string[]
+  boxShadow: string
+  padding: string[]
+}
 
 async function setResizeTestViewport(electronApp: ElectronApplication, page: Page): Promise<void> {
   await electronApp.evaluate(({ BrowserWindow }, size) => {
@@ -80,6 +91,65 @@ async function elementBox(locator: Locator, description: string): Promise<Elemen
   expect(box, `${description} should have a bounding box`).not.toBeNull()
   if (!box) throw new Error(`${description} should have a bounding box`)
   return box
+}
+
+async function messageSurfaceBubbleStyles(locator: Locator): Promise<MessageSurfaceBubbleStyles> {
+  return locator.evaluate((surface) => {
+    const style = window.getComputedStyle(surface)
+    const borderStyles = [
+      style.borderTopStyle,
+      style.borderRightStyle,
+      style.borderBottomStyle,
+      style.borderLeftStyle
+    ]
+    const borderWidths = [
+      style.borderTopWidth,
+      style.borderRightWidth,
+      style.borderBottomWidth,
+      style.borderLeftWidth
+    ]
+    const padding = [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]
+    const transparentBackgrounds = new Set(['rgba(0, 0, 0, 0)', 'transparent'])
+
+    return {
+      hasVisibleBorder: borderWidths.some((width, index) => {
+        const borderStyle = borderStyles[index]
+        return Number.parseFloat(width) > 0 && borderStyle !== 'none' && borderStyle !== 'hidden'
+      }),
+      hasBackground: !transparentBackgrounds.has(style.backgroundColor),
+      hasShadow: style.boxShadow !== '' && style.boxShadow !== 'none',
+      hasPadding: padding.some((value) => Number.parseFloat(value) > 0),
+      backgroundColor: style.backgroundColor,
+      borderStyles,
+      borderWidths,
+      boxShadow: style.boxShadow,
+      padding
+    }
+  })
+}
+
+async function expectPlainAssistantSurface(locator: Locator, description: string): Promise<void> {
+  await expect(locator, `${description} should be visible`).toBeVisible()
+  const styles = await messageSurfaceBubbleStyles(locator)
+
+  expect(styles, `${description} should not render an outer chat bubble`).toMatchObject({
+    hasVisibleBorder: false,
+    hasBackground: false,
+    hasShadow: false,
+    hasPadding: false
+  })
+}
+
+async function expectUserBubbleSurface(locator: Locator, description: string): Promise<void> {
+  await expect(locator, `${description} should be visible`).toBeVisible()
+  const styles = await messageSurfaceBubbleStyles(locator)
+
+  expect(styles, `${description} should keep user chat bubble styling`).toMatchObject({
+    hasVisibleBorder: true,
+    hasBackground: true,
+    hasShadow: true,
+    hasPadding: true
+  })
 }
 
 async function expectFooterHeartbeat(page: Page, locator: Locator): Promise<void> {
@@ -1173,8 +1243,18 @@ test('renders seeded stable chat messages', async ({ appWindow }) => {
   await expect(transcript).toBeVisible()
   await expect(transcript.getByRole('log')).toBeVisible()
   await expect(transcript.locator('[data-slot="message-scroller-item"]')).toHaveCount(2)
-  await expect(appWindow.getByRole('article', { name: /user message at/ })).toBeVisible()
-  await expect(appWindow.getByRole('article', { name: /assistant message at/ })).toBeVisible()
+  const userArticle = appWindow.getByRole('article', { name: /user message at/ })
+  const assistantArticle = appWindow.getByRole('article', { name: /assistant message at/ })
+  await expect(userArticle).toBeVisible()
+  await expect(assistantArticle).toBeVisible()
+  await expectUserBubbleSurface(
+    userArticle.locator('[data-slot="message-surface"]').first(),
+    'seeded user message surface'
+  )
+  await expectPlainAssistantSurface(
+    assistantArticle.locator('[data-slot="message-surface"]').first(),
+    'seeded assistant message surface'
+  )
   await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
   await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
 })
@@ -1575,6 +1655,12 @@ test('shows optimistic prompt before delayed stable message projection', async (
     appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
   ).toBeVisible()
   await expect(thinkingRow).toBeVisible()
+  await expectPlainAssistantSurface(
+    messageTranscript(appWindow).locator(
+      '[data-slot="assistant-thinking-row"] [data-slot="message-surface"]'
+    ),
+    'assistant thinking message surface'
+  )
   await expect(
     messageTranscript(appWindow).getByText('Prompt sent. Messages will refresh shortly.')
   ).toHaveCount(0)
