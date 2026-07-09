@@ -255,7 +255,7 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
   }
 })
 
-test('stores project session linked Google Docs with stable path and dedupe timestamps', async () => {
+test('stores project session linked Google Workspace artifacts with stable path and dedupe timestamps', async () => {
   const { PROJECT_ARTIFACTS_CONFIG_VERSION, ProjectArtifactsFileStore } =
     loadDesktopModule<ProjectArtifactsModule>(
       '../../desktop/src/main/integrations/project-artifacts'
@@ -294,6 +294,7 @@ test('stores project session linked Google Docs with stable path and dedupe time
       lastSeenAt: 1_000,
       listed: true,
       title: 'Launch Plan',
+      type: 'google.doc.document',
       url: 'https://docs.google.com/document/d/doc-1/edit'
     })
     expect(JSON.parse(await readFile(store.filePath, 'utf8'))).toEqual({
@@ -323,13 +324,44 @@ test('stores project session linked Google Docs with stable path and dedupe time
       lastMessageId: 'message-2',
       lastSeenAt: 2_000,
       listed: true,
-      title: 'Updated Launch Plan'
+      title: 'Updated Launch Plan',
+      type: 'google.doc.document'
     })
-    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([rerecorded])
+    const linkedSheet = await store.recordLinkedGoogleArtifact({
+      artifact: {
+        id: 'doc-1',
+        title: 'Launch Tracker',
+        type: 'google.sheet.spreadsheet',
+        url: 'https://docs.google.com/spreadsheets/d/doc-1/edit'
+      },
+      messageId: 'message-3',
+      sessionId: 'session-1'
+    })
+
+    expect(linkedSheet).toMatchObject({
+      artifactPath: null,
+      firstMessageId: 'message-3',
+      firstSeenAt: 2_000,
+      id: 'doc-1',
+      lastMessageId: 'message-3',
+      lastSeenAt: 2_000,
+      listed: true,
+      title: 'Launch Tracker',
+      type: 'google.sheet.spreadsheet',
+      url: 'https://docs.google.com/spreadsheets/d/doc-1/edit'
+    })
+    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([
+      rerecorded,
+      linkedSheet
+    ])
+    await expect(store.listSessionLinkedGoogleArtifacts('session-1')).resolves.toEqual([
+      rerecorded,
+      linkedSheet
+    ])
     await expect(store.listProjectArtifacts()).resolves.toEqual({
       version: PROJECT_ARTIFACTS_CONFIG_VERSION,
       sessions: {
-        'session-1': [rerecorded]
+        'session-1': [rerecorded, linkedSheet]
       }
     })
   } finally {
@@ -392,7 +424,8 @@ test('gets or creates linked Google Docs and backfills artifact paths only when 
       firstSeenAt: created.firstSeenAt,
       id: 'doc-1',
       lastMessageId: 'message-3',
-      title: 'Updated Launch Plan'
+      title: 'Updated Launch Plan',
+      type: 'google.doc.document'
     })
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
@@ -716,7 +749,8 @@ test('preserves linked-doc delist intent until explicitly relisted', async () =>
       lastMessageId: 'message-2',
       lastSeenAt: 20,
       listed: false,
-      title: 'Updated Launch Plan'
+      title: 'Updated Launch Plan',
+      type: 'google.doc.document'
     })
 
     const relisted = await store.relistLinkedGoogleDoc({ id: 'doc-1', sessionId: 'session-1' })
@@ -764,6 +798,26 @@ test('normalizes invalid linked-doc artifact records defensively', async () => {
                 listed: true,
                 title: 'Newer title'
               },
+              {
+                artifactPath: expectedGoogleSheetArtifactPath('sheet-1'),
+                firstSeenAt: 40,
+                id: 'sheet-1',
+                lastMessageId: 'message-sheet-1',
+                lastSeenAt: 40,
+                listed: true,
+                title: 'Sheet Plan',
+                type: 'google.sheet.spreadsheet',
+                url: 'https://docs.google.com/spreadsheets/d/sheet-1/edit'
+              },
+              {
+                firstSeenAt: 45,
+                id: 'sheet-1',
+                lastMessageId: 'message-sheet-2',
+                lastSeenAt: 55,
+                listed: true,
+                title: 'Updated Sheet Plan',
+                type: 'google.sheet.spreadsheet'
+              },
               { id: '', title: 'ignored' }
             ],
             ' session-b ': [
@@ -796,6 +850,19 @@ test('normalizes invalid linked-doc artifact records defensively', async () => {
             lastSeenAt: 100,
             listed: false,
             title: 'Newer title',
+            type: 'google.doc.document',
+            url: null
+          },
+          {
+            artifactPath: expectedGoogleSheetArtifactPath('sheet-1'),
+            firstMessageId: null,
+            firstSeenAt: 40,
+            id: 'sheet-1',
+            lastMessageId: 'message-sheet-2',
+            lastSeenAt: 55,
+            listed: true,
+            title: 'Updated Sheet Plan',
+            type: 'google.sheet.spreadsheet',
             url: null
           }
         ],
@@ -809,6 +876,7 @@ test('normalizes invalid linked-doc artifact records defensively', async () => {
             lastSeenAt: 12,
             listed: true,
             title: null,
+            type: 'google.doc.document',
             url: null
           }
         ]
@@ -1527,7 +1595,25 @@ test('reads explicit Google Sheets ranges through Sheets API and persists a spre
     expect(fullArtifact).not.toHaveProperty('preview')
     expect(String(fullArtifactPath)).toContain('.openkhodam/artifacts/google-sheets')
     expect(String(fullArtifactPath)).not.toContain(spreadsheetId)
-    await expect(stat(join(projectPath, '.openkhodam', 'artifacts.json'))).rejects.toThrow()
+    const artifacts = JSON.parse(
+      await readFile(join(projectPath, '.openkhodam', 'artifacts.json'), 'utf8')
+    ) as {
+      sessions: Record<string, Array<Record<string, unknown>>>
+    }
+    expect(artifacts.sessions['session-sheets']).toHaveLength(1)
+    expect(artifacts.sessions['session-sheets']?.[0]).toMatchObject({
+      artifactPath: expectedGoogleSheetArtifactPath(spreadsheetId),
+      id: spreadsheetId,
+      listed: true,
+      title: 'Sheets Plan',
+      type: 'google.sheet.spreadsheet',
+      url: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`
+    })
+    expect(String(artifacts.sessions['session-sheets']?.[0]?.artifactPath)).not.toContain(
+      spreadsheetId
+    )
+    expect(JSON.stringify(artifacts)).not.toContain('Amount')
+    expect(JSON.stringify(artifacts)).not.toContain('Launch')
 
     const outputText = JSON.stringify(output)
     expect(outputText).not.toContain('valid-sheets-access-token')
@@ -3330,6 +3416,190 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
   }
 })
 
+test('cleans up only newly created Google Sheet artifacts when session index recording fails', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-index-failure-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project-path-should-not-log')
+  const openKhodamPath = join(projectPath, '.openkhodam')
+  const googleSheetsArtifactDirectory = join(openKhodamPath, 'artifacts', 'google-sheets')
+  const artifactsPath = join(openKhodamPath, 'artifacts.json')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const existingSpreadsheetId = 'sheet-existing-index-failure'
+  const createdSpreadsheetId = 'sheet-created-index-failure'
+  const existingArtifactPath = expectedGoogleSheetArtifactAbsolutePath(
+    projectPath,
+    existingSpreadsheetId
+  )
+  const createdArtifactPath = expectedGoogleSheetArtifactAbsolutePath(
+    projectPath,
+    createdSpreadsheetId
+  )
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+
+  await mkdir(googleSheetsArtifactDirectory, { recursive: true })
+  await writeFile(artifactsPath, '{\n  "version": 1,\n  "sessions": {}\n}\n', 'utf8')
+  await writeFile(
+    existingArtifactPath,
+    `${JSON.stringify(
+      {
+        type: 'google.sheet.spreadsheet',
+        id: existingSpreadsheetId,
+        title: 'Preexisting Sheet Artifact',
+        link: `https://docs.google.com/spreadsheets/d/${existingSpreadsheetId}/edit`,
+        sheets: [],
+        ranges: [],
+        schemaVersion: 1,
+        cachedAt: 1
+      },
+      null,
+      2
+    )}\n`,
+    'utf8'
+  )
+  await chmod(openKhodamPath, 0o555)
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleSheetsSpreadsheetsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'valid-sheets-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args)
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const fetchedSheet = readFetchedGoogleSheetsSpreadsheet(url)
+    if (!fetchedSheet) throw new Error(`Unexpected fetch URL: ${url}`)
+
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-sheets-access-token')
+
+    if (fetchedSheet.values) {
+      return new Response(
+        JSON.stringify({
+          spreadsheetId: fetchedSheet.spreadsheetId,
+          valueRanges: [
+            {
+              range: 'Summary!A1:A1',
+              majorDimension: 'ROWS',
+              values: [[`sensitive cell ${fetchedSheet.spreadsheetId}`]]
+            }
+          ]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+
+    return new Response(
+      JSON.stringify({
+        spreadsheetId: fetchedSheet.spreadsheetId,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${fetchedSheet.spreadsheetId}/edit`,
+        properties: { title: `Sheet ${fetchedSheet.spreadsheetId}` },
+        sheets: [
+          {
+            properties: {
+              sheetId: 1,
+              title: 'Summary',
+              index: 0,
+              sheetType: 'GRID',
+              gridProperties: { rowCount: 1, columnCount: 1 }
+            }
+          }
+        ]
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const context = { directory: projectPath, sessionID: 'session-1' }
+
+    const existingOutput = JSON.parse(
+      await plugin.tool.google_sheets_read.execute(
+        { spreadsheetId: existingSpreadsheetId, ranges: ['Summary!A1:A1'] },
+        context
+      )
+    ) as {
+      spreadsheet: Record<string, unknown>
+    }
+    expect(existingOutput.spreadsheet).toMatchObject({
+      id: existingSpreadsheetId,
+      title: `Sheet ${existingSpreadsheetId}`,
+      type: 'google.sheet.spreadsheet'
+    })
+    await expect(stat(existingArtifactPath)).resolves.toMatchObject({})
+    expect(JSON.parse(await readFile(existingArtifactPath, 'utf8'))).toMatchObject({
+      id: existingSpreadsheetId,
+      schemaVersion: 1,
+      title: `Sheet ${existingSpreadsheetId}`
+    })
+
+    const createdOutput = JSON.parse(
+      await plugin.tool.google_sheets_read.execute(
+        { spreadsheetId: createdSpreadsheetId, ranges: ['Summary!A1:A1'] },
+        context
+      )
+    ) as {
+      spreadsheet: Record<string, unknown>
+    }
+    expect(createdOutput.spreadsheet).toMatchObject({
+      id: createdSpreadsheetId,
+      title: `Sheet ${createdSpreadsheetId}`,
+      type: 'google.sheet.spreadsheet'
+    })
+
+    expect(warnings).toEqual([
+      [
+        'Failed to record linked Google Sheet artifact',
+        {
+          artifactCleanedUp: null,
+          reason: 'artifact_record_failed',
+          sessionId: 'session-1',
+          spreadsheetId: existingSpreadsheetId
+        }
+      ],
+      [
+        'Failed to record linked Google Sheet artifact',
+        {
+          artifactCleanedUp: true,
+          reason: 'artifact_record_failed',
+          sessionId: 'session-1',
+          spreadsheetId: createdSpreadsheetId
+        }
+      ]
+    ])
+
+    const warningText = JSON.stringify(warnings)
+    expect(warningText).not.toContain('valid-sheets-access-token')
+    expect(warningText).not.toContain('refresh-token')
+    expect(warningText).not.toContain('sensitive cell')
+    expect(warningText).not.toContain('EACCES')
+    expect(warningText).not.toContain(tempRoot)
+    expect(warningText).not.toContain(projectPath)
+    await expect(stat(existingArtifactPath)).resolves.toMatchObject({})
+    await expect(stat(createdArtifactPath)).rejects.toThrow()
+    await expect(readFile(artifactsPath, 'utf8')).resolves.toBe(
+      '{\n  "version": 1,\n  "sessions": {}\n}\n'
+    )
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await chmod(openKhodamPath, 0o755).catch(() => undefined)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
 test('keeps Google Docs read output when linked-doc artifact recording fails', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-record-failure-'))
   const userDataPath = join(tempRoot, 'user-data')
@@ -3769,6 +4039,30 @@ function readFetchedGoogleDocsDocumentId(url: string): string | null {
   }
 
   return decodeURIComponent(parsed.pathname.slice(prefix.length))
+}
+
+function readFetchedGoogleSheetsSpreadsheet(
+  url: string
+): { spreadsheetId: string; values: boolean } | null {
+  const parsed = new URL(url)
+  const prefix = '/v4/spreadsheets/'
+  const valuesSuffix = '/values:batchGet'
+  if (parsed.origin !== 'https://sheets.googleapis.com' || !parsed.pathname.startsWith(prefix)) {
+    return null
+  }
+
+  const rest = parsed.pathname.slice(prefix.length)
+  if (rest.endsWith(valuesSuffix)) {
+    return {
+      spreadsheetId: decodeURIComponent(rest.slice(0, -valuesSuffix.length)),
+      values: true
+    }
+  }
+
+  return {
+    spreadsheetId: decodeURIComponent(rest),
+    values: false
+  }
 }
 
 test('registers the ping tool from the ESM artifact through the real OpenCode loader', async () => {

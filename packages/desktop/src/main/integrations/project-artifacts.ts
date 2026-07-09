@@ -6,12 +6,17 @@ import { isAbsolute, join, posix } from 'node:path'
 import type {
   GoogleDocDocumentArtifact,
   GoogleSheetSpreadsheetArtifact,
+  LinkedGoogleArtifact,
+  LinkedGoogleArtifactRecord,
+  LinkedGoogleArtifactType,
   LinkedGoogleDoc,
-  LinkedGoogleDocRecord,
   ProjectArtifactsConfig,
   ProjectArtifactsListInput,
+  ProjectSessionLinkedGoogleArtifactsListInput,
   ProjectSessionLinkedDocsListInput,
+  RecordLinkedGoogleArtifactInput,
   RecordLinkedGoogleDocInput,
+  UpdateLinkedGoogleArtifactListingInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 
@@ -32,20 +37,37 @@ export type ProjectArtifactsFileStoreOptions = {
 
 export type ProjectArtifactsIntegration = {
   listProjectArtifacts: (input: ProjectArtifactsListInput) => Promise<ProjectArtifactsConfig>
+  listSessionLinkedGoogleArtifacts: (
+    input: ProjectSessionLinkedGoogleArtifactsListInput
+  ) => Promise<LinkedGoogleArtifact[]>
   listSessionLinkedDocs: (input: ProjectSessionLinkedDocsListInput) => Promise<LinkedGoogleDoc[]>
+  recordLinkedGoogleArtifact: (
+    input: RecordLinkedGoogleArtifactInput
+  ) => Promise<LinkedGoogleArtifact>
   recordLinkedGoogleDoc: (input: RecordLinkedGoogleDocInput) => Promise<LinkedGoogleDoc>
+  delistLinkedGoogleArtifact: (
+    input: UpdateLinkedGoogleArtifactListingInput
+  ) => Promise<LinkedGoogleArtifact | null>
   delistLinkedGoogleDoc: (
     input: UpdateLinkedGoogleDocListingInput
   ) => Promise<LinkedGoogleDoc | null>
+  relistLinkedGoogleArtifact: (
+    input: UpdateLinkedGoogleArtifactListingInput
+  ) => Promise<LinkedGoogleArtifact | null>
   relistLinkedGoogleDoc: (
     input: UpdateLinkedGoogleDocListingInput
   ) => Promise<LinkedGoogleDoc | null>
 }
 
-type ProjectArtifactsStoreRecordInput = Omit<RecordLinkedGoogleDocInput, 'projectDirectory'>
-type ProjectArtifactsStoreListingInput = Omit<UpdateLinkedGoogleDocListingInput, 'projectDirectory'>
+type ProjectArtifactsStoreRecordInput = Omit<RecordLinkedGoogleArtifactInput, 'projectDirectory'>
+type ProjectArtifactsStoreDocRecordInput = Omit<RecordLinkedGoogleDocInput, 'projectDirectory'>
+type ProjectArtifactsStoreListingInput = Omit<
+  UpdateLinkedGoogleArtifactListingInput,
+  'projectDirectory'
+>
 
-type NormalizedLinkedGoogleDocRecord = {
+type NormalizedLinkedGoogleArtifactRecord = {
+  type: LinkedGoogleArtifactType
   artifactPath: string | null
   id: string
   title: string | null
@@ -117,6 +139,15 @@ export type DeleteGoogleDocDocumentArtifactResult = {
   deleted: boolean
 }
 
+export type DeleteGoogleSheetSpreadsheetArtifactInput = {
+  artifactPath: string
+  projectDirectory: string
+}
+
+export type DeleteGoogleSheetSpreadsheetArtifactResult = {
+  deleted: boolean
+}
+
 export class ProjectArtifactsFileStore {
   readonly filePath: string
   readonly projectDirectory: string
@@ -151,53 +182,84 @@ export class ProjectArtifactsFileStore {
     return this.read()
   }
 
-  async listSessionLinkedDocs(sessionId: string): Promise<LinkedGoogleDoc[]> {
+  async listSessionLinkedGoogleArtifacts(sessionId: string): Promise<LinkedGoogleArtifact[]> {
     const normalizedSessionId = normalizeRequiredString(sessionId, 'sessionId')
     const config = await this.read()
     return config.sessions[normalizedSessionId] ?? []
   }
 
-  async recordLinkedGoogleDoc(input: ProjectArtifactsStoreRecordInput): Promise<LinkedGoogleDoc> {
+  async listSessionLinkedDocs(sessionId: string): Promise<LinkedGoogleDoc[]> {
+    return this.listSessionLinkedGoogleArtifacts(sessionId)
+  }
+
+  async recordLinkedGoogleArtifact(
+    input: ProjectArtifactsStoreRecordInput
+  ): Promise<LinkedGoogleArtifact> {
     const sessionId = normalizeRequiredString(input.sessionId, 'sessionId')
     const messageId = normalizeOptionalString(input.messageId)
-    const doc = normalizeLinkedGoogleDocRecordInput(input.doc)
+    const artifact = normalizeLinkedGoogleArtifactRecordInput(input.artifact)
     const seenAt = this.now()
     const config = await this.read()
-    const sessionDocs = [...(config.sessions[sessionId] ?? [])]
-    const existingIndex = sessionDocs.findIndex((candidate) => candidate.id === doc.id)
-    const nextDoc = toLinkedGoogleDoc(doc, seenAt, messageId)
+    const sessionArtifacts = [...(config.sessions[sessionId] ?? [])]
+    const artifactKey = linkedGoogleArtifactKey(artifact)
+    const existingIndex = sessionArtifacts.findIndex(
+      (candidate) => linkedGoogleArtifactKey(candidate) === artifactKey
+    )
+    const nextArtifact = toLinkedGoogleArtifact(artifact, seenAt, messageId)
 
     if (existingIndex >= 0) {
-      const existing = sessionDocs[existingIndex]
-      const updatedDoc = {
-        ...nextDoc,
-        artifactPath: nextDoc.artifactPath ?? existing.artifactPath,
+      const existing = sessionArtifacts[existingIndex]
+      const updatedArtifact = {
+        ...nextArtifact,
+        artifactPath: nextArtifact.artifactPath ?? existing.artifactPath,
         firstSeenAt: existing.firstSeenAt,
-        firstMessageId: existing.firstMessageId ?? nextDoc.firstMessageId,
+        firstMessageId: existing.firstMessageId ?? nextArtifact.firstMessageId,
         listed: existing.listed
       }
-      sessionDocs[existingIndex] = updatedDoc
-      config.sessions[sessionId] = sessionDocs
+      sessionArtifacts[existingIndex] = updatedArtifact
+      config.sessions[sessionId] = sessionArtifacts
       await this.write(config)
-      return updatedDoc
+      return updatedArtifact
     }
 
-    sessionDocs.push(nextDoc)
-    config.sessions[sessionId] = sessionDocs
+    sessionArtifacts.push(nextArtifact)
+    config.sessions[sessionId] = sessionArtifacts
     await this.write(config)
-    return nextDoc
+    return nextArtifact
+  }
+
+  async recordLinkedGoogleDoc(
+    input: ProjectArtifactsStoreDocRecordInput
+  ): Promise<LinkedGoogleDoc> {
+    return this.recordLinkedGoogleArtifact({
+      artifact: { ...input.doc, type: input.doc.type ?? 'google.doc.document' },
+      messageId: input.messageId,
+      sessionId: input.sessionId
+    })
+  }
+
+  async delistLinkedGoogleArtifact(
+    input: ProjectArtifactsStoreListingInput
+  ): Promise<LinkedGoogleArtifact | null> {
+    return this.setLinkedGoogleArtifactListed(input, false)
   }
 
   async delistLinkedGoogleDoc(
     input: ProjectArtifactsStoreListingInput
   ): Promise<LinkedGoogleDoc | null> {
-    return this.setLinkedGoogleDocListed(input, false)
+    return this.delistLinkedGoogleArtifact({ ...input, type: input.type ?? 'google.doc.document' })
+  }
+
+  async relistLinkedGoogleArtifact(
+    input: ProjectArtifactsStoreListingInput
+  ): Promise<LinkedGoogleArtifact | null> {
+    return this.setLinkedGoogleArtifactListed(input, true)
   }
 
   async relistLinkedGoogleDoc(
     input: ProjectArtifactsStoreListingInput
   ): Promise<LinkedGoogleDoc | null> {
-    return this.setLinkedGoogleDocListed(input, true)
+    return this.relistLinkedGoogleArtifact({ ...input, type: input.type ?? 'google.doc.document' })
   }
 
   async persistGoogleDocDocumentArtifact(
@@ -221,24 +283,21 @@ export class ProjectArtifactsFileStore {
   async deleteGoogleDocDocumentArtifact(
     artifactPath: string
   ): Promise<DeleteGoogleDocDocumentArtifactResult> {
-    const normalizedArtifactPath = normalizeRequiredGoogleDocArtifactPath(artifactPath)
-    const filePath = getGoogleWorkspaceArtifactFilePathFromRelativePath(
-      this.projectDirectory,
-      normalizedArtifactPath,
-      GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG
+    return this.deleteGoogleWorkspaceArtifactFile(
+      artifactPath,
+      GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG,
+      'Google Docs'
     )
+  }
 
-    this.prepareGoogleWorkspaceArtifactPathForDelete(
-      filePath,
-      GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG
+  async deleteGoogleSheetSpreadsheetArtifact(
+    artifactPath: string
+  ): Promise<DeleteGoogleSheetSpreadsheetArtifactResult> {
+    return this.deleteGoogleWorkspaceArtifactFile(
+      artifactPath,
+      GOOGLE_SHEET_SPREADSHEET_ARTIFACT_FILE_CONFIG,
+      'Google Sheets'
     )
-    try {
-      await unlink(filePath)
-      return { deleted: true }
-    } catch (error) {
-      if (isNodeError(error) && error.code === 'ENOENT') return { deleted: false }
-      throw error
-    }
   }
 
   private async persistGoogleWorkspaceArtifactFile<
@@ -269,25 +328,54 @@ export class ProjectArtifactsFileStore {
     return { artifactPath, created: existingFileStat === null }
   }
 
-  private async setLinkedGoogleDocListed(
+  private async deleteGoogleWorkspaceArtifactFile<TArtifact extends object>(
+    artifactPath: string,
+    config: GoogleWorkspaceArtifactFileConfig<TArtifact, number>,
+    productName: string
+  ): Promise<{ deleted: boolean }> {
+    const normalizedArtifactPath = normalizeRequiredGoogleWorkspaceArtifactPath(
+      artifactPath,
+      config,
+      productName
+    )
+    const filePath = getGoogleWorkspaceArtifactFilePathFromRelativePath(
+      this.projectDirectory,
+      normalizedArtifactPath,
+      config
+    )
+
+    this.prepareGoogleWorkspaceArtifactPathForDelete(filePath, config)
+    try {
+      await unlink(filePath)
+      return { deleted: true }
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') return { deleted: false }
+      throw error
+    }
+  }
+
+  private async setLinkedGoogleArtifactListed(
     input: ProjectArtifactsStoreListingInput,
     listed: boolean
-  ): Promise<LinkedGoogleDoc | null> {
+  ): Promise<LinkedGoogleArtifact | null> {
     const sessionId = normalizeRequiredString(input.sessionId, 'sessionId')
     const id = normalizeRequiredString(input.id, 'id')
+    const type = normalizeInputGoogleArtifactType(input.type)
     const config = await this.read()
-    const sessionDocs = config.sessions[sessionId]
-    if (!sessionDocs) return null
+    const sessionArtifacts = config.sessions[sessionId]
+    if (!sessionArtifacts) return null
 
-    const docIndex = sessionDocs.findIndex((doc) => doc.id === id)
-    if (docIndex < 0) return null
+    const artifactIndex = sessionArtifacts.findIndex(
+      (artifact) => artifact.id === id && artifact.type === type
+    )
+    if (artifactIndex < 0) return null
 
-    const nextDocs = [...sessionDocs]
-    const updatedDoc = { ...nextDocs[docIndex], listed }
-    nextDocs[docIndex] = updatedDoc
-    config.sessions[sessionId] = nextDocs
+    const nextArtifacts = [...sessionArtifacts]
+    const updatedArtifact = { ...nextArtifacts[artifactIndex], listed }
+    nextArtifacts[artifactIndex] = updatedArtifact
+    config.sessions[sessionId] = nextArtifacts
     await this.write(config)
-    return updatedDoc
+    return updatedArtifact
   }
 
   private validateProjectDirectory(): void {
@@ -330,8 +418,18 @@ export function createProjectArtifactsIntegration(): ProjectArtifactsIntegration
     async listProjectArtifacts(input) {
       return createProjectArtifactsStore(input).listProjectArtifacts()
     },
+    async listSessionLinkedGoogleArtifacts(input) {
+      return createProjectArtifactsStore(input).listSessionLinkedGoogleArtifacts(input.sessionId)
+    },
     async listSessionLinkedDocs(input) {
       return createProjectArtifactsStore(input).listSessionLinkedDocs(input.sessionId)
+    },
+    async recordLinkedGoogleArtifact(input) {
+      return createProjectArtifactsStore(input).recordLinkedGoogleArtifact({
+        artifact: input.artifact,
+        messageId: input.messageId,
+        sessionId: input.sessionId
+      })
     },
     async recordLinkedGoogleDoc(input) {
       return createProjectArtifactsStore(input).recordLinkedGoogleDoc({
@@ -340,35 +438,52 @@ export function createProjectArtifactsIntegration(): ProjectArtifactsIntegration
         sessionId: input.sessionId
       })
     },
+    async delistLinkedGoogleArtifact(input) {
+      return createProjectArtifactsStore(input).delistLinkedGoogleArtifact({
+        id: input.id,
+        sessionId: input.sessionId,
+        type: input.type
+      })
+    },
     async delistLinkedGoogleDoc(input) {
       return createProjectArtifactsStore(input).delistLinkedGoogleDoc({
         id: input.id,
-        sessionId: input.sessionId
+        sessionId: input.sessionId,
+        type: input.type
+      })
+    },
+    async relistLinkedGoogleArtifact(input) {
+      return createProjectArtifactsStore(input).relistLinkedGoogleArtifact({
+        id: input.id,
+        sessionId: input.sessionId,
+        type: input.type
       })
     },
     async relistLinkedGoogleDoc(input) {
       return createProjectArtifactsStore(input).relistLinkedGoogleDoc({
         id: input.id,
-        sessionId: input.sessionId
+        sessionId: input.sessionId,
+        type: input.type
       })
     }
   }
 }
 
-export async function getOrCreateLinkedGoogleDoc(
-  input: RecordLinkedGoogleDocInput
-): Promise<LinkedGoogleDoc> {
+export async function getOrCreateLinkedGoogleArtifact(
+  input: RecordLinkedGoogleArtifactInput
+): Promise<LinkedGoogleArtifact> {
   const store = createProjectArtifactsStore(input)
   const sessionId = normalizeRequiredString(input.sessionId, 'sessionId')
-  const doc = normalizeLinkedGoogleDocRecordInput(input.doc)
-  const existing = (await store.listSessionLinkedDocs(sessionId)).find(
-    (candidate) => candidate.id === doc.id
+  const artifact = normalizeLinkedGoogleArtifactRecordInput(input.artifact)
+  const artifactKey = linkedGoogleArtifactKey(artifact)
+  const existing = (await store.listSessionLinkedGoogleArtifacts(sessionId)).find(
+    (candidate) => linkedGoogleArtifactKey(candidate) === artifactKey
   )
 
   if (existing) {
-    if (doc.artifactPath && doc.artifactPath !== existing.artifactPath) {
-      return store.recordLinkedGoogleDoc({
-        doc,
+    if (artifact.artifactPath && artifact.artifactPath !== existing.artifactPath) {
+      return store.recordLinkedGoogleArtifact({
+        artifact,
         messageId: input.messageId,
         sessionId
       })
@@ -377,10 +492,21 @@ export async function getOrCreateLinkedGoogleDoc(
     return existing
   }
 
-  return store.recordLinkedGoogleDoc({
-    doc,
+  return store.recordLinkedGoogleArtifact({
+    artifact,
     messageId: input.messageId,
     sessionId
+  })
+}
+
+export async function getOrCreateLinkedGoogleDoc(
+  input: RecordLinkedGoogleDocInput
+): Promise<LinkedGoogleDoc> {
+  return getOrCreateLinkedGoogleArtifact({
+    artifact: { ...input.doc, type: input.doc.type ?? 'google.doc.document' },
+    messageId: input.messageId,
+    projectDirectory: input.projectDirectory,
+    sessionId: input.sessionId
   })
 }
 
@@ -402,6 +528,12 @@ export async function deleteGoogleDocDocumentArtifact(
   return createProjectArtifactsStore(input).deleteGoogleDocDocumentArtifact(input.artifactPath)
 }
 
+export async function deleteGoogleSheetSpreadsheetArtifact(
+  input: DeleteGoogleSheetSpreadsheetArtifactInput
+): Promise<DeleteGoogleSheetSpreadsheetArtifactResult> {
+  return createProjectArtifactsStore(input).deleteGoogleSheetSpreadsheetArtifact(input.artifactPath)
+}
+
 export function createDefaultProjectArtifactsConfig(): ProjectArtifactsConfig {
   return {
     version: PROJECT_ARTIFACTS_CONFIG_VERSION,
@@ -418,8 +550,8 @@ export function normalizeProjectArtifactsConfig(value: unknown): ProjectArtifact
     const sessionId = normalizeStoredString(rawSessionId)
     if (!sessionId) continue
 
-    const linkedDocs = normalizeSessionLinkedDocs(rawSessionDocs)
-    if (linkedDocs.length > 0) normalizedSessions[sessionId] = linkedDocs
+    const linkedArtifacts = normalizeSessionLinkedGoogleArtifacts(rawSessionDocs)
+    if (linkedArtifacts.length > 0) normalizedSessions[sessionId] = linkedArtifacts
   }
 
   return {
@@ -619,33 +751,36 @@ function createProjectArtifactsStore(input: ProjectArtifactsListInput): ProjectA
   return new ProjectArtifactsFileStore(input.projectDirectory)
 }
 
-function normalizeSessionLinkedDocs(value: unknown): LinkedGoogleDoc[] {
-  const docsById = new Map<string, LinkedGoogleDoc>()
+function normalizeSessionLinkedGoogleArtifacts(value: unknown): LinkedGoogleArtifact[] {
+  const artifactsByKey = new Map<string, LinkedGoogleArtifact>()
   if (!Array.isArray(value)) return []
 
-  for (const rawDoc of value) {
-    const doc = normalizeStoredLinkedGoogleDoc(rawDoc)
-    if (!doc) continue
+  for (const rawArtifact of value) {
+    const artifact = normalizeStoredLinkedGoogleArtifact(rawArtifact)
+    if (!artifact) continue
 
-    const existing = docsById.get(doc.id)
-    docsById.set(doc.id, existing ? mergeLinkedGoogleDocs(existing, doc) : doc)
+    const key = linkedGoogleArtifactKey(artifact)
+    const existing = artifactsByKey.get(key)
+    artifactsByKey.set(key, existing ? mergeLinkedGoogleArtifacts(existing, artifact) : artifact)
   }
 
-  return [...docsById.values()]
+  return [...artifactsByKey.values()]
 }
 
-function normalizeStoredLinkedGoogleDoc(value: unknown): LinkedGoogleDoc | null {
+function normalizeStoredLinkedGoogleArtifact(value: unknown): LinkedGoogleArtifact | null {
   if (!isRecord(value)) return null
 
   const id = normalizeStoredString(value.id)
   if (!id) return null
+  const type = normalizeStoredGoogleArtifactType(value.type)
 
   const firstSeenAt =
     normalizeStoredTimestamp(value.firstSeenAt) ?? normalizeStoredTimestamp(value.lastSeenAt) ?? 0
   const lastSeenAt = normalizeStoredTimestamp(value.lastSeenAt) ?? firstSeenAt
 
   return {
-    artifactPath: normalizeStoredArtifactPath(value.artifactPath),
+    type,
+    artifactPath: normalizeStoredArtifactPath(value.artifactPath, type),
     id,
     title: normalizeStoredString(value.title),
     url: normalizeStoredUrl(value.url),
@@ -657,43 +792,48 @@ function normalizeStoredLinkedGoogleDoc(value: unknown): LinkedGoogleDoc | null 
   }
 }
 
-function mergeLinkedGoogleDocs(
-  existing: LinkedGoogleDoc,
-  incoming: LinkedGoogleDoc
-): LinkedGoogleDoc {
-  const firstDoc = incoming.firstSeenAt < existing.firstSeenAt ? incoming : existing
-  const lastDoc = incoming.lastSeenAt >= existing.lastSeenAt ? incoming : existing
+function mergeLinkedGoogleArtifacts(
+  existing: LinkedGoogleArtifact,
+  incoming: LinkedGoogleArtifact
+): LinkedGoogleArtifact {
+  const firstArtifact = incoming.firstSeenAt < existing.firstSeenAt ? incoming : existing
+  const lastArtifact = incoming.lastSeenAt >= existing.lastSeenAt ? incoming : existing
 
   return {
-    ...lastDoc,
-    firstSeenAt: firstDoc.firstSeenAt,
-    firstMessageId: firstDoc.firstMessageId ?? existing.firstMessageId ?? incoming.firstMessageId,
-    lastSeenAt: lastDoc.lastSeenAt,
-    lastMessageId: lastDoc.lastMessageId ?? existing.lastMessageId ?? incoming.lastMessageId,
+    ...lastArtifact,
+    artifactPath: lastArtifact.artifactPath ?? firstArtifact.artifactPath,
+    firstSeenAt: firstArtifact.firstSeenAt,
+    firstMessageId:
+      firstArtifact.firstMessageId ?? existing.firstMessageId ?? incoming.firstMessageId,
+    lastSeenAt: lastArtifact.lastSeenAt,
+    lastMessageId: lastArtifact.lastMessageId ?? existing.lastMessageId ?? incoming.lastMessageId,
     listed: existing.listed && incoming.listed
   }
 }
 
-function normalizeLinkedGoogleDocRecordInput(
-  value: LinkedGoogleDocRecord
-): NormalizedLinkedGoogleDocRecord {
-  if (!isRecord(value)) throw new Error('Linked Google Doc record must be an object.')
+function normalizeLinkedGoogleArtifactRecordInput(
+  value: LinkedGoogleArtifactRecord
+): NormalizedLinkedGoogleArtifactRecord {
+  if (!isRecord(value))
+    throw new Error('Linked Google Workspace artifact record must be an object.')
+  const type = normalizeInputGoogleArtifactType(value.type)
 
   return {
-    artifactPath: normalizeInputArtifactPath(value.artifactPath),
-    id: normalizeRequiredString(value.id, 'doc.id'),
+    type,
+    artifactPath: normalizeInputArtifactPath(value.artifactPath, type),
+    id: normalizeRequiredString(value.id, 'artifact.id'),
     title: normalizeOptionalString(value.title),
     url: normalizeInputUrl(value.url)
   }
 }
 
-function toLinkedGoogleDoc(
-  doc: NormalizedLinkedGoogleDocRecord,
+function toLinkedGoogleArtifact(
+  artifact: NormalizedLinkedGoogleArtifactRecord,
   seenAt: number,
   messageId: string | null
-): LinkedGoogleDoc {
+): LinkedGoogleArtifact {
   return {
-    ...doc,
+    ...artifact,
     listed: true,
     firstSeenAt: seenAt,
     lastSeenAt: seenAt,
@@ -726,6 +866,26 @@ function normalizeStoredTimestamp(value: unknown): number | null {
   return Math.max(0, Math.trunc(value))
 }
 
+function normalizeInputGoogleArtifactType(value: unknown): LinkedGoogleArtifactType {
+  if (value === undefined || value === null || value === '') return 'google.doc.document'
+  if (isLinkedGoogleArtifactType(value)) return value
+  throw new Error(
+    'Linked Google Workspace artifact type must be google.doc.document or google.sheet.spreadsheet.'
+  )
+}
+
+function normalizeStoredGoogleArtifactType(value: unknown): LinkedGoogleArtifactType {
+  return isLinkedGoogleArtifactType(value) ? value : 'google.doc.document'
+}
+
+function isLinkedGoogleArtifactType(value: unknown): value is LinkedGoogleArtifactType {
+  return value === 'google.doc.document' || value === 'google.sheet.spreadsheet'
+}
+
+function linkedGoogleArtifactKey(artifact: Pick<LinkedGoogleArtifact, 'id' | 'type'>): string {
+  return `${artifact.type}\0${artifact.id}`
+}
+
 function createPersistedGoogleWorkspaceArtifact<
   TArtifact extends object,
   TSchemaVersion extends number
@@ -753,38 +913,53 @@ function encodeGoogleWorkspaceArtifactFileName<TArtifact extends object>(
   return `encoded-${encodedArtifactId}.json`
 }
 
-function normalizeInputArtifactPath(value: unknown): string | null {
+function normalizeInputArtifactPath(value: unknown, type: LinkedGoogleArtifactType): string | null {
   const normalized = normalizeOptionalString(value)
   if (!normalized) return null
-  if (!isSafeGoogleDocArtifactPath(normalized)) {
-    throw new Error('Linked Google Doc artifact path must be a safe project-local path.')
+  if (!isSafeGoogleArtifactPath(normalized, type)) {
+    throw new Error('Linked Google Workspace artifact path must be a safe project-local path.')
   }
 
   return normalized
 }
 
-function normalizeRequiredGoogleDocArtifactPath(value: unknown): string {
+function normalizeRequiredGoogleWorkspaceArtifactPath<TArtifact extends object>(
+  value: unknown,
+  config: GoogleWorkspaceArtifactFileConfig<TArtifact, number>,
+  productName: string
+): string {
   const normalized = normalizeRequiredString(value, 'artifactPath')
-  if (!isSafeGoogleDocArtifactPath(normalized)) {
-    throw new Error('Google Docs artifact path must be a safe project-local path.')
+  if (!isSafeGoogleWorkspaceArtifactPath(normalized, config)) {
+    throw new Error(`${productName} artifact path must be a safe project-local path.`)
   }
 
   return normalized
 }
 
-function normalizeStoredArtifactPath(value: unknown): string | null {
+function normalizeStoredArtifactPath(
+  value: unknown,
+  type: LinkedGoogleArtifactType
+): string | null {
   const normalized = normalizeStoredString(value)
   if (!normalized) return null
-  return isSafeGoogleDocArtifactPath(normalized) ? normalized : null
+  return isSafeGoogleArtifactPath(normalized, type) ? normalized : null
 }
 
-function isSafeGoogleDocArtifactPath(value: string): boolean {
-  return isSafeGoogleWorkspaceArtifactPath(value, GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG)
+function isSafeGoogleArtifactPath(value: string, type: LinkedGoogleArtifactType): boolean {
+  return isSafeGoogleWorkspaceArtifactPath(value, getGoogleWorkspaceArtifactPathConfig(type))
 }
 
-function isSafeGoogleWorkspaceArtifactPath<TArtifact extends object>(
+function getGoogleWorkspaceArtifactPathConfig(
+  type: LinkedGoogleArtifactType
+): Pick<GoogleWorkspaceArtifactFileConfig<object, number>, 'artifactDirectoryName'> {
+  return type === 'google.sheet.spreadsheet'
+    ? GOOGLE_SHEET_SPREADSHEET_ARTIFACT_FILE_CONFIG
+    : GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG
+}
+
+function isSafeGoogleWorkspaceArtifactPath(
   value: string,
-  config: GoogleWorkspaceArtifactFileConfig<TArtifact, number>
+  config: Pick<GoogleWorkspaceArtifactFileConfig<object, number>, 'artifactDirectoryName'>
 ): boolean {
   if (isAbsolute(value) || value.includes('\\')) return false
 
@@ -816,7 +991,7 @@ function normalizeInputUrl(value: unknown): string | null {
   const normalized = normalizeOptionalString(value)
   if (!normalized) return null
   if (hasSecretLikeUrlPart(normalized)) {
-    throw new Error('Linked Google Doc URL includes a secret-like value.')
+    throw new Error('Linked Google Workspace artifact URL includes a secret-like value.')
   }
 
   return normalized

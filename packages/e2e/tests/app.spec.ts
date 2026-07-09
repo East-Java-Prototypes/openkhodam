@@ -36,6 +36,7 @@ const projectSidebarFooter = (page: Page): Locator =>
 const projectHeartbeatStatus = (page: Page): Locator =>
   projectSidebarFooter(page).locator('[data-slot="sidebar-heartbeat"]')
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
+const fixtureLinkedSheetUrl = 'https://docs.google.com/spreadsheets/d/fixture-linked-sheet/edit'
 const projectChatLink = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Projects' }).getByRole('link')
 const projectNewConversationLink = (page: Page, projectName: string): Locator =>
@@ -306,6 +307,17 @@ async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<v
               lastMessageId: 'message-2'
             },
             {
+              id: 'fixture-linked-sheet',
+              title: 'Fixture linked Google Sheet',
+              type: 'google.sheet.spreadsheet',
+              url: fixtureLinkedSheetUrl,
+              listed: true,
+              firstSeenAt: 1_800_000_005_500,
+              lastSeenAt: 1_800_000_005_500,
+              firstMessageId: 'message-2',
+              lastMessageId: 'message-2'
+            },
+            {
               id: 'fixture-linked-doc-without-url',
               title: 'Fixture linked Google Doc without URL',
               url: null,
@@ -332,6 +344,17 @@ async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<v
               listed: false,
               firstSeenAt: 1_800_000_010_000,
               lastSeenAt: 1_800_000_010_000,
+              firstMessageId: 'message-3',
+              lastMessageId: 'message-3'
+            },
+            {
+              id: 'hidden-unlisted-sheet',
+              title: 'Hidden unlisted Google Sheet',
+              type: 'google.sheet.spreadsheet',
+              url: 'https://docs.google.com/spreadsheets/d/hidden-unlisted-sheet/edit',
+              listed: false,
+              firstSeenAt: 1_800_000_011_000,
+              lastSeenAt: 1_800_000_011_000,
               firstMessageId: 'message-3',
               lastMessageId: 'message-3'
             }
@@ -546,7 +569,12 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   expect(homeBox.x).toBeLessThan(settingsBox.x)
   expect(heartbeatBox.x + heartbeatBox.width).toBeLessThanOrEqual(footerBox.x + footerBox.width + 1)
   await expect(chatActionPane(appWindow)).toBeVisible()
-  await expect(chatActionPane(appWindow).getByText('No linked Google Docs yet.')).toBeVisible()
+  await expect(
+    chatActionPane(appWindow).getByText('No linked Google Workspace artifacts yet.')
+  ).toBeVisible()
+  await expect(
+    chatActionPane(appWindow).getByText(/Google Docs and Sheets linked to this chat/)
+  ).toBeVisible()
   const transcript = messageTranscript(appWindow)
   await expect(transcript).toBeVisible()
   await expect(transcript.getByText('Select a project to view sessions.')).toHaveCount(0)
@@ -848,6 +876,40 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(actionPane.getByText('Last linked', { exact: true })).toHaveCount(0)
     await linkedDocToggle.click()
     await expect(browserPreview).toHaveCount(0)
+    const linkedSheetToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Sheet Fixture linked Google Sheet',
+      exact: true
+    })
+    const linkedSheetPreviewToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Sheet preview Fixture linked Google Sheet',
+      exact: true
+    })
+    const linkedSheetOpenLink = actionPane.getByRole('link', {
+      name: 'Open linked Google Sheet Fixture linked Google Sheet in Google Sheets'
+    })
+    await expect(linkedSheetToggle).toBeVisible()
+    await expect(linkedSheetPreviewToggle).toBeVisible()
+    await expect(linkedSheetOpenLink).toBeVisible()
+    await expect(linkedSheetOpenLink).toHaveAttribute('href', fixtureLinkedSheetUrl)
+    await expect(linkedSheetOpenLink).toHaveAttribute('target', '_blank')
+    await expect(
+      actionPane.getByRole('region', {
+        name: 'Google Sheets browser preview for Fixture linked Google Sheet'
+      })
+    ).toHaveCount(0)
+    await linkedSheetPreviewToggle.click()
+    const sheetBrowserPreview = actionPane.getByRole('region', {
+      name: 'Google Sheets browser preview for Fixture linked Google Sheet'
+    })
+    await expect(sheetBrowserPreview).toBeVisible()
+    await expect(sheetBrowserPreview.locator('webview')).toHaveAttribute(
+      'src',
+      fixtureLinkedSheetUrl
+    )
+    await expect(actionPane.getByText('Sheet ID', { exact: true })).toHaveCount(0)
+    await expect(actionPane.getByText('Google Sheets URL', { exact: true })).toHaveCount(0)
+    await linkedSheetToggle.click()
+    await expect(sheetBrowserPreview).toHaveCount(0)
     const noUrlLinkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc without URL'
     })
@@ -893,6 +955,7 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       actionPane.getByRole('button', { name: 'Select linked Google Doc Fixture linked Google Doc' })
     ).toHaveCount(0)
     await expect(actionPane.getByText('Hidden unlisted Google Doc')).toHaveCount(0)
+    await expect(actionPane.getByText('Hidden unlisted Google Sheet')).toHaveCount(0)
     await expect(actionPane.getByRole('button', { name: 'Select artifact read' })).toHaveCount(0)
     await expect(actionPane.getByRole('button', { name: 'Select artifact plan' })).toHaveCount(0)
     await expect(actionPane.getByRole('button', { name: 'Select artifact bash' })).toHaveCount(0)

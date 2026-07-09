@@ -104,14 +104,26 @@ app.whenReady().then(() => {
   ipcMain.handle('project-artifacts:list-session-docs', (_event, input) =>
     projectArtifacts.listSessionLinkedDocs(input)
   )
+  ipcMain.handle('project-artifacts:list-session-google-artifacts', (_event, input) =>
+    projectArtifacts.listSessionLinkedGoogleArtifacts(input)
+  )
   ipcMain.handle('project-artifacts:record-linked-doc', (_event, input) =>
     projectArtifacts.recordLinkedGoogleDoc(input)
+  )
+  ipcMain.handle('project-artifacts:record-linked-google-artifact', (_event, input) =>
+    projectArtifacts.recordLinkedGoogleArtifact(input)
   )
   ipcMain.handle('project-artifacts:delist-linked-doc', (_event, input) =>
     projectArtifacts.delistLinkedGoogleDoc(input)
   )
+  ipcMain.handle('project-artifacts:delist-linked-google-artifact', (_event, input) =>
+    projectArtifacts.delistLinkedGoogleArtifact(input)
+  )
   ipcMain.handle('project-artifacts:relist-linked-doc', (_event, input) =>
     projectArtifacts.relistLinkedGoogleDoc(input)
+  )
+  ipcMain.handle('project-artifacts:relist-linked-google-artifact', (_event, input) =>
+    projectArtifacts.relistLinkedGoogleArtifact(input)
   )
 
   opencodeSidecar.onStatusChange((status) => {
