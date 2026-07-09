@@ -65,11 +65,13 @@ type GoogleDocsEditToolArgs = {
 type GoogleWorkspaceToolContext = {
   abort?: AbortSignal
   directory?: string
+  messageID?: string
   sessionID?: string
   worktree?: string
 }
 
 type GoogleWorkspaceArtifactSessionContext = {
+  messageId: string | null
   projectDirectory: string
   sessionId: string
 }
@@ -549,6 +551,7 @@ async function recordReadGoogleDocArtifact(
         url: document.link
       },
       projectDirectory: persisted.projectDirectory,
+      messageId: persisted.messageId,
       sessionId: persisted.sessionId
     })
   } catch {
@@ -602,6 +605,7 @@ async function recordReadGoogleSheetArtifact(
         url: spreadsheet.link
       },
       projectDirectory: persisted.projectDirectory,
+      messageId: persisted.messageId,
       sessionId: persisted.sessionId
     })
   } catch {
@@ -651,10 +655,11 @@ function getGoogleWorkspaceArtifactSessionContext(
   context: GoogleWorkspaceToolContext
 ): GoogleWorkspaceArtifactSessionContext | null {
   const projectDirectory = nonEmptyString(context.directory)
+  const messageId = nonEmptyString(context.messageID)
   const sessionId = nonEmptyString(context.sessionID)
   if (!projectDirectory || !sessionId) return null
 
-  return { projectDirectory, sessionId }
+  return { messageId, projectDirectory, sessionId }
 }
 
 async function cleanupCreatedGoogleWorkspaceArtifact({
