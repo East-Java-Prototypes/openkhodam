@@ -1171,6 +1171,7 @@ function ChatPromptComposer({
   const [activeSlashCommandValue, setActiveSlashCommandValue] = useState<string | null>(
     undoSlashCommand.value
   )
+  const [isSlashCommandPopoverDismissed, setSlashCommandPopoverDismissed] = useState(false)
   const isExactUndoCommand = promptText.trim().toLowerCase() === undoSlashCommand.trigger
   const canRunUndoCommand = canUndoPrompt && !isUndoingPrompt
   const slashCommandQuery = getSlashCommandQuery(promptText)
@@ -1178,7 +1179,7 @@ function ChatPromptComposer({
     if (slashCommandQuery === null || !canRunUndoCommand) return []
     return undoSlashCommand.value.startsWith(slashCommandQuery) ? [undoSlashCommand] : []
   }, [canRunUndoCommand, slashCommandQuery])
-  const isSlashCommandPopoverOpen = slashCommandQuery !== null
+  const isSlashCommandPopoverOpen = slashCommandQuery !== null && !isSlashCommandPopoverDismissed
   const canSubmitPrompt = isExactUndoCommand ? canRunUndoCommand : canSendPrompt
   const isComposerBusy = isSending || isUndoingPrompt
 
@@ -1195,6 +1196,10 @@ function ChatPromptComposer({
         : firstCommand.value
     )
   }, [filteredSlashCommands, isSlashCommandPopoverOpen])
+
+  useEffect(() => {
+    setSlashCommandPopoverDismissed(false)
+  }, [promptText])
 
   const executeUndoCommand = (): void => {
     if (!canRunUndoCommand) return
@@ -1214,6 +1219,12 @@ function ChatPromptComposer({
     if (event.nativeEvent.isComposing) return
 
     if (isSlashCommandPopoverOpen) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setSlashCommandPopoverDismissed(true)
+        return
+      }
+
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
         setActiveSlashCommandValue(filteredSlashCommands[0]?.value ?? null)
@@ -1248,7 +1259,13 @@ function ChatPromptComposer({
       <label className="sr-only" htmlFor="chat-prompt">
         Message OpenKhodam
       </label>
-      <Popover open={isSlashCommandPopoverOpen}>
+      <Popover
+        modal={false}
+        open={isSlashCommandPopoverOpen}
+        onOpenChange={(open) => {
+          if (!open) setSlashCommandPopoverDismissed(true)
+        }}
+      >
         <InputGroup
           ref={composerAnchorRef}
           className="h-auto min-w-0 bg-card shadow-sm has-disabled:bg-card has-disabled:opacity-100"
@@ -1302,6 +1319,7 @@ function ChatPromptComposer({
         </InputGroup>
         <PopoverContent
           id="chat-slash-command-popover"
+          initialFocus={false}
           role="dialog"
           aria-label="Slash commands"
           anchor={composerAnchorRef}
