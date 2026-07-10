@@ -10,10 +10,12 @@ type OpenCodeSessionListParams = NonNullable<Parameters<OpenCodeClient['session'
 type OpenCodeSessionListResponse = Awaited<ReturnType<OpenCodeClient['session']['list']>>
 type OpenCodeSessionGetResponse = Awaited<ReturnType<OpenCodeClient['session']['get']>>
 type OpenCodeSessionMessagesResponse = Awaited<ReturnType<OpenCodeClient['session']['messages']>>
+type OpenCodeSessionStatusResponse = Awaited<ReturnType<OpenCodeClient['session']['status']>>
 
 export type OpenCodeSession = NonNullable<OpenCodeSessionListResponse['data']>[number]
 export type OpenCodeSessionDetails = NonNullable<OpenCodeSessionGetResponse['data']>
 export type OpenCodeSessionMessage = NonNullable<OpenCodeSessionMessagesResponse['data']>[number]
+export type OpenCodeSessionStatusMap = NonNullable<OpenCodeSessionStatusResponse['data']>
 
 type PagedQueryOptions = {
   limit?: number
@@ -70,6 +72,48 @@ export function sessionMessagesQueryKey(
     sessionID,
     limit
   ] as const
+}
+
+export function sessionStatusQueryKey(
+  status: { url: string | null; pid: number | null; updatedAt: number },
+  directory: string | null | undefined
+) {
+  return [
+    ...openCodeQueryKeys.all,
+    'session-status',
+    status.url,
+    status.pid,
+    status.updatedAt,
+    directory
+  ] as const
+}
+
+export function useSessionStatuses(directory: string | null | undefined) {
+  const { status, client } = useOpenCodeSdk()
+
+  return useQuery({
+    queryKey: sessionStatusQueryKey(status, directory),
+    queryFn: async (): Promise<OpenCodeSessionStatusMap> => {
+      const response = await client!.session.status({ directory: directory! })
+      if (response.error) {
+        logOpenCodeError('Session status failed', response.error, { directory })
+        throw response.error
+      }
+      return response.data ?? {}
+    },
+    enabled: client !== null && Boolean(directory),
+    refetchInterval: (query) => (hasActiveSessionStatus(query.state.data) ? 500 : false)
+  })
+}
+
+export function hasActiveSessionStatus(statuses: OpenCodeSessionStatusMap | undefined): boolean {
+  return Object.values(statuses ?? {}).some((status) => isActiveSessionStatus(status))
+}
+
+export function isActiveSessionStatus(status: unknown): boolean {
+  if (!isRecord(status)) return false
+  const type = status.type
+  return type === 'busy' || type === 'retry'
 }
 
 export function useProjectSessions(

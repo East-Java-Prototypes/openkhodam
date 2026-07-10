@@ -4,6 +4,7 @@ import { Identifier } from './opencode/id'
 import {
   openCodeSessionQueryKey,
   projectSessionsQueryKey,
+  sessionStatusQueryKey,
   sessionMessagesQueryKey
 } from './useOpenCodeSessions'
 import type { OpenCodeModelSelection } from './useOpenCodeModels'
@@ -59,6 +60,7 @@ export function useSendOpenCodePrompt(
     onSuccess: async ({ sessionID }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) }),
+        queryClient.invalidateQueries({ queryKey: sessionStatusQueryKey(status, directory) }),
         queryClient.invalidateQueries({
           queryKey: openCodeSessionQueryKey(status, directory, sessionID)
         }),
@@ -110,7 +112,10 @@ export function useStartOpenCodeConversation(directory: string | null | undefine
       }
     },
     onSettled: async (_data, _error, _variables, _context) => {
-      await queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) }),
+        queryClient.invalidateQueries({ queryKey: sessionStatusQueryKey(status, directory) })
+      ])
     },
     onSuccess: async ({ sessionID }) => {
       await Promise.all([
