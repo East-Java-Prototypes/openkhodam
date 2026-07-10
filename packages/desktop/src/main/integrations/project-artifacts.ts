@@ -195,6 +195,9 @@ export class ProjectArtifactsFileStore {
   async recordLinkedGoogleArtifact(
     input: ProjectArtifactsStoreRecordInput
   ): Promise<LinkedGoogleArtifact> {
+    // TODO: File replacement is atomic, but this read-modify-write is not serialized across
+    // stores for the same canonical artifacts.json path. Concurrent mutations can lose an
+    // update; serialize mutations per path and cover parallel calls before relying on it.
     const sessionId = normalizeRequiredString(input.sessionId, 'sessionId')
     const messageId = normalizeOptionalString(input.messageId)
     const artifact = normalizeLinkedGoogleArtifactRecordInput(input.artifact)
