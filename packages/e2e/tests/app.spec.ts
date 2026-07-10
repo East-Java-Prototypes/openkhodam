@@ -1777,10 +1777,13 @@ test('shows and filters only the undo slash command in the active session compos
   await openSeededDeterministicChat(appWindow)
 
   const promptInput = appWindow.getByLabel('Message OpenKhodam')
-  await promptInput.fill('/')
+  await promptInput.pressSequentially('/')
   const popover = await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
 
-  await promptInput.fill('/un')
+  await expect(promptInput).toBeFocused()
+  await promptInput.pressSequentially('un')
+  await expect(promptInput).toBeFocused()
+  await expect(promptInput).toHaveValue('/un')
   await expect(popover).toBeVisible()
   await expect(popover.getByText('/undo', { exact: true })).toBeVisible()
 
@@ -1788,6 +1791,22 @@ test('shows and filters only the undo slash command in the active session compos
   await expect(popover).toBeVisible()
   await expect(popover.getByText('/undo', { exact: true })).toHaveCount(0)
   await expect(popover.getByText('No slash commands available.', { exact: true })).toBeVisible()
+})
+
+test('dismisses the undo slash command popover with Escape without executing undo', async ({
+  appWindow
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  await promptInput.pressSequentially('/un')
+  await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
+
+  await promptInput.press('Escape')
+  await expect(appWindow.getByRole('dialog', { name: 'Slash commands' })).toHaveCount(0)
+  await expect(promptInput).toBeFocused()
+  await expect(promptInput).toHaveValue('/un')
+  await expect(messageTranscript(appWindow).getByRole('article')).toHaveCount(2)
 })
 
 test('executes undo by clicking the slash command and restores the prompt text', async ({
