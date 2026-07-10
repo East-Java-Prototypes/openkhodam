@@ -18,7 +18,11 @@ const directory = process.cwd()
 const now = Date.now()
 const sessions = new Map<string, FakeSession>()
 const messages = new Map<string, unknown[]>()
-const pendingPrompts = new Map<string, { id: string; text: string; fetches: number }[]>()
+const pendingPrompts = new Map<
+  string,
+  { id: string; text: string; fetches: number; projected: boolean; statusFetches: number }[]
+>()
+const sessionStatuses = new Map<string, { type: 'busy' | 'retry' }>()
 const promptRequests: FakePromptRequest[] = []
 let promptIdSequence = 0
 let newSessionSequence = 1
@@ -139,6 +143,18 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     if (request.method === 'GET' && url.pathname === '/session') {
       return json(response, [...sessions.values()])
     }
+    if (request.method === 'GET' && url.pathname === '/session/status') {
+      for (const pending of pendingPrompts.values()) {
+        for (const prompt of pending) prompt.statusFetches += 1
+      }
+      for (const [sessionID, pending] of pendingPrompts) {
+        if (pending.every((prompt) => prompt.projected && prompt.statusFetches >= 2)) {
+          pendingPrompts.delete(sessionID)
+          sessionStatuses.delete(sessionID)
+        }
+      }
+      return json(response, Object.fromEntries(sessionStatuses))
+    }
     if (request.method === 'POST' && url.pathname === '/session') {
       const id = `new-session-${++newSessionSequence}`
       const session = createSession(id, 'New deterministic chat', body?.directory ?? directory)
@@ -188,8 +204,9 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       })
       pendingPrompts.set(sessionID, [
         ...(pendingPrompts.get(sessionID) ?? []),
-        { id, text, fetches: 0 }
+        { id, text, fetches: 0, projected: false, statusFetches: 0 }
       ])
+      sessionStatuses.set(sessionID, { type: 'busy' })
       return json(response, {})
     }
     const messagesMatch = url.pathname.match(/^\/session\/([^/]+)\/message$/)
@@ -228,6 +245,7 @@ function resetState(): void {
   sessions.clear()
   messages.clear()
   pendingPrompts.clear()
+  sessionStatuses.clear()
   promptRequests.length = 0
   promptIdSequence = 0
   newSessionSequence = 1
@@ -266,7 +284,7 @@ function projectPendingMessages(sessionID: string): void {
   const pending = pendingPrompts.get(sessionID) ?? []
   if (pending.length === 0) return
   for (const prompt of pending) prompt.fetches += 1
-  const ready = pending.filter((prompt) => prompt.fetches >= 5)
+  const ready = pending.filter((prompt) => prompt.fetches >= 5 && !prompt.projected)
   if (ready.length === 0) return
 
   const existing = messages.get(sessionID) ?? []
@@ -281,10 +299,8 @@ function projectPendingMessages(sessionID: string): void {
     )
   }
   messages.set(sessionID, existing)
-  const readyIds = new Set(ready.map((prompt) => prompt.id))
-  const remaining = pending.filter((prompt) => !readyIds.has(prompt.id))
-  if (remaining.length) pendingPrompts.set(sessionID, remaining)
-  else pendingPrompts.delete(sessionID)
+  for (const prompt of ready) prompt.projected = true
+  pendingPrompts.set(sessionID, pending)
 }
 
 function stableMessageID(): string {

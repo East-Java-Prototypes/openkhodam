@@ -25,6 +25,8 @@ import {
   isRenderableSession,
   useOpenCodeSession,
   useProjectSessions,
+  useSessionStatuses,
+  isActiveSessionStatus,
   useSessionMessages
 } from './useOpenCodeSessions'
 import {
@@ -288,6 +290,7 @@ export function useOpenCodeSessionRoute(
   const [awaitingPrompts, setAwaitingPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
   const queryClient = useQueryClient()
   const { sessionQuery } = useOpenCodeSession(directory, sessionID)
+  const sessionStatusesQuery = useSessionStatuses(directory)
   const activeSessionFromList = sessions.find((session) => session.id === sessionID) ?? null
   const fetchedSession = sessionQuery.data
   const fetchedSessionIsRenderable = fetchedSession ? isRenderableSession(fetchedSession) : false
@@ -328,13 +331,26 @@ export function useOpenCodeSessionRoute(
       activeSession ? appendOptimisticPrompts(mappedMessages, optimisticPrompts, sessionID) : [],
     [activeSession, mappedMessages, optimisticPrompts, sessionID]
   )
-  const isAwaitingAssistantResponse = useMemo(
-    () =>
+  const isAwaitingAssistantResponse = useMemo(() => {
+    const sessionStatus = sessionID ? sessionStatusesQuery.data?.[sessionID] : undefined
+    if (sessionStatusesQuery.isSuccess && !sessionStatusesQuery.isFetching) {
+      return isActiveSessionStatus(sessionStatus)
+    }
+
+    return (
+      isActiveSessionStatus(sessionStatus) ||
       awaitingPrompts.some((prompt) =>
         isPromptAwaitingAssistantResponse(visibleMessages, prompt, sessionID)
-      ),
-    [awaitingPrompts, sessionID, visibleMessages]
-  )
+      )
+    )
+  }, [
+    awaitingPrompts,
+    sessionID,
+    sessionStatusesQuery.data,
+    sessionStatusesQuery.isFetching,
+    sessionStatusesQuery.isSuccess,
+    visibleMessages
+  ])
 
   useEffect(() => {
     if (!admittedPrompt || admittedPrompt.sessionID !== sessionID) return

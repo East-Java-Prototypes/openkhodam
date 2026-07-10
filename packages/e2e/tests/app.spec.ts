@@ -1713,7 +1713,8 @@ test('shows optimistic prompt before delayed stable message projection', async (
     messageTranscript(appWindow).getByText('Prompt sent. Messages will refresh shortly.')
   ).toHaveCount(0)
   await expect(appWindow.getByText('Fake response for: Delayed lifecycle prompt')).toBeVisible()
-  await expect(thinkingRow).toHaveCount(0)
+  await expect(thinkingRow).toBeVisible()
+  await expect(thinkingRow).toHaveCount(0, { timeout: 8_000 })
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
   ).toHaveCount(0)

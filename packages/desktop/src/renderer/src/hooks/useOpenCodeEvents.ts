@@ -8,6 +8,7 @@ import { openCodeQueryKeys } from './opencode/sidecar'
 import {
   openCodeSessionQueryKey,
   projectSessionsQueryKey,
+  sessionStatusQueryKey,
   sessionMessagesQueryKey
 } from './useOpenCodeSessions'
 
@@ -118,6 +119,9 @@ function invalidateForEvent(
     }
 
     void queryClient.invalidateQueries({ queryKey: projectSessionsQueryKey(status, directory) })
+    if (type === 'session.status' || type === 'session.idle') {
+      void queryClient.invalidateQueries({ queryKey: sessionStatusQueryKey(status, directory) })
+    }
     if (sessionID) {
       void queryClient.invalidateQueries({
         queryKey: openCodeSessionQueryKey(status, directory, sessionID)
