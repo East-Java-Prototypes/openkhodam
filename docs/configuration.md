@@ -10,6 +10,12 @@ OpenKhodam owns a small number of JSON files in the Electron main process. Keep 
 
 All JSON config files are written through `packages/desktop/src/main/config/json-config-file.ts`, which centralizes default-on-missing reads, normalization, JSON formatting, atomic writes, temporary-file cleanup, and file mode handling.
 
+## Concurrency limitation
+
+`ProjectArtifactsFileStore` replaces `.openkhodam/artifacts.json` atomically, so an interrupted write does not leave a partial file. It does not currently serialize read-modify-write mutations across store instances for the same canonical artifact-file path. For example, parallel Google Docs or Sheets tool calls can both read the same snapshot, then the later write can discard the other call's logical update.
+
+Future work must serialize mutations per artifact-file path and add parallel mutation coverage. Until then, treat this as a possible lost-update condition, not file corruption.
+
 ## Secrets and non-secrets
 
 - Treat OAuth tokens, refresh tokens, and credentials as secrets. Keep them in local app-owned storage with restrictive file permissions, and never place them in project/workspace files or checked-in docs/fixtures.
