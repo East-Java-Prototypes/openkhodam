@@ -2208,7 +2208,25 @@ test('writes Google Sheets edits directly and persists refreshed spreadsheet art
     expect(typeof fullArtifact.cachedAt).toBe('number')
     expect(String(fullArtifactPath)).toContain('.openkhodam/artifacts/google-sheets')
     expect(String(fullArtifactPath)).not.toContain(spreadsheetId)
-    await expect(stat(join(projectPath, '.openkhodam', 'artifacts.json'))).rejects.toThrow()
+    const artifacts = JSON.parse(
+      await readFile(join(projectPath, '.openkhodam', 'artifacts.json'), 'utf8')
+    ) as {
+      sessions: Record<string, Array<Record<string, unknown>>>
+    }
+    expect(artifacts.sessions['session-sheets-edit']).toHaveLength(1)
+    expect(artifacts.sessions['session-sheets-edit']?.[0]).toMatchObject({
+      artifactPath: expectedGoogleSheetArtifactPath(spreadsheetId),
+      id: spreadsheetId,
+      listed: true,
+      title: 'Editable Sheet',
+      type: 'google.sheet.spreadsheet',
+      url: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`
+    })
+    expect(String(artifacts.sessions['session-sheets-edit']?.[0]?.artifactPath)).not.toContain(
+      spreadsheetId
+    )
+    expect(JSON.stringify(artifacts)).not.toContain('Amount')
+    expect(JSON.stringify(artifacts)).not.toContain('Launch')
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
