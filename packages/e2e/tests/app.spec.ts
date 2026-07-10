@@ -3,6 +3,10 @@ import { basename, dirname, join } from 'node:path'
 
 import type { ElectronApplication } from '@playwright/test'
 import { expect, test, type Locator, type Page } from '../fixtures/electron'
+import {
+  getProjectDirectoryPickerCallCount,
+  installProjectDirectoryPickerMock
+} from '../fixtures/project-directory-picker'
 
 const repositoryDirectory = dirname(process.cwd())
 const desktopOutDirectory = join(repositoryDirectory, 'desktop', 'out')
@@ -513,33 +517,6 @@ async function waitForMainProcessValue(
   }
 
   throw new Error('Timed out waiting for the Electron main process capture.')
-}
-
-async function installProjectDirectoryPickerMock(
-  electronApp: ElectronApplication,
-  selectedDirectory: string | null
-): Promise<void> {
-  await electronApp.evaluate(({ dialog }, directory) => {
-    const globalObject = globalThis as any
-    globalObject.__projectDirectoryPickerCalls = []
-
-    dialog.showOpenDialog = async (...args: unknown[]) => {
-      const options = args.length > 1 ? args[1] : args[0]
-      globalObject.__projectDirectoryPickerCalls.push(options)
-
-      if (directory === null) return { canceled: true, filePaths: [] }
-      return { canceled: false, filePaths: [directory] }
-    }
-  }, selectedDirectory)
-}
-
-async function getProjectDirectoryPickerCallCount(
-  electronApp: ElectronApplication
-): Promise<number> {
-  return electronApp.evaluate(() => {
-    const calls = (globalThis as any).__projectDirectoryPickerCalls as unknown[] | undefined
-    return calls?.length ?? 0
-  })
 }
 
 async function waitForScrollTopToSettle(locator: Locator): Promise<void> {

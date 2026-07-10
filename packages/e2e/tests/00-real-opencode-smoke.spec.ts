@@ -1,15 +1,22 @@
 import { expect, test, type Page } from '../fixtures/real-opencode'
+import {
+  getProjectDirectoryPickerCallCount,
+  installProjectDirectoryPickerMock
+} from '../fixtures/project-directory-picker'
 
-const prompt = 'Say smoke test ready'
+const firstPrompt = 'Say smoke test ready'
+const secondPrompt = 'Say smoke test still ready'
 
 test.setTimeout(120_000)
 
 test('sends a prompt through the real OpenCode sidecar to a local fake provider', async ({
   appWindow,
+  electronApp,
   realOpenCode
 }) => {
   await waitForConnectedSidecar(appWindow)
-  await openWorkspaceProject(appWindow, realOpenCode.workspaceDir)
+  await installProjectDirectoryPickerMock(electronApp, realOpenCode.workspaceDir)
+  await openWorkspaceProject(appWindow, electronApp, realOpenCode.workspaceDir)
   await waitForOpenCodeProjectModelReadiness(appWindow, {
     workspaceDir: realOpenCode.workspaceDir,
     providerID: realOpenCode.providerID,
@@ -26,24 +33,38 @@ test('sends a prompt through the real OpenCode sidecar to a local fake provider'
     modelLabel: realOpenCode.modelLabel
   })
 
-  await composer.getByLabel('Message OpenKhodam').fill(prompt)
-  await expect(composer.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
-  await composer.getByRole('button', { name: 'Send', exact: true }).click()
+  await sendPrompt(composer, firstPrompt)
 
   const messages = appWindow.getByRole('region', { name: 'Messages' })
-  await expect(messages.getByText(prompt, { exact: true })).toBeVisible()
+  await expect(messages.getByText(firstPrompt, { exact: true })).toBeVisible()
   await expect(messages.getByText(realOpenCode.assistantResponse, { exact: true })).toBeVisible({
     timeout: 45_000
   })
-  await expect
-    .poll(
-      () =>
-        realOpenCode.fakeProvider
-          .getChatCompletionRequests()
-          .some((request) => request.stream && request.promptText.includes(prompt)),
-      { message: 'the real sidecar should call the local fake provider with the UI prompt' }
-    )
-    .toBe(true)
+  const sessionRoute = await waitForSessionRoute(appWindow)
+  await expectFakeProviderPrompt(realOpenCode, firstPrompt)
+
+  await appWindow.reload({ waitUntil: 'domcontentloaded' })
+  await waitForConnectedSidecar(appWindow)
+  await expect(appWindow).toHaveURL(sessionRoute)
+  await expect(messages.getByText(firstPrompt, { exact: true })).toBeVisible({ timeout: 45_000 })
+  await expect(messages.getByText(realOpenCode.assistantResponse, { exact: true })).toBeVisible({
+    timeout: 45_000
+  })
+  await expectReadyModelPicker(appWindow, {
+    workspaceDir: realOpenCode.workspaceDir,
+    providerID: realOpenCode.providerID,
+    modelID: realOpenCode.modelID,
+    modelLabel: realOpenCode.modelLabel
+  })
+
+  await sendPrompt(composer, secondPrompt)
+  await expect(appWindow).toHaveURL(sessionRoute)
+  await expect(messages.getByText(secondPrompt, { exact: true })).toBeVisible()
+  await expect(messages.getByText(realOpenCode.assistantResponse, { exact: true })).toHaveCount(2, {
+    timeout: 45_000
+  })
+  await expectFakeProviderPrompt(realOpenCode, firstPrompt)
+  await expectFakeProviderPrompt(realOpenCode, secondPrompt)
 })
 
 type ModelReadinessContext = {
@@ -80,32 +101,35 @@ async function waitForConnectedSidecar(page: Page): Promise<void> {
     .toBe('connected')
 }
 
-async function openWorkspaceProject(page: Page, workspaceDir: string): Promise<string> {
-  const project = await openWorkspaceThroughOpenCode(page, workspaceDir)
-  const projectID = typeof project.id === 'string' ? project.id : ''
-  expect(projectID, 'OpenCode should return a concrete temp workspace project id').not.toBe('')
-  expect(projectID, 'temp workspace should not resolve to the global project').not.toBe('global')
-  await page.evaluate(
-    (directory) => window.api.recordOpenedProjectFolder({ directory }),
-    workspaceDir
-  )
-  const projectRouteID = getProjectDirectoryRouteID(workspaceDir)
+async function openWorkspaceProject(
+  page: Page,
+  electronApp: Parameters<typeof getProjectDirectoryPickerCallCount>[0],
+  workspaceDir: string
+): Promise<string> {
+  const openProjectButton = page
+    .getByRole('complementary', { name: 'Projects' })
+    .getByRole('button', { name: 'Open project folder', exact: true })
+  await expect(openProjectButton).toBeEnabled()
+  await openProjectButton.click()
+  await expect.poll(() => getProjectDirectoryPickerCallCount(electronApp)).toBe(1)
 
-  await page.reload({ waitUntil: 'domcontentloaded' })
-  await waitForConnectedSidecar(page)
-  await page.evaluate((id) => {
-    window.location.hash = `#/projects/${encodeURIComponent(id)}`
-  }, projectRouteID)
-
-  await waitForNonGlobalProjectRoute(page)
+  const projectRouteID = await waitForNonGlobalProjectRoute(page)
   await expect(page.getByText('Project not found.').first()).toHaveCount(0)
-  return projectID
+  expect(projectRouteID, 'temp workspace should use a directory-derived project route').toMatch(
+    /^dir-/
+  )
+  await expect
+    .poll(() => page.evaluate(() => window.api.listOpenedProjectFolders()))
+    .toContainEqual(
+      expect.objectContaining({ directory: workspaceDir, lastOpenedAt: expect.any(Number) })
+    )
+  return projectRouteID
 }
 
 async function waitForNonGlobalProjectRoute(page: Page): Promise<string> {
   await expect
     .poll(() => page.evaluate(() => window.location.hash), {
-      message: 'opening the temp workspace through OpenCode should route to its project',
+      message: 'opening the temp workspace through the folder picker should route to its project',
       timeout: 45_000
     })
     .toMatch(/\/projects\/(?!global(?:$|[/?#]))/)
@@ -115,26 +139,41 @@ async function waitForNonGlobalProjectRoute(page: Page): Promise<string> {
   return projectID!
 }
 
-async function openWorkspaceThroughOpenCode(
-  page: Page,
-  workspaceDir: string
-): Promise<{ id?: unknown; worktree?: unknown }> {
-  return page.evaluate(async (directory) => {
-    const connection = await window.api.getOpenCodeConnection()
-    const authorization = btoa(`${connection.username}:${connection.password}`)
-    const response = await fetch(
-      `${connection.url}/project/current?directory=${encodeURIComponent(directory)}`,
-      { headers: { authorization: `Basic ${authorization}` } }
-    )
+async function sendPrompt(composer: ReturnType<Page['getByRole']>, prompt: string): Promise<void> {
+  await composer.getByLabel('Message OpenKhodam').fill(prompt)
+  await expect(composer.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+  await composer.getByRole('button', { name: 'Send', exact: true }).click()
+}
 
-    if (!response.ok) {
-      throw new Error(
-        `OpenCode project/current failed: ${response.status} ${await response.text()}`
-      )
+async function waitForSessionRoute(page: Page): Promise<string> {
+  await expect
+    .poll(() => page.url(), {
+      message: 'starting a conversation should route to its created session',
+      timeout: 45_000
+    })
+    .toMatch(/#\/projects\/[^/]+\/sessions\/[^/]+$/)
+  return page.url()
+}
+
+async function expectFakeProviderPrompt(
+  realOpenCode: {
+    fakeProvider: {
+      getChatCompletionRequests: () => Array<{ promptText: string; stream: boolean }>
     }
-
-    return (await response.json()) as { id?: unknown; worktree?: unknown }
-  }, workspaceDir)
+  },
+  prompt: string
+): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        realOpenCode.fakeProvider
+          .getChatCompletionRequests()
+          .some((request) => request.stream && request.promptText.includes(prompt)),
+      {
+        message: `the real sidecar should call the local fake provider with ${JSON.stringify(prompt)}`
+      }
+    )
+    .toBe(true)
 }
 
 async function waitForOpenCodeProjectModelReadiness(
@@ -289,10 +328,6 @@ function getProjectIDFromHash(hash: string): string | null {
   const match = /#\/projects\/([^/?#]+)/.exec(hash)
   if (!match) return null
   return decodeURIComponent(match[1] ?? '')
-}
-
-function getProjectDirectoryRouteID(directory: string): string {
-  return `dir-${Buffer.from(directory).toString('base64url')}`
 }
 
 function formatSidecarReadiness(readiness: SidecarReadiness): string {
