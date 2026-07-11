@@ -1,52 +1,66 @@
-import { useMemo, useState, type JSX } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { useOpenCodeProviders, type OpenCodeProviderOption } from '@/hooks/useOpenCodeProviders'
 import { ProviderConnectDialog } from './ProviderConnectDialog'
 
-const popularProviderIDs = new Set([
-  'opencode',
-  'opencode-go',
-  'anthropic',
-  'github-copilot',
-  'openai',
-  'google',
-  'openrouter',
-  'vercel'
-])
-
-export function ProvidersSection({ directory }: { directory?: string | null }): JSX.Element {
+export function ProvidersSection({
+  directory,
+  focusOnMount = false
+}: {
+  directory?: string | null
+  focusOnMount?: boolean
+}): JSX.Element {
   const providers = useOpenCodeProviders(directory)
   const [connectProviderID, setConnectProviderID] = useState<string | null>(null)
-  const [isConnectDialogOpen, setConnectDialogOpen] = useState(false)
-  const [isAllProvidersOpen, setAllProvidersOpen] = useState(false)
   const [providerSearch, setProviderSearch] = useState('')
+  const sectionRef = useRef<HTMLElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const hasFocusedRef = useRef(false)
 
-  const connectedProviders = providers.connectedProviders
-  const popularProviders = providers.disconnectedProviders.filter((provider) =>
-    popularProviderIDs.has(provider.id)
-  )
-  const allProviders = useMemo(() => {
+  useLayoutEffect(() => {
+    if (!focusOnMount || providers.isLoading || hasFocusedRef.current) return
+    const section = sectionRef.current
+    const searchInput = searchInputRef.current
+    if (!section || !searchInput) return
+    hasFocusedRef.current = true
+    section.scrollIntoView({ block: 'nearest' })
+    searchInput.focus()
+  }, [focusOnMount, providers.isLoading])
+
+  const filteredProviders = useMemo(() => {
     const normalizedQuery = providerSearch.trim().toLocaleLowerCase()
-    return providers.disconnectedProviders.filter((provider) => {
-      if (!normalizedQuery) return true
-      return `${provider.name} ${provider.id}`.toLocaleLowerCase().includes(normalizedQuery)
-    })
-  }, [providerSearch, providers.disconnectedProviders])
+    return [...providers.providers]
+      .filter((provider) => {
+        if (!normalizedQuery) return true
+        return `${provider.name} ${provider.id}`.toLocaleLowerCase().includes(normalizedQuery)
+      })
+      .sort(
+        (left, right) =>
+          Number(right.connected) - Number(left.connected) ||
+          left.name.localeCompare(right.name) ||
+          left.id.localeCompare(right.id)
+      )
+  }, [providerSearch, providers.providers])
   const disconnectingProviderID = providers.disconnectProviderMutation.isPending
     ? (providers.disconnectProviderMutation.variables ?? null)
     : null
 
-  function openConnectDialog(providerID?: string): void {
-    setConnectProviderID(providerID ?? null)
-    setConnectDialogOpen(true)
+  function openConnectDialog(providerID: string): void {
+    setConnectProviderID(providerID)
+  }
+
+  function handleConnectDialogOpenChange(open: boolean): void {
+    if (!open) setConnectProviderID(null)
   }
 
   return (
     <section
+      ref={sectionRef}
       className="border bg-card p-4 text-card-foreground shadow-sm"
       aria-labelledby="opencode-providers-heading"
     >
@@ -66,7 +80,7 @@ export function ProvidersSection({ directory }: { directory?: string | null }): 
             Scope: {directory ? directory : 'OpenCode default provider scope'}
           </p>
         </div>
-        <Badge variant="secondary">{connectedProviders.length} connected</Badge>
+        <Badge variant="secondary">{providers.connectedProviders.length} connected</Badge>
       </div>
 
       <Separator className="my-4" />
@@ -83,23 +97,26 @@ export function ProvidersSection({ directory }: { directory?: string | null }): 
       ) : null}
 
       {!providers.isLoading ? (
-        <div className="flex flex-col gap-5">
-          <ProviderGroup
-            title="Connected providers"
-            emptyMessage="No OpenCode providers are connected."
-            providers={connectedProviders}
-            disconnectingProviderID={disconnectingProviderID}
-            onConnect={openConnectDialog}
-            onDisconnect={(providerID) => providers.disconnectProviderMutation.mutate(providerID)}
-          />
-          <ProviderGroup
-            title="Popular providers"
-            emptyMessage="No popular providers are available in this OpenCode catalog."
-            providers={popularProviders}
-            disconnectingProviderID={disconnectingProviderID}
-            onConnect={openConnectDialog}
-            onDisconnect={(providerID) => providers.disconnectProviderMutation.mutate(providerID)}
-          />
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1.5 text-sm font-medium" htmlFor="provider-search">
+            Search providers
+            <Input
+              id="provider-search"
+              ref={searchInputRef}
+              value={providerSearch}
+              onChange={(event) => setProviderSearch(event.currentTarget.value)}
+              placeholder="Search provider name or ID"
+            />
+          </label>
+          <ScrollArea className="h-72 border border-border" aria-label="All OpenCode providers">
+            <ProviderList
+              providers={filteredProviders}
+              emptyMessage="No providers match this search."
+              disconnectingProviderID={disconnectingProviderID}
+              onConnect={openConnectDialog}
+              onDisconnect={(providerID) => providers.disconnectProviderMutation.mutate(providerID)}
+            />
+          </ScrollArea>
         </div>
       ) : null}
 
@@ -113,79 +130,15 @@ export function ProvidersSection({ directory }: { directory?: string | null }): 
         </p>
       ) : null}
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button type="button" variant="outline" onClick={() => openConnectDialog()}>
-          Connect provider
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          aria-expanded={isAllProvidersOpen}
-          onClick={() => setAllProvidersOpen((current) => !current)}
-        >
-          {isAllProvidersOpen ? 'Hide all providers' : 'View all providers'}
-        </Button>
-      </div>
-
-      {isAllProvidersOpen ? (
-        <div className="mt-4 flex flex-col gap-3" aria-label="All OpenCode providers">
-          <label className="flex flex-col gap-1.5 text-sm font-medium" htmlFor="provider-search">
-            Search providers
-            <Input
-              id="provider-search"
-              value={providerSearch}
-              onChange={(event) => setProviderSearch(event.currentTarget.value)}
-              placeholder="Search provider name or ID"
-            />
-          </label>
-          <ProviderList
-            providers={allProviders}
-            emptyMessage="No providers match this search."
-            disconnectingProviderID={disconnectingProviderID}
-            onConnect={openConnectDialog}
-            onDisconnect={(providerID) => providers.disconnectProviderMutation.mutate(providerID)}
-          />
-        </div>
-      ) : null}
-
-      {isConnectDialogOpen ? (
+      {connectProviderID ? (
         <ProviderConnectDialog
-          open={isConnectDialogOpen}
-          onOpenChange={setConnectDialogOpen}
+          open
+          onOpenChange={handleConnectDialogOpenChange}
           directory={directory}
-          initialProviderID={connectProviderID}
+          providerID={connectProviderID}
         />
       ) : null}
     </section>
-  )
-}
-
-function ProviderGroup({
-  title,
-  emptyMessage,
-  providers,
-  disconnectingProviderID,
-  onConnect,
-  onDisconnect
-}: {
-  title: string
-  emptyMessage: string
-  providers: OpenCodeProviderOption[]
-  disconnectingProviderID: string | null
-  onConnect: (providerID: string) => void
-  onDisconnect: (providerID: string) => void
-}): JSX.Element {
-  return (
-    <div className="flex flex-col gap-2">
-      <h3 className="text-sm font-medium">{title}</h3>
-      <ProviderList
-        providers={providers}
-        emptyMessage={emptyMessage}
-        disconnectingProviderID={disconnectingProviderID}
-        onConnect={onConnect}
-        onDisconnect={onDisconnect}
-      />
-    </div>
   )
 }
 
@@ -211,7 +164,7 @@ function ProviderList({
   }
 
   return (
-    <div className="divide-y divide-border border border-border" role="list">
+    <div className="divide-y divide-border" role="list">
       {providers.map((provider) => (
         <ProviderRow
           key={provider.id}
@@ -256,9 +209,14 @@ function ProviderRow({
         </p>
       </div>
       {provider.connected && provider.canDisconnect ? (
-        <Button type="button" variant="outline" onClick={onDisconnect} disabled={isDisconnecting}>
-          {isDisconnecting ? 'Disconnecting' : 'Disconnect provider'}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" onClick={onConnect}>
+            Connect provider
+          </Button>
+          <Button type="button" variant="outline" onClick={onDisconnect} disabled={isDisconnecting}>
+            {isDisconnecting ? 'Disconnecting' : 'Disconnect provider'}
+          </Button>
+        </div>
       ) : provider.connected ? (
         <span className="text-muted-foreground text-xs">Managed by environment</span>
       ) : (

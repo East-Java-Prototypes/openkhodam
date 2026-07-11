@@ -20,7 +20,7 @@ type RendererHttpHealth = RendererHttpHealthSnapshot & {
   updatedAt: number
 }
 
-function SettingsPage(): JSX.Element {
+function SettingsPage({ focusProviders = false }: { focusProviders?: boolean }): JSX.Element {
   const queryClient = useQueryClient()
   const { status, connectionQuery, connection } = useOpenCodeSdk()
   const themeMode = useSyncExternalStore(subscribeToTheme, getThemeMode, getThemeMode)
@@ -102,7 +102,7 @@ function SettingsPage(): JSX.Element {
             onDisconnect={() => disconnectGoogleWorkspace.mutate()}
           />
 
-          <ProvidersSection />
+          <ProvidersSection focusOnMount={focusProviders} />
 
           <OpenCodeServerView
             status={status}
