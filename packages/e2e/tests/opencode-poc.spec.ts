@@ -70,6 +70,24 @@ type OpenKhodamPocPlugin = {
 
 type GoogleWorkspacePlugin = {
   tool: {
+    google_workspace_execute_command: {
+      description: string
+      execute: (
+        args: { command?: string; input?: unknown },
+        context: {
+          abort?: AbortSignal
+          directory?: string
+          messageID?: string
+          sessionID?: string
+          worktree?: string
+        }
+      ) => Promise<string>
+    }
+    google_workspace_list_commands: {
+      args: { query: Record<string, unknown> }
+      description: string
+      execute: (args: { query: string }, context: { abort?: AbortSignal }) => Promise<string>
+    }
     google_docs_edit: {
       description: string
       execute: (
@@ -3511,6 +3529,175 @@ test('writes every Google Docs edit operation directly without context.ask', asy
         `${directWriteCase.documentId}:documents.get:2`
       ])
     )
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('discovers and executes Google Docs workspace commands with legacy-compatible requests', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-workspace-commands-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const batchBodies = new Map<string, unknown>()
+  const getCounts = new Map<string, number>()
+  const cases = [
+    {
+      command: 'google.docs.append_text',
+      input: { documentId: 'command-append', text: ' Added' },
+      operation: 'append_text'
+    },
+    {
+      command: 'google.docs.insert_before_text',
+      input: { documentId: 'command-before', match: 'Body', text: 'Before ' },
+      operation: 'insert_before_text'
+    },
+    {
+      command: 'google.docs.insert_after_text',
+      input: { documentId: 'command-after', match: 'Body', text: ' After' },
+      operation: 'insert_after_text'
+    },
+    {
+      command: 'google.docs.replace_text',
+      input: { documentId: 'command-replace', match: 'Body', text: 'Changed' },
+      operation: 'replace_text'
+    },
+    {
+      command: 'google.docs.delete_text',
+      input: { documentId: 'command-delete', match: 'anchor' },
+      operation: 'delete_text'
+    }
+  ] as const
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'command-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.includes(':batchUpdate')) {
+      const documentId = decodeURIComponent(
+        new URL(url).pathname.slice('/v1/documents/'.length, -':batchUpdate'.length)
+      )
+      batchBodies.set(documentId, typeof init?.body === 'string' ? JSON.parse(init.body) : null)
+      return new Response(JSON.stringify({ documentId }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const documentId = readFetchedGoogleDocsDocumentId(url)
+    const count = (getCounts.get(documentId) ?? 0) + 1
+    getCounts.set(documentId, count)
+    return new Response(
+      JSON.stringify({
+        body: {
+          content: [
+            {
+              startIndex: 1,
+              endIndex: 13,
+              paragraph: {
+                elements: [{ startIndex: 1, endIndex: 13, textRun: { content: 'Body anchor\n' } }]
+              }
+            }
+          ]
+        },
+        documentId,
+        revisionId: count === 1 ? 'before' : 'after',
+        title: 'Command Target'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const discovery = JSON.parse(
+      await plugin.tool.google_workspace_list_commands.execute({ query: '' }, {})
+    ) as {
+      commands: Array<{
+        id: string
+        inputSchema: { properties?: Record<string, unknown>; required: string[] }
+      }>
+    }
+    expect(discovery.commands).toHaveLength(5)
+    expect(discovery.commands.map((command) => command.id)).toEqual(
+      cases.map((item) => item.command)
+    )
+    expect(discovery.commands.map((command) => command.inputSchema.required)).toEqual([
+      ['documentId', 'text'],
+      ['documentId', 'match', 'text'],
+      ['documentId', 'match', 'text'],
+      ['documentId', 'match', 'text'],
+      ['documentId', 'match']
+    ])
+    expect(
+      discovery.commands.map((command) => Object.keys(command.inputSchema.properties ?? {}))
+    ).toEqual([
+      ['documentId', 'text'],
+      ['documentId', 'match', 'occurrence', 'text'],
+      ['documentId', 'match', 'occurrence', 'text'],
+      ['documentId', 'match', 'occurrence', 'text'],
+      ['documentId', 'match', 'occurrence']
+    ])
+    expect(plugin.tool.google_workspace_list_commands.args.query).toMatchObject({ type: 'string' })
+    expect(
+      JSON.parse(await plugin.tool.google_workspace_list_commands.execute({ query: 'replace' }, {}))
+        .commands
+    ).toHaveLength(1)
+
+    for (const item of cases) {
+      const output = JSON.parse(
+        await plugin.tool.google_workspace_execute_command.execute(item, {})
+      ) as { edit: { operation: string } }
+      expect(output.edit.operation).toBe(item.operation)
+      expect(batchBodies.get(item.input.documentId)).toMatchObject({ requests: expect.any(Array) })
+      expect(getCounts.get(item.input.documentId)).toBe(2)
+    }
+
+    await expect(
+      plugin.tool.google_workspace_execute_command.execute(
+        { command: 'google.docs.unknown', input: {} },
+        {}
+      )
+    ).rejects.toThrow('Unknown Google Workspace command')
+    await expect(
+      plugin.tool.google_workspace_execute_command.execute(
+        { command: 'google.docs.append_text', input: { documentId: 'invalid' } },
+        {}
+      )
+    ).rejects.toThrow('requires a non-empty text')
+    await expect(
+      plugin.tool.google_workspace_execute_command.execute(
+        {
+          command: 'google.docs.delete_text',
+          input: { documentId: 'invalid-delete', match: 'Body', text: 'irrelevant' }
+        },
+        {}
+      )
+    ).rejects.toThrow('does not accept input property text')
+    await expect(
+      plugin.tool.google_workspace_execute_command.execute(
+        {
+          command: 'google.docs.append_text',
+          input: { documentId: 'invalid-append', match: 'Body', text: 'valid' }
+        },
+        {}
+      )
+    ).rejects.toThrow('does not accept input property match')
+    expect(getCounts.has('invalid')).toBe(false)
+    expect(getCounts.has('invalid-delete')).toBe(false)
+    expect(getCounts.has('invalid-append')).toBe(false)
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
