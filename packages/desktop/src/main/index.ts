@@ -6,11 +6,25 @@ import { createOpenCodeSidecar } from './opencode-sidecar'
 import { OpenKhodamConfigStore } from './integrations/openkhodam-config'
 import { createGoogleWorkspaceIntegration } from './integrations/google-workspace'
 import { createProjectArtifactsIntegration } from './integrations/project-artifacts'
+import { isThemeMode, type ThemeMode } from '../theme'
 
 const opencodeSidecar = createOpenCodeSidecar()
 const isE2e = process.env['OPENKHODAM_E2E'] === '1'
 
 app.setName('OpenKhodam')
+
+function applyTitleBarOverlay(window: BrowserWindow): void {
+  window.setTitleBarOverlay({
+    color: '#00000000',
+    symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000',
+    height: 40
+  })
+}
+
+function setNativeTheme(mode: ThemeMode): void {
+  nativeTheme.themeSource = mode
+  BrowserWindow.getAllWindows().forEach(applyTitleBarOverlay)
+}
 
 function createWindow(): void {
   // Create the browser window.
@@ -34,6 +48,8 @@ function createWindow(): void {
       webviewTag: true
     }
   })
+
+  applyTitleBarOverlay(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
@@ -74,6 +90,9 @@ app.whenReady().then(() => {
   ipcMain.handle('opencode:get-status', () => opencodeSidecar.getStatus())
   ipcMain.handle('opencode:get-connection', () => opencodeSidecar.getConnection())
   ipcMain.handle('opencode:restart', () => opencodeSidecar.restart())
+  ipcMain.handle('appearance:set-native-theme', (_event, mode: unknown) => {
+    if (isThemeMode(mode)) setNativeTheme(mode)
+  })
   ipcMain.handle('google-workspace:get-status', () => googleWorkspace.getStatus())
   ipcMain.handle('google-workspace:connect', () => googleWorkspace.connect())
   ipcMain.handle('google-workspace:cancel-connect', () => googleWorkspace.cancelConnect())

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { JSX } from 'react'
+import { useSyncExternalStore, type JSX } from 'react'
 import {
   type GoogleWorkspaceIntegrationStatus,
   OpenCodeServerView,
@@ -13,6 +13,7 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { openCodeQueryKeys, openCodeSidecarState } from '../hooks/opencode/sidecar'
 import { getOpenCodeAuthorizationHeader, useOpenCodeSdk } from '../hooks/opencode/client'
+import { getThemeMode, setThemeMode, subscribeToTheme, type ThemeMode } from '../theme'
 
 type RendererHttpHealth = RendererHttpHealthSnapshot & {
   updatedAt: number
@@ -21,6 +22,7 @@ type RendererHttpHealth = RendererHttpHealthSnapshot & {
 function SettingsPage(): JSX.Element {
   const queryClient = useQueryClient()
   const { status, connectionQuery, connection } = useOpenCodeSdk()
+  const themeMode = useSyncExternalStore(subscribeToTheme, getThemeMode, getThemeMode)
   const googleWorkspaceQuery = useQuery({
     queryKey: ['google-workspace', 'status'],
     queryFn: window.api.getGoogleWorkspaceStatus
@@ -84,6 +86,8 @@ function SettingsPage(): JSX.Element {
       <Separator />
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6 lg:p-8">
+          <AppearanceCard mode={themeMode} onModeChange={setThemeMode} />
+
           <GoogleWorkspaceCard
             status={googleWorkspaceQuery.data}
             isLoading={googleWorkspaceQuery.isLoading}
@@ -108,6 +112,50 @@ function SettingsPage(): JSX.Element {
           />
         </div>
       </ScrollArea>
+    </section>
+  )
+}
+
+function AppearanceCard({
+  mode,
+  onModeChange
+}: {
+  mode: ThemeMode
+  onModeChange: (mode: ThemeMode) => void
+}): JSX.Element {
+  const choices: { mode: ThemeMode; label: string }[] = [
+    { mode: 'system', label: 'System' },
+    { mode: 'light', label: 'Light' },
+    { mode: 'dark', label: 'Dark' }
+  ]
+
+  return (
+    <section
+      className="border bg-card p-4 text-card-foreground shadow-sm"
+      aria-labelledby="appearance-heading"
+    >
+      <div className="space-y-1">
+        <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+          Appearance
+        </p>
+        <h2 id="appearance-heading" className="text-lg font-semibold tracking-tight">
+          Theme
+        </h2>
+        <p className="text-muted-foreground text-sm">Choose how OpenKhodam looks on this device.</p>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2" aria-label="Appearance mode">
+        {choices.map((choice) => (
+          <Button
+            key={choice.mode}
+            type="button"
+            variant={mode === choice.mode ? 'default' : 'outline'}
+            aria-pressed={mode === choice.mode}
+            onClick={() => onModeChange(choice.mode)}
+          >
+            {choice.label}
+          </Button>
+        ))}
+      </div>
     </section>
   )
 }
