@@ -7,6 +7,12 @@ description: Use when making OpenKhodam UI design, visual polish, chat presentat
 
 Use this repo-local skill alongside `openkhodam-scope` whenever a change affects UI appearance, styling, or interaction polish. Its job is to preserve the app's existing visual language before introducing new design ideas.
 
+## Skill Precedence
+
+- Use the generic `shadcn` skill for component APIs, accessibility, composition, and registry or CLI workflows, not as the source of OpenKhodam's visual direction.
+- Use nearby OpenKhodam UI and this skill for geometry, spacing, typography, color, borders, shadows, and interaction styling. When generic examples conflict with established local patterns, the local patterns win.
+- Preserve the repository's Base UI boundary: desktop `components/ui/*` wrappers compose through `@base-ui/react`; Radix examples are not precedent for new or updated wrappers.
+
 ## Design Guardrails
 
 - Start by inspecting nearby UI: compare sibling components, adjacent chat/tool surfaces, existing utility classes, and shared wrappers before adding or changing classes.
