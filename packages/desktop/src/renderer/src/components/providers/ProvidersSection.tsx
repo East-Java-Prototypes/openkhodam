@@ -9,13 +9,11 @@ import { useOpenCodeProviders, type OpenCodeProviderOption } from '@/hooks/useOp
 import { ProviderConnectDialog } from './ProviderConnectDialog'
 
 export function ProvidersSection({
-  directory,
   focusOnMount = false
 }: {
-  directory?: string | null
   focusOnMount?: boolean
 }): JSX.Element {
-  const providers = useOpenCodeProviders(directory)
+  const providers = useOpenCodeProviders()
   const [connectProviderID, setConnectProviderID] = useState<string | null>(null)
   const [providerSearch, setProviderSearch] = useState('')
   const sectionRef = useRef<HTMLElement>(null)
@@ -76,9 +74,6 @@ export function ProvidersSection({
             Connect model providers through OpenCode. Credentials remain in OpenCode, while
             OpenKhodam only reads provider and model availability.
           </p>
-          <p className="text-muted-foreground max-w-2xl text-xs">
-            Scope: {directory ? directory : 'OpenCode default provider scope'}
-          </p>
         </div>
         <Badge variant="secondary">{providers.connectedProviders.length} connected</Badge>
       </div>
@@ -134,7 +129,6 @@ export function ProvidersSection({
         <ProviderConnectDialog
           open
           onOpenChange={handleConnectDialogOpenChange}
-          directory={directory}
           providerID={connectProviderID}
         />
       ) : null}
