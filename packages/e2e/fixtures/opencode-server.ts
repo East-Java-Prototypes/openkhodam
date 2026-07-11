@@ -148,7 +148,7 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
         for (const prompt of pending) prompt.statusFetches += 1
       }
       for (const [sessionID, pending] of pendingPrompts) {
-        if (pending.every((prompt) => prompt.projected && prompt.statusFetches >= 2)) {
+        if (pending.every((prompt) => prompt.projected && prompt.statusFetches >= 4)) {
           pendingPrompts.delete(sessionID)
           sessionStatuses.delete(sessionID)
         }

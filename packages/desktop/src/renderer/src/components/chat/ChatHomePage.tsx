@@ -1037,10 +1037,9 @@ function AssistantThinkingRow(): JSX.Element {
     <div data-slot="assistant-thinking-row" role="status" aria-live="polite" className="min-w-0">
       <Message align="start">
         <MessageContent className="items-start">
-          <MessageHeader className="px-0 capitalize">assistant</MessageHeader>
           <div
-            data-slot="message-surface"
-            className="max-w-2xl min-w-0 text-sm text-muted-foreground"
+            data-slot="assistant-thinking-status"
+            className="shimmer max-w-2xl min-w-0 text-sm text-muted-foreground"
           >
             Thinking…
           </div>
