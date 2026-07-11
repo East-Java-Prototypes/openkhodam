@@ -14,6 +14,8 @@ const isE2e = process.env['OPENKHODAM_E2E'] === '1'
 app.setName('OpenKhodam')
 
 function applyTitleBarOverlay(window: BrowserWindow): void {
+  if (typeof window.setTitleBarOverlay !== 'function') return
+
   window.setTitleBarOverlay({
     color: '#00000000',
     symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000',
