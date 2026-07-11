@@ -17,6 +17,7 @@ import type {
   UpdateLinkedGoogleArtifactListingInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
+import type { ThemeMode } from '../theme'
 
 export type {
   GoogleWorkspaceIntegrationStatus,
@@ -33,6 +34,7 @@ export type OpenKhodamAPI = {
   getOpenCodeConnection: () => Promise<OpenCodeConnection>
   getOpenCodeStatus: () => Promise<OpenCodeSidecarStatus>
   restartOpenCode: () => Promise<OpenCodeSidecarStatus>
+  setNativeTheme: (mode: ThemeMode) => Promise<void>
   getGoogleWorkspaceStatus: () => Promise<GoogleWorkspaceIntegrationStatus>
   connectGoogleWorkspace: () => Promise<GoogleWorkspaceIntegrationStatus>
   cancelGoogleWorkspaceConnect: () => Promise<GoogleWorkspaceIntegrationStatus>

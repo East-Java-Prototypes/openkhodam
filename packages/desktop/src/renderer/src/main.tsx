@@ -7,7 +7,10 @@ import { RouterProvider } from '@tanstack/react-router'
 import { OpenCodeSdkProvider } from './hooks/opencode/client'
 import { queryClient } from './queryClient'
 import { router } from './router'
+import { bootstrapTheme } from './theme'
 import './styles.css'
+
+bootstrapTheme()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -18,6 +18,7 @@ import type {
   UpdateLinkedGoogleArtifactListingInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
+import type { ThemeMode } from '../theme'
 
 type SupportedDesktopPlatform = 'darwin' | 'linux' | 'win32'
 
@@ -35,6 +36,8 @@ const api = {
   getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>
     ipcRenderer.invoke('opencode:get-status'),
   restartOpenCode: (): Promise<OpenCodeSidecarStatus> => ipcRenderer.invoke('opencode:restart'),
+  setNativeTheme: (mode: ThemeMode): Promise<void> =>
+    ipcRenderer.invoke('appearance:set-native-theme', mode),
   getGoogleWorkspaceStatus: (): Promise<GoogleWorkspaceIntegrationStatus> =>
     ipcRenderer.invoke('google-workspace:get-status'),
   connectGoogleWorkspace: (): Promise<GoogleWorkspaceIntegrationStatus> =>
