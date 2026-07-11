@@ -62,6 +62,15 @@ type GoogleDocsEditToolArgs = {
   }
 }
 
+type GoogleWorkspaceListCommandsToolArgs = {
+  query: string
+}
+
+type GoogleWorkspaceExecuteCommandToolArgs = {
+  command?: string
+  input?: unknown
+}
+
 type GoogleWorkspaceToolContext = {
   abort?: AbortSignal
   directory?: string
@@ -177,6 +186,39 @@ type GoogleDocsEditToolDefinition = {
   execute: (args: GoogleDocsEditToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
 }
 
+type GoogleWorkspaceListCommandsToolDefinition = {
+  args: {
+    query: {
+      description: string
+      type: 'string'
+    }
+  }
+  description: string
+  execute: (
+    args: GoogleWorkspaceListCommandsToolArgs,
+    context: GoogleWorkspaceToolContext
+  ) => Promise<string>
+}
+
+type GoogleWorkspaceExecuteCommandToolDefinition = {
+  args: {
+    command: {
+      description: string
+      type: 'string'
+    }
+    input: {
+      additionalProperties: boolean
+      description: string
+      type: 'object'
+    }
+  }
+  description: string
+  execute: (
+    args: GoogleWorkspaceExecuteCommandToolArgs,
+    context: GoogleWorkspaceToolContext
+  ) => Promise<string>
+}
+
 type GoogleWorkspaceHooks = {
   tool: {
     google_docs_edit: GoogleDocsEditToolDefinition
@@ -184,6 +226,8 @@ type GoogleWorkspaceHooks = {
     google_drive_search_files: GoogleDriveSearchFilesToolDefinition
     google_sheets_edit: GoogleSheetsEditToolDefinition
     google_sheets_read: GoogleSheetsReadToolDefinition
+    google_workspace_execute_command: GoogleWorkspaceExecuteCommandToolDefinition
+    google_workspace_list_commands: GoogleWorkspaceListCommandsToolDefinition
   }
 }
 
@@ -391,25 +435,288 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
         }
       },
       async execute(args, context) {
-        const documentId = stringArg(args.documentId)
-        const result = await editGoogleDocDocument({
-          documentId,
-          operation: toGoogleDocsEditOperation(args.operation),
-          signal: context.abort
+        const operation = toGoogleDocsEditOperation(args.operation)
+        const command = commandForGoogleDocsOperation(operation.type)
+        const input = command.parseInput(
+          googleDocsOperationToCommandInput(stringArg(args.documentId), operation),
+          { rejectUndefinedProperties: false }
+        )
+        return executeGoogleDocsEdit({
+          context,
+          documentId: input.documentId,
+          operation: input.operation
         })
-        await recordReadGoogleDocArtifact(context, result.document)
+      }
+    },
+    google_workspace_list_commands: {
+      description:
+        'List available Google Workspace commands and their input schemas. This is read-only and does not access Google.',
+      args: {
+        query: {
+          description:
+            'Text filter matched against command IDs and descriptions. Pass an empty string to list all commands.',
+          type: 'string'
+        }
+      },
+      async execute(args) {
+        const query = stringArg(args.query).trim().toLowerCase()
+        const commands = GOOGLE_WORKSPACE_COMMANDS.filter(
+          (command) =>
+            !query ||
+            command.id.toLowerCase().includes(query) ||
+            command.description.toLowerCase().includes(query)
+        ).map(({ description, id, inputSchema }) => ({ description, id, inputSchema }))
 
-        return JSON.stringify({
-          edit: result.edit,
-          document: createGoogleDocDocumentPreview(result.document)
+        return JSON.stringify({ commands })
+      }
+    },
+    google_workspace_execute_command: {
+      description:
+        'Execute a discovered Google Workspace command. Use google_workspace_list_commands first to obtain command IDs and required input schemas.',
+      args: {
+        command: {
+          description: 'A command ID returned by google_workspace_list_commands.',
+          type: 'string'
+        },
+        input: {
+          additionalProperties: true,
+          description: 'Input object validated against the selected command schema.',
+          type: 'object'
+        }
+      },
+      async execute(args, context) {
+        const command = GOOGLE_WORKSPACE_COMMANDS.find((candidate) => candidate.id === args.command)
+        if (!command) {
+          throw new Error(
+            `Unknown Google Workspace command: ${stringArg(args.command) || '(empty)'}.`
+          )
+        }
+
+        const input = command.parseInput(args.input)
+        return executeGoogleDocsEdit({
+          context,
+          documentId: input.documentId,
+          operation: input.operation
         })
       }
     }
   }
 })
 
+type GoogleWorkspaceCommandInputSchema = {
+  additionalProperties: false
+  properties: Record<string, unknown>
+  required: string[]
+  type: 'object'
+}
+
+type GoogleWorkspaceCommandInputProperties = {
+  allowed: string[]
+  properties: Record<string, unknown>
+}
+
+type GoogleWorkspaceCommand = {
+  description: string
+  id: string
+  inputSchema: GoogleWorkspaceCommandInputSchema
+  operationType: GoogleDocsEditOperation['type']
+  parseInput: (
+    input: unknown,
+    options?: { rejectUndefinedProperties?: boolean }
+  ) => { documentId: string; operation: GoogleDocsEditOperation }
+}
+
+const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
+  createGoogleDocsCommand({
+    description: 'Append literal text to the end of a Google Docs document.',
+    id: 'google.docs.append_text',
+    operationType: 'append_text',
+    required: ['documentId', 'text']
+  }),
+  createGoogleDocsCommand({
+    description: 'Insert literal text before a matching text occurrence in a Google Docs document.',
+    id: 'google.docs.insert_before_text',
+    operationType: 'insert_before_text',
+    required: ['documentId', 'match', 'text']
+  }),
+  createGoogleDocsCommand({
+    description: 'Insert literal text after a matching text occurrence in a Google Docs document.',
+    id: 'google.docs.insert_after_text',
+    operationType: 'insert_after_text',
+    required: ['documentId', 'match', 'text']
+  }),
+  createGoogleDocsCommand({
+    description: 'Replace a matching text occurrence with literal text in a Google Docs document.',
+    id: 'google.docs.replace_text',
+    operationType: 'replace_text',
+    required: ['documentId', 'match', 'text']
+  }),
+  createGoogleDocsCommand({
+    description: 'Delete a matching text occurrence from a Google Docs document.',
+    id: 'google.docs.delete_text',
+    operationType: 'delete_text',
+    required: ['documentId', 'match']
+  })
+]
+
+function createGoogleDocsCommand(input: {
+  description: string
+  id: string
+  operationType: GoogleDocsEditOperation['type']
+  required: string[]
+}): GoogleWorkspaceCommand {
+  const inputSchema: GoogleWorkspaceCommandInputSchema = {
+    additionalProperties: false,
+    properties: googleDocsCommandInputProperties(input.operationType).properties,
+    required: input.required,
+    type: 'object'
+  }
+
+  return {
+    ...input,
+    inputSchema,
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${input.id} input`)
+      rejectAdditionalProperties(
+        record,
+        googleDocsCommandInputProperties(input.operationType).allowed,
+        input.id,
+        options?.rejectUndefinedProperties
+      )
+      const documentId = requiredStringArg(record.documentId, input.id, 'documentId')
+      const text = input.required.includes('text')
+        ? requiredStringArg(record.text, input.id, 'text')
+        : undefined
+      const match = input.required.includes('match')
+        ? requiredStringArg(record.match, input.id, 'match')
+        : undefined
+      const occurrence = occurrenceArg(record.occurrence)
+
+      if (input.operationType === 'append_text') {
+        return { documentId, operation: { text: text!, type: 'append_text' } }
+      }
+      if (input.operationType === 'delete_text') {
+        return { documentId, operation: { match: match!, occurrence, type: 'delete_text' } }
+      }
+      return {
+        documentId,
+        operation: { match: match!, occurrence, text: text!, type: input.operationType }
+      }
+    }
+  }
+}
+
+function googleDocsCommandInputProperties(
+  operationType: GoogleDocsEditOperation['type']
+): GoogleWorkspaceCommandInputProperties {
+  const properties: Record<string, unknown> = {
+    documentId: { description: 'The Google Docs document ID to edit.', type: 'string' }
+  }
+  const allowed = ['documentId']
+  if (
+    operationType === 'insert_after_text' ||
+    operationType === 'insert_before_text' ||
+    operationType === 'replace_text' ||
+    operationType === 'delete_text'
+  ) {
+    allowed.push('match', 'occurrence')
+    properties.match = { description: 'Text to find for match-based edits.', type: 'string' }
+    properties.occurrence = {
+      description: 'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+      type: ['number', 'string']
+    }
+  }
+  if (
+    operationType === 'append_text' ||
+    operationType === 'insert_after_text' ||
+    operationType === 'insert_before_text' ||
+    operationType === 'replace_text'
+  ) {
+    allowed.push('text')
+    properties.text = {
+      description: 'Literal text to append, insert, or use as replacement text.',
+      type: 'string'
+    }
+  }
+  return { allowed, properties }
+}
+
+function commandForGoogleDocsOperation(
+  operationType: GoogleDocsEditOperation['type']
+): GoogleWorkspaceCommand {
+  const command = GOOGLE_WORKSPACE_COMMANDS.find(
+    (candidate) => candidate.operationType === operationType
+  )
+  if (!command) throw new Error(`Unsupported Google Docs edit operation: ${operationType}.`)
+  return command
+}
+
+function googleDocsOperationToCommandInput(
+  documentId: string,
+  operation: GoogleDocsEditOperation
+): Record<string, unknown> {
+  if (operation.type === 'append_text') return { documentId, text: operation.text }
+  if (operation.type === 'delete_text') {
+    return { documentId, match: operation.match, occurrence: operation.occurrence }
+  }
+  return {
+    documentId,
+    match: operation.match,
+    occurrence: operation.occurrence,
+    text: operation.text
+  }
+}
+
+async function executeGoogleDocsEdit(input: {
+  context: GoogleWorkspaceToolContext
+  documentId: string
+  operation: GoogleDocsEditOperation
+}): Promise<string> {
+  const result = await editGoogleDocDocument({
+    documentId: input.documentId,
+    operation: input.operation,
+    signal: input.context.abort
+  })
+  await recordReadGoogleDocArtifact(input.context, result.document)
+
+  return JSON.stringify({
+    edit: result.edit,
+    document: createGoogleDocDocumentPreview(result.document)
+  })
+}
+
 function stringArg(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function objectArg(value: unknown, name: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${name} must be an object.`)
+  }
+  return value as Record<string, unknown>
+}
+
+function requiredStringArg(value: unknown, command: string, field: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Google Workspace command ${command} requires a non-empty ${field}.`)
+  }
+  return value
+}
+
+function rejectAdditionalProperties(
+  input: Record<string, unknown>,
+  allowed: string[],
+  command: string,
+  rejectUndefinedProperties = true
+): void {
+  const additionalProperties = Object.keys(input).filter(
+    (key) => !allowed.includes(key) && (rejectUndefinedProperties || input[key] !== undefined)
+  )
+  if (additionalProperties.length > 0) {
+    throw new Error(
+      `Google Workspace command ${command} does not accept input property ${additionalProperties[0]}.`
+    )
+  }
 }
 
 function rangesArg(value: unknown): string[] | undefined {
