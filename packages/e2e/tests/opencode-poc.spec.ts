@@ -403,6 +403,63 @@ test('normalizes and stores per-directory OpenCode model selections in app confi
   }
 })
 
+test('serializes same-process OpenKhodam config mutations across store instances', async () => {
+  const { OpenKhodamConfigFileStore } = loadDesktopModule<OpenKhodamConfigModule>(
+    '../../desktop/src/main/integrations/openkhodam-config'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-config-concurrency-'))
+  const configPath = join(tempRoot, 'openkhodam-config.json')
+  const projectPaths = await Promise.all(
+    ['one', 'two', 'three'].map(async (name) => {
+      const path = join(tempRoot, name)
+      await mkdir(path, { recursive: true })
+      return path
+    })
+  )
+  const firstStore = new OpenKhodamConfigFileStore(configPath)
+  const secondStore = new OpenKhodamConfigFileStore(join(tempRoot, '.', 'openkhodam-config.json'))
+
+  try {
+    await Promise.all([
+      ...projectPaths.map((projectDirectory, index) =>
+        (index % 2 === 0 ? firstStore : secondStore).setOpenCodeModelSelection({
+          projectDirectory,
+          model: { providerID: `provider-${index}`, modelID: `model-${index}` }
+        })
+      ),
+      firstStore.recordOpenedProjectFolder({ directory: projectPaths[0] }),
+      secondStore.setGoogleWorkspaceConnection(
+        { email: 'concurrent@example.com', name: 'Concurrent User' },
+        ['email'],
+        {
+          accessToken: 'concurrent-access',
+          expiresAt: 123,
+          idToken: null,
+          refreshToken: null,
+          tokenType: 'Bearer'
+        }
+      )
+    ])
+
+    const persisted = await firstStore.read()
+    expect(persisted.preferences.openCode.modelSelectionsByDirectory).toEqual({
+      [projectPaths[0]]: { providerID: 'provider-0', modelID: 'model-0' },
+      [projectPaths[1]]: { providerID: 'provider-1', modelID: 'model-1' },
+      [projectPaths[2]]: { providerID: 'provider-2', modelID: 'model-2' }
+    })
+    expect(persisted.projects.openedFolders).toEqual([
+      expect.objectContaining({ directory: projectPaths[0] })
+    ])
+    expect(persisted.integrations.googleWorkspace.account).toEqual({
+      email: 'concurrent@example.com',
+      name: 'Concurrent User'
+    })
+    expect((await stat(configPath)).mode & 0o777).toBe(0o600)
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
 test('stores project session linked Google Docs with stable path and dedupe timestamps', async () => {
   const { PROJECT_ARTIFACTS_CONFIG_VERSION, ProjectArtifactsFileStore } =
     loadDesktopModule<ProjectArtifactsModule>(

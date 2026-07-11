@@ -853,6 +853,8 @@ export function ActiveChatPanel({
                 isLoadingModels={session.isLoadingModels}
                 isLoadingAgents={session.isLoadingAgents}
                 projectDirectory={project?.selectedDirectory ?? null}
+                modelHelperText={session.modelHelperText}
+                modelErrorMessage={session.modelErrorMessage}
               />
             ) : null)}
         </section>
@@ -929,6 +931,8 @@ export function ProjectRouteActivePane({
             isLoadingModels={startConversation.isLoadingModels}
             isLoadingAgents={startConversation.isLoadingAgents}
             projectDirectory={project?.selectedDirectory ?? null}
+            modelHelperText={startConversation.modelHelperText}
+            modelErrorMessage={startConversation.modelErrorMessage}
           />
         ) : null
       }
@@ -1149,7 +1153,9 @@ function ChatPromptComposer({
   setSelectedEffortID,
   isLoadingModels,
   isLoadingAgents,
-  projectDirectory
+  projectDirectory,
+  modelHelperText,
+  modelErrorMessage
 }: {
   promptText: string
   setPromptText: (value: string) => void
@@ -1171,6 +1177,8 @@ function ChatPromptComposer({
   isLoadingModels: boolean
   isLoadingAgents: boolean
   projectDirectory?: string | null
+  modelHelperText: string
+  modelErrorMessage: string | null
 }): JSX.Element {
   const composerAnchorRef = useRef<HTMLDivElement | null>(null)
   const [activeSlashCommandValue, setActiveSlashCommandValue] = useState<string | null>(

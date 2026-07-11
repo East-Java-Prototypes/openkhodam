@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from 'node:fs'
-import { isAbsolute, join, normalize, parse } from 'node:path'
+import { isAbsolute, join, normalize, parse, resolve } from 'node:path'
 
 import type {
   GetOpenCodeModelSelectionInput,
@@ -47,6 +47,7 @@ export type OpenKhodamConfig = {
 }
 
 export const OPENKHODAM_CONFIG_FILE_NAME = 'openkhodam-config.json'
+const configMutationQueues = new Map<string, Promise<void>>()
 
 export class OpenKhodamConfigFileStore {
   readonly filePath: string
@@ -68,6 +69,30 @@ export class OpenKhodamConfigFileStore {
     await this.configFile.write(config)
   }
 
+  async update<TResult>(
+    updater: (config: OpenKhodamConfig) => TResult | Promise<TResult>
+  ): Promise<TResult> {
+    const key = resolve(this.filePath)
+    const previous = configMutationQueues.get(key) ?? Promise.resolve()
+    let release!: () => void
+    const tail = new Promise<void>((nextRelease) => {
+      release = nextRelease
+    })
+    const queueTail = previous.catch(() => undefined).then(() => tail)
+    configMutationQueues.set(key, queueTail)
+
+    await previous.catch(() => undefined)
+    try {
+      const config = await this.read()
+      const result = await updater(config)
+      await this.write(config)
+      return result
+    } finally {
+      release()
+      if (configMutationQueues.get(key) === queueTail) configMutationQueues.delete(key)
+    }
+  }
+
   async getGoogleWorkspaceStatus(configured: boolean): Promise<GoogleWorkspaceIntegrationStatus> {
     return toGoogleWorkspaceStatus(await this.read(), configured)
   }
@@ -81,15 +106,15 @@ export class OpenKhodamConfigFileStore {
     if (!directory) throw new Error('Project directory is required.')
 
     const openedFolder = { directory, lastOpenedAt: Date.now() }
-    const config = await this.read()
-    config.projects.openedFolders = normalizeOpenedProjectFolders([
-      ...config.projects.openedFolders.filter(
-        (folder) =>
-          openedProjectDirectoryKey(folder.directory) !== openedProjectDirectoryKey(directory)
-      ),
-      openedFolder
-    ])
-    await this.write(config)
+    await this.update((config) => {
+      config.projects.openedFolders = normalizeOpenedProjectFolders([
+        ...config.projects.openedFolders.filter(
+          (folder) =>
+            openedProjectDirectoryKey(folder.directory) !== openedProjectDirectoryKey(directory)
+        ),
+        openedFolder
+      ])
+    })
     return openedFolder
   }
 
@@ -99,20 +124,19 @@ export class OpenKhodamConfigFileStore {
     const directory = normalizeOpenedProjectDirectory(input.directory)
     if (!directory) throw new Error('Project directory is required.')
 
-    const config = await this.read()
-    const directoryKey = openedProjectDirectoryKey(directory)
-    const removedFolder =
-      config.projects.openedFolders.find(
-        (folder) => openedProjectDirectoryKey(folder.directory) === directoryKey
-      ) ?? null
-
-    if (!removedFolder) return null
-
-    config.projects.openedFolders = config.projects.openedFolders.filter(
-      (folder) => openedProjectDirectoryKey(folder.directory) !== directoryKey
-    )
-    await this.write(config)
-    return removedFolder
+    return this.update((config) => {
+      const directoryKey = openedProjectDirectoryKey(directory)
+      const removedFolder =
+        config.projects.openedFolders.find(
+          (folder) => openedProjectDirectoryKey(folder.directory) === directoryKey
+        ) ?? null
+      if (removedFolder) {
+        config.projects.openedFolders = config.projects.openedFolders.filter(
+          (folder) => openedProjectDirectoryKey(folder.directory) !== directoryKey
+        )
+      }
+      return removedFolder
+    })
   }
 
   async getOpenCodeModelSelection(
@@ -128,19 +152,14 @@ export class OpenKhodamConfigFileStore {
   ): Promise<OpenCodeModelSelection | null> {
     const projectDirectory = normalizeModelSelectionProjectDirectory(input)
     const model = normalizeInputOpenCodeModelSelection(input)
-    const config = await this.read()
-    const modelSelectionsByDirectory = {
-      ...config.preferences.openCode.modelSelectionsByDirectory
-    }
-
-    if (model) {
-      modelSelectionsByDirectory[projectDirectory] = model
-    } else {
-      delete modelSelectionsByDirectory[projectDirectory]
-    }
-
-    config.preferences.openCode.modelSelectionsByDirectory = modelSelectionsByDirectory
-    await this.write(config)
+    await this.update((config) => {
+      const modelSelectionsByDirectory = {
+        ...config.preferences.openCode.modelSelectionsByDirectory
+      }
+      if (model) modelSelectionsByDirectory[projectDirectory] = model
+      else delete modelSelectionsByDirectory[projectDirectory]
+      config.preferences.openCode.modelSelectionsByDirectory = modelSelectionsByDirectory
+    })
     return model
   }
 
@@ -149,27 +168,27 @@ export class OpenKhodamConfigFileStore {
     scopes: string[],
     token: GoogleWorkspaceTokenConfig
   ): Promise<GoogleWorkspaceIntegrationStatus> {
-    const config = await this.read()
-    config.integrations.googleWorkspace = {
-      account,
-      scopes: [...new Set(scopes)].sort(),
-      token,
-      updatedAt: Date.now()
-    }
-    await this.write(config)
-    return toGoogleWorkspaceStatus(config, true)
+    return this.update((config) => {
+      config.integrations.googleWorkspace = {
+        account,
+        scopes: [...new Set(scopes)].sort(),
+        token,
+        updatedAt: Date.now()
+      }
+      return toGoogleWorkspaceStatus(config, true)
+    })
   }
 
   async disconnectGoogleWorkspace(configured: boolean): Promise<GoogleWorkspaceIntegrationStatus> {
-    const config = await this.read()
-    config.integrations.googleWorkspace = {
-      account: null,
-      scopes: [],
-      token: null,
-      updatedAt: Date.now()
-    }
-    await this.write(config)
-    return toGoogleWorkspaceStatus(config, configured)
+    return this.update((config) => {
+      config.integrations.googleWorkspace = {
+        account: null,
+        scopes: [],
+        token: null,
+        updatedAt: Date.now()
+      }
+      return toGoogleWorkspaceStatus(config, configured)
+    })
   }
 }
 

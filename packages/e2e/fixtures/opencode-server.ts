@@ -6,8 +6,27 @@ export type FakeOpenCodeServer = {
   getRequestEvents: () => string[]
   getConnectedProviders: () => string[]
   setConnectedProviders: (providerIDs: string[]) => void
+  setProviderAuthMode: (mode: FakeProviderAuthMode) => void
+  setProviderConnectMode: (mode: FakeProviderConnectMode) => void
+  getProviderAuthRequests: () => FakeProviderAuthRequest[]
+  getOAuthRequests: () => FakeOAuthRequest[]
+  armOAuthAuthorizeGate: (providerID: string) => void
+  waitForOAuthAuthorize: (providerID: string) => Promise<void>
+  releaseOAuthAuthorize: (providerID: string) => void
+  waitForOAuthAuthorizeSettlement: (providerID: string) => Promise<void>
   close: () => Promise<void>
 }
+
+export type FakeProviderAuthMode = 'normal' | 'empty' | 'error'
+export type FakeProviderConnectMode = 'normal' | 'fail-once' | 'delayed-oauth'
+
+export type FakeProviderAuthRequest = {
+  providerID: string
+  key: string
+  metadata: Record<string, string> | null
+}
+
+export type FakeOAuthRequest = { providerID: string; type: 'authorize' | 'callback' }
 
 export type FakePromptRequest = {
   sessionID: string
@@ -52,6 +71,10 @@ const disconnectedProviderID = 'offline-provider'
 const disconnectedModelID = 'offline-model'
 const oauthProviderID = 'oauth-provider'
 const oauthModelID = 'oauth-model'
+const environmentProviderID = 'environment-provider'
+const environmentModelID = 'environment-model'
+const singletonPromptProviderID = 'singleton-prompt-provider'
+const singletonOAuthProviderID = 'singleton-oauth-provider'
 const structuredUserPrompt = 'Structured fixture user prompt with **literal user markdown**'
 const structuredAssistantMarkdownText = [
   'Inspecting project files.',
@@ -116,6 +139,32 @@ const providerCatalog = [
     models: {
       [oauthModelID]: createProviderModel(oauthModelID, 'OAuth Fixture Model')
     }
+  },
+  {
+    id: environmentProviderID,
+    name: 'Environment Provider',
+    source: 'env',
+    env: ['ENVIRONMENT_PROVIDER_API_KEY'],
+    options: {},
+    models: {
+      [environmentModelID]: createProviderModel(environmentModelID, 'Environment Fixture Model')
+    }
+  },
+  {
+    id: singletonPromptProviderID,
+    name: 'Singleton Prompt Provider',
+    source: 'api',
+    env: [],
+    options: {},
+    models: {}
+  },
+  {
+    id: singletonOAuthProviderID,
+    name: 'Singleton OAuth Provider',
+    source: 'api',
+    env: [],
+    options: {},
+    models: {}
   }
 ]
 const providerAuthMethods = {
@@ -146,10 +195,31 @@ const providerAuthMethods = {
   [oauthProviderID]: [
     { type: 'oauth', label: 'OAuth code' },
     { type: 'oauth', label: 'OAuth auto' }
-  ]
+  ],
+  [singletonPromptProviderID]: [
+    {
+      type: 'api',
+      label: 'Singleton API key',
+      prompts: [
+        {
+          type: 'text',
+          key: 'tenant',
+          message: 'Tenant name',
+          placeholder: 'Example tenant'
+        }
+      ]
+    }
+  ],
+  [singletonOAuthProviderID]: [{ type: 'oauth', label: 'Singleton OAuth auto' }]
 }
 const connectedProviderIDs = new Set<string>()
 const pendingOAuth = new Map<string, { method: 'auto' | 'code'; methodIndex: number }>()
+const providerAuthRequests: FakeProviderAuthRequest[] = []
+const oauthRequests: FakeOAuthRequest[] = []
+let providerAuthMode: FakeProviderAuthMode = 'normal'
+let providerConnectMode: FakeProviderConnectMode = 'normal'
+let didFailProviderConnect = false
+const oauthAuthorizeGates = new Map<string, DeferredGate>()
 const agents = [
   createAgent('build', 'Primary fake build agent', 'primary'),
   createAgent('plan', 'All-mode fake planning agent', 'all'),
@@ -165,6 +235,35 @@ type FakeSession = {
   directory: string
   time: { created: number; updated: number }
   location: { directory: string }
+}
+
+type DeferredGate = {
+  arrive: Deferred<void>
+  release: Deferred<void>
+  settled: Deferred<void>
+}
+
+type Deferred<T> = { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void }
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve
+  })
+  return { promise, resolve }
+}
+
+function getOAuthAuthorizeGate(providerID: string): DeferredGate {
+  let gate = oauthAuthorizeGates.get(providerID)
+  if (!gate) {
+    gate = {
+      arrive: createDeferred<void>(),
+      release: createDeferred<void>(),
+      settled: createDeferred<void>()
+    }
+    oauthAuthorizeGates.set(providerID, gate)
+  }
+  return gate
 }
 
 export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
@@ -188,6 +287,10 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       return json(response, currentProviders())
     }
     if (request.method === 'GET' && url.pathname === '/provider/auth') {
+      if (providerAuthMode === 'error') {
+        return json(response, { message: 'Fixture provider auth is unavailable.' }, 500)
+      }
+      if (providerAuthMode === 'empty') return json(response, {})
       return json(response, providerAuthMethods)
     }
     const authorizeMatch = url.pathname.match(/^\/provider\/([^/]+)\/oauth\/authorize$/)
@@ -199,9 +302,16 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       if (!method || method.type !== 'oauth') {
         return json(response, { message: 'OAuth method not found.' }, 400)
       }
-      const authorizationMethod = methodIndex === 1 ? 'auto' : 'code'
+      oauthRequests.push({ providerID, type: 'authorize' })
+      const authorizationMethod =
+        methodIndex === 1 || providerID === singletonOAuthProviderID ? 'auto' : 'code'
       pendingOAuth.set(providerID, { method: authorizationMethod, methodIndex })
-      return json(response, {
+      const gate = oauthAuthorizeGates.get(providerID)
+      if (gate) {
+        gate.arrive.resolve()
+        await gate.release.promise
+      }
+      json(response, {
         url: `https://auth.example.test/${providerID}?method=${methodIndex}`,
         method: authorizationMethod,
         instructions:
@@ -209,10 +319,13 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
             ? 'Confirm this OAuth code: OAUTH-AUTO-CODE'
             : 'Open the OAuth fixture and paste the returned code.'
       })
+      gate?.settled.resolve()
+      return
     }
     const callbackMatch = url.pathname.match(/^\/provider\/([^/]+)\/oauth\/callback$/)
     if (request.method === 'POST' && callbackMatch) {
       const providerID = callbackMatch[1]
+      oauthRequests.push({ providerID, type: 'callback' })
       const pending = pendingOAuth.get(providerID)
       if (!pending) return json(response, { message: 'OAuth authorization was not started.' }, 400)
       if (pending.method === 'code' && typeof body?.code !== 'string') {
@@ -231,10 +344,26 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       if (body?.type !== 'api' || typeof body?.key !== 'string' || body.key.length === 0) {
         return json(response, { message: 'API key auth is required.' }, 400)
       }
+      providerAuthRequests.push({
+        providerID,
+        key: body.key,
+        metadata: isStringRecord(body.metadata) ? body.metadata : null
+      })
+      if (providerConnectMode === 'fail-once' && !didFailProviderConnect) {
+        didFailProviderConnect = true
+        return json(response, { message: 'Fixture provider connection failed.' }, 400)
+      }
       connectedProviderIDs.add(providerID)
       return json(response, true)
     }
     if (request.method === 'DELETE' && authMatch) {
+      if (authMatch[1] === environmentProviderID) {
+        return json(
+          response,
+          { message: 'Environment provider credentials are managed externally.' },
+          400
+        )
+      }
       connectedProviderIDs.delete(authMatch[1])
       pendingOAuth.delete(authMatch[1])
       return json(response, true)
@@ -363,6 +492,15 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     url: `http://127.0.0.1:${address.port}`,
     getPromptRequests: () => [...promptRequests],
     getRequestEvents: () => [...requestEvents],
+    getProviderAuthRequests: () => providerAuthRequests.map((request) => ({ ...request })),
+    getOAuthRequests: () => oauthRequests.map((request) => ({ ...request })),
+    armOAuthAuthorizeGate: (providerID) => {
+      getOAuthAuthorizeGate(providerID)
+    },
+    waitForOAuthAuthorize: (providerID) => getOAuthAuthorizeGate(providerID).arrive.promise,
+    releaseOAuthAuthorize: (providerID) => getOAuthAuthorizeGate(providerID).release.resolve(),
+    waitForOAuthAuthorizeSettlement: (providerID) =>
+      getOAuthAuthorizeGate(providerID).settled.promise,
     getConnectedProviders: () => [...connectedProviderIDs],
     setConnectedProviders: (providerIDs) => {
       connectedProviderIDs.clear()
@@ -372,7 +510,17 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
         }
       }
     },
-    close: () => new Promise((resolve) => server.close(() => resolve()))
+    setProviderAuthMode: (mode) => {
+      providerAuthMode = mode
+    },
+    setProviderConnectMode: (mode) => {
+      providerConnectMode = mode
+      didFailProviderConnect = false
+    },
+    close: async () => {
+      releaseOAuthAuthorizeGates()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   }
 }
 
@@ -436,6 +584,9 @@ function currentProviderDefaults(): Record<string, string> {
   if (connectedProviderIDs.has(disconnectedProviderID))
     defaults[disconnectedProviderID] = disconnectedModelID
   if (connectedProviderIDs.has(oauthProviderID)) defaults[oauthProviderID] = oauthModelID
+  if (connectedProviderIDs.has(environmentProviderID)) {
+    defaults[environmentProviderID] = environmentModelID
+  }
   return defaults
 }
 
@@ -447,6 +598,13 @@ function resetState(): void {
   pendingOAuth.clear()
   connectedProviderIDs.clear()
   connectedProviderIDs.add(connectedProviderID)
+  connectedProviderIDs.add(environmentProviderID)
+  providerAuthRequests.length = 0
+  oauthRequests.length = 0
+  releaseOAuthAuthorizeGates()
+  providerAuthMode = 'normal'
+  providerConnectMode = 'normal'
+  didFailProviderConnect = false
   promptRequests.length = 0
   requestEvents.length = 0
   promptIdSequence = 0
@@ -480,6 +638,14 @@ function resetState(): void {
     userMessage(childUserID, 'Hidden subagent user prompt'),
     assistantMessage(stableMessageID(), 'Hidden subagent assistant response', childUserID)
   ])
+}
+
+function releaseOAuthAuthorizeGates(): void {
+  for (const gate of oauthAuthorizeGates.values()) {
+    gate.release.resolve()
+    gate.settled.resolve()
+  }
+  oauthAuthorizeGates.clear()
 }
 
 function projectPendingMessages(sessionID: string): void {
@@ -770,6 +936,15 @@ function isValidVariant(model: any, variant: any): boolean {
     | { variants?: Record<string, unknown> }
     | undefined
   return Boolean(providerModel.variants && variant in providerModel.variants)
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every((item) => typeof item === 'string')
+  )
 }
 
 async function readJson(request: IncomingMessage): Promise<any> {
