@@ -286,6 +286,7 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('form', { name: 'Open project by directory' })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'Projects' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
+  await expect(chatActionPane(page)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toHaveCount(0)
 }
@@ -756,6 +757,7 @@ test('renders basename project labels and opens the project new-conversation she
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/dir-[^/]+\/sessions\/seeded-session$/
   )
+  await expect(chatActionPane(appWindow)).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
 
   await newConversationLink.click()
@@ -920,22 +922,16 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
 
   try {
     await setResizeTestViewport(electronApp, appWindow)
-    await openStructuredFixtureChat(appWindow)
+    await seedOpenedFakeProject(appWindow)
+    await expect(projectChatLink(appWindow).filter({ hasText: 'Fake Project' })).toBeVisible()
+    await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+    await expectOpenedProjectRouteResolved(appWindow)
+    await sessionChatLink(appWindow).filter({ hasText: 'Structured fixture chat' }).click()
 
     const actionPane = chatActionPane(appWindow)
-    const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
     const titlebar = paneControls(appWindow)
     const collapseSidebarButton = titlebar.getByRole('button', { name: 'Collapse project sidebar' })
     const collapseActionPaneButton = titlebar.getByRole('button', { name: 'Collapse action pane' })
-    const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
-    const handleBox = await elementBox(resizeHandle, 'action pane resize handle')
-    const formerActionPaneMaxWidth = await remToPixels(appWindow, 30)
-
-    await expect(collapseActionPaneButton).toBeVisible()
-    await expectSplitCornerPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
-    await expect.poll(() => appRegion(titlebar)).toBe('drag')
-    await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
-    await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toHaveCount(0)
     const linkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
@@ -948,6 +944,29 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       name: 'Open linked Google Doc Fixture linked Google Doc in Google Docs'
     })
     await expect(linkedDocToggle).toBeVisible()
+    const chatPanel = appWindow.locator('[id="chat-center-panel"]')
+    const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
+    const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
+    const initialChatBox = await elementBox(chatPanel, 'chat panel')
+    const workspaceBox = await elementBox(
+      appWindow.locator('[id="active-pane-panel"]'),
+      'active workspace'
+    )
+
+    await expect(collapseActionPaneButton).toBeVisible()
+    await expectSplitCornerPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
+    await expect.poll(() => appRegion(titlebar)).toBe('drag')
+    await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
+    expect(initialChatBox.width + initialActionPaneBox.width).toBeLessThanOrEqual(
+      workspaceBox.width + 8
+    )
+    expect(Math.round(initialActionPaneBox.height)).toBe(Math.round(workspaceBox.height))
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
+    await expect(resizeHandle).toBeVisible()
+    await expect(
+      appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
+    ).toHaveCount(0)
+    await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toHaveCount(0)
     await expect(linkedDocPreviewToggle).toBeVisible()
     await expect(actionPane.getByText('Doc ID: fixture-linked-doc')).toHaveCount(0)
     await expect(linkedDocOpenLink).toBeVisible()
@@ -964,6 +983,15 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     })
     await expect(browserPreview).toBeVisible()
     await expect(browserPreview.locator('webview')).toHaveAttribute('src', fixtureLinkedDocUrl)
+    const artifactList = actionPane.getByRole('region', {
+      name: 'Linked Google Workspace artifacts'
+    })
+    const artifactItem = actionPane.locator(
+      '[data-slot="collapsible"][aria-label="Linked Google Doc Fixture linked Google Doc"]'
+    )
+    const artifactListBox = await elementBox(artifactList, 'artifact list')
+    const artifactItemBox = await elementBox(artifactItem, 'document artifact item')
+    expect(Math.round(artifactItemBox.width)).toBe(Math.round(artifactListBox.width))
     await expect
       .poll(
         async () =>
@@ -983,8 +1011,6 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(actionPane.getByText('Google Docs URL', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('First linked', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Last linked', { exact: true })).toHaveCount(0)
-    await linkedDocToggle.click()
-    await expect(browserPreview).toHaveCount(0)
     const linkedSheetToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Sheet Fixture linked Google Sheet',
       exact: true
@@ -1015,6 +1041,41 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       'src',
       fixtureLinkedSheetUrl
     )
+    const browserPreviewBox = await elementBox(browserPreview, 'document browser preview')
+    const sheetBrowserPreviewBox = await elementBox(sheetBrowserPreview, 'sheet browser preview')
+    const documentWebviewBox = await elementBox(
+      browserPreview.locator('webview'),
+      'document webview'
+    )
+    const sheetWebviewBox = await elementBox(
+      sheetBrowserPreview.locator('webview'),
+      'sheet webview'
+    )
+    expect(Math.abs(browserPreviewBox.height - sheetBrowserPreviewBox.height)).toBeLessThanOrEqual(
+      2
+    )
+    expect(Math.round(documentWebviewBox.width)).toBe(Math.round(browserPreviewBox.width))
+    expect(Math.round(documentWebviewBox.height)).toBe(Math.round(browserPreviewBox.height))
+    expect(Math.round(sheetWebviewBox.width)).toBe(Math.round(sheetBrowserPreviewBox.width))
+    expect(Math.round(sheetWebviewBox.height)).toBe(Math.round(sheetBrowserPreviewBox.height))
+    const resizeHandleBox = await elementBox(resizeHandle, 'action pane resize handle')
+    await appWindow.mouse.move(
+      resizeHandleBox.x + resizeHandleBox.width / 2,
+      resizeHandleBox.y + resizeHandleBox.height / 2
+    )
+    await appWindow.mouse.down()
+    await appWindow.mouse.move(
+      resizeHandleBox.x + resizeHandleBox.width / 2 - 200,
+      resizeHandleBox.y + resizeHandleBox.height / 2,
+      { steps: 10 }
+    )
+    await appWindow.mouse.up()
+    await expect
+      .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0))
+      .toBeGreaterThan(Math.round(initialActionPaneBox.width) + 100)
+    const resizedActionPaneBox = await elementBox(actionPane, 'resized action pane')
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
+    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
     await expect(actionPane.getByText('Sheet ID', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Google Sheets URL', { exact: true })).toHaveCount(0)
     await linkedSheetToggle.click()
@@ -1071,39 +1132,24 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(actionPane.getByText('V1 fixture tool output', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('V2 fixture tool output', { exact: true })).toHaveCount(0)
 
-    await appWindow.mouse.move(
-      handleBox.x + handleBox.width / 2,
-      handleBox.y + handleBox.height / 2
-    )
-    await appWindow.mouse.down()
-    await appWindow.mouse.move(
-      handleBox.x + handleBox.width / 2 - 300,
-      handleBox.y + handleBox.height / 2,
-      { steps: 10 }
-    )
-    await appWindow.mouse.up()
-
-    await expect
-      .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0), {
-        message: 'action pane should resize beyond the former 30rem cap'
-      })
-      .toBeGreaterThan(Math.round(formerActionPaneMaxWidth) + 20)
-    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
-
     await collapseActionPaneButton.click()
-    const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
-    await expect(collapsedRail).toBeVisible()
     await expect(actionPane).toHaveCount(0)
     await expect(titlebar.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
+    const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
+    await expect(collapsedRail).toBeVisible()
     await expect(collapsedRail.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
-    expect((await elementBox(collapsedRail, 'collapsed action pane rail')).width).toBeLessThan(
-      initialActionPaneBox.width
-    )
+    await expect(resizeHandle).toBeVisible()
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
     await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 
     await titlebar.getByRole('button', { name: 'Restore action pane' }).click()
     await expect(actionPane).toBeVisible()
-    await expect(resizeHandle).toBeVisible()
+    const restoredActionPaneBox = await elementBox(actionPane, 'restored action pane')
+    expect(Math.round(restoredActionPaneBox.height)).toBe(Math.round(workspaceBox.height))
+    expect(Math.abs(restoredActionPaneBox.width - resizedActionPaneBox.width)).toBeLessThanOrEqual(
+      4
+    )
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
     const restoredLinkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
