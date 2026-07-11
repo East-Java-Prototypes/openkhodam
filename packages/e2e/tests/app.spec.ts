@@ -539,13 +539,19 @@ async function expectSlashCommandPopoverShowsOnlyUndo(page: Page): Promise<Locat
   const composer = page
     .getByLabel('Message OpenKhodam')
     .locator('xpath=ancestor::*[@data-slot="input-group"]')
-  const [popoverBox, composerBox] = await Promise.all([
-    popover.boundingBox(),
-    composer.boundingBox()
-  ])
-  expect(popoverBox).not.toBeNull()
-  expect(composerBox).not.toBeNull()
-  expect(Math.abs(popoverBox!.width - composerBox!.width)).toBeLessThanOrEqual(1)
+  await expect
+    .poll(
+      async () => {
+        const [popoverBox, composerBox] = await Promise.all([
+          popover.boundingBox(),
+          composer.boundingBox()
+        ])
+        if (!popoverBox || !composerBox) return Number.POSITIVE_INFINITY
+        return Math.abs(popoverBox.width - composerBox.width)
+      },
+      { message: 'slash command popover width should settle to the composer width' }
+    )
+    .toBeLessThanOrEqual(1)
   for (const command of unsupportedSlashCommands) {
     await expect(popover.getByText(command, { exact: true })).toHaveCount(0)
   }
