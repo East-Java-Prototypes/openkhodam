@@ -1695,6 +1695,12 @@ test('shows optimistic prompt before delayed stable message projection', async (
   await openSeededDeterministicChat(appWindow)
 
   const thinkingRow = messageTranscript(appWindow).getByText('Thinking…', { exact: true })
+  const thinkingRowContainer = messageTranscript(appWindow).locator(
+    '[data-slot="assistant-thinking-row"]'
+  )
+  const thinkingSurface = messageTranscript(appWindow).locator(
+    '[data-slot="assistant-thinking-status"]'
+  )
   await expect(thinkingRow).toHaveCount(0)
 
   await sendPrompt(appWindow, 'Delayed lifecycle prompt')
@@ -1703,12 +1709,9 @@ test('shows optimistic prompt before delayed stable message projection', async (
     appWindow.locator('[data-pending="true"]').filter({ hasText: 'Delayed lifecycle prompt' })
   ).toBeVisible()
   await expect(thinkingRow).toBeVisible()
-  await expectPlainAssistantSurface(
-    messageTranscript(appWindow).locator(
-      '[data-slot="assistant-thinking-row"] [data-slot="message-surface"]'
-    ),
-    'assistant thinking message surface'
-  )
+  await expect(thinkingRowContainer.getByText('assistant', { exact: true })).toHaveCount(0)
+  await expect(thinkingSurface).toHaveClass(/shimmer/)
+  await expectPlainAssistantSurface(thinkingSurface, 'assistant thinking message surface')
   await expect(
     messageTranscript(appWindow).getByText('Prompt sent. Messages will refresh shortly.')
   ).toHaveCount(0)
