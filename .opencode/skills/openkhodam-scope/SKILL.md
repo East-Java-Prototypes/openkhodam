@@ -1,21 +1,21 @@
 ---
 name: openkhodam-scope
-description: Use when planning or scoping openkhodam implementation work, including feature work, refactors, and behavior matching; guides when to inspect local code and consult the opencode/openwork references.
+description: Use before implementing or planning substantial openkhodam changes, including feature work, refactors, and behavior matching; guides local inspection and opencode/openwork reference use.
 ---
 
 # Openkhodam Scope
 
-Use this repo-local skill before finalizing an implementation plan for openkhodam work that may affect behavior, architecture, data flow, UI flow, or integration boundaries.
+Use this repo-local skill before substantial implementation or before finalizing an implementation plan for openkhodam work that may affect behavior, architecture, data flow, UI flow, or integration boundaries.
 
 Do not use this skill to slow down purely mechanical or unrelated trivial changes such as typo fixes, comment-only edits, lockfile-only maintenance, or obvious one-line config updates unless behavior or architecture is uncertain.
 
-## Planning Workflow
+## Scoping Workflow
 
 1. Inspect the local openkhodam code first to understand current naming, boundaries, and call flow.
 2. When the task overlaps with opencode behavior, SDK/app/desktop patterns, or core agent orchestration, consult the existing `opencode` reference before inventing a new pattern.
 3. When the task overlaps with using opencode as an application core or host integration, consult the existing `openwork` reference before inventing a new pattern.
 4. Reuse local conventions when they are clear; use the references to resolve uncertainty, match behavior, or avoid duplicating solved patterns.
-5. Keep plans lightweight: cite the specific local module or reference pattern that informed the decision instead of copying broad reference details.
+5. Keep scoping lightweight: cite the specific local module or reference pattern that informed the decision instead of copying broad reference details.
 
 ## Call Flow Focus
 
