@@ -195,6 +195,9 @@ export class ProjectArtifactsFileStore {
   async recordLinkedGoogleArtifact(
     input: ProjectArtifactsStoreRecordInput
   ): Promise<LinkedGoogleArtifact> {
+    // TODO: File replacement is atomic, but this read-modify-write is not serialized across
+    // stores for the same canonical artifacts.json path. Concurrent mutations can lose an
+    // update; serialize mutations per path and cover parallel calls before relying on it.
     const sessionId = normalizeRequiredString(input.sessionId, 'sessionId')
     const messageId = normalizeOptionalString(input.messageId)
     const artifact = normalizeLinkedGoogleArtifactRecordInput(input.artifact)
@@ -214,6 +217,7 @@ export class ProjectArtifactsFileStore {
         artifactPath: nextArtifact.artifactPath ?? existing.artifactPath,
         firstSeenAt: existing.firstSeenAt,
         firstMessageId: existing.firstMessageId ?? nextArtifact.firstMessageId,
+        lastMessageId: nextArtifact.lastMessageId ?? existing.lastMessageId,
         listed: existing.listed
       }
       sessionArtifacts[existingIndex] = updatedArtifact
@@ -474,6 +478,7 @@ export async function getOrCreateLinkedGoogleArtifact(
 ): Promise<LinkedGoogleArtifact> {
   const store = createProjectArtifactsStore(input)
   const sessionId = normalizeRequiredString(input.sessionId, 'sessionId')
+  const messageId = normalizeOptionalString(input.messageId)
   const artifact = normalizeLinkedGoogleArtifactRecordInput(input.artifact)
   const artifactKey = linkedGoogleArtifactKey(artifact)
   const existing = (await store.listSessionLinkedGoogleArtifacts(sessionId)).find(
@@ -484,7 +489,15 @@ export async function getOrCreateLinkedGoogleArtifact(
     if (artifact.artifactPath && artifact.artifactPath !== existing.artifactPath) {
       return store.recordLinkedGoogleArtifact({
         artifact,
-        messageId: input.messageId,
+        messageId,
+        sessionId
+      })
+    }
+
+    if (messageId) {
+      return store.recordLinkedGoogleArtifact({
+        artifact,
+        messageId,
         sessionId
       })
     }
@@ -494,7 +507,7 @@ export async function getOrCreateLinkedGoogleArtifact(
 
   return store.recordLinkedGoogleArtifact({
     artifact,
-    messageId: input.messageId,
+    messageId,
     sessionId
   })
 }
