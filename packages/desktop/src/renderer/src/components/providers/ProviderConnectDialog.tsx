@@ -5,13 +5,13 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle
-} from '@/components/ui/sheet'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import {
   type OpenCodeProviderAuthMethod,
   type OpenCodeProviderOption,
@@ -21,7 +21,6 @@ import {
 type ProviderAuthPrompt = NonNullable<OpenCodeProviderAuthMethod['prompts']>[number]
 
 type ProviderConnectDialogStep =
-  | 'provider'
   | 'method'
   | 'prompt'
   | 'api'
@@ -35,21 +34,16 @@ export function ProviderConnectDialog({
   open,
   onOpenChange,
   directory,
-  initialProviderID
+  providerID
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   directory?: string | null
-  initialProviderID?: string | null
+  providerID: string
 }): JSX.Element {
   const providers = useOpenCodeProviders(directory)
-  const [selectedProviderID, setSelectedProviderID] = useState<string | null>(
-    initialProviderID ?? null
-  )
   const [selectedMethodIndex, setSelectedMethodIndex] = useState<number | null>(null)
-  const [step, setStep] = useState<ProviderConnectDialogStep>(
-    initialProviderID ? 'method' : 'provider'
-  )
+  const [step, setStep] = useState<ProviderConnectDialogStep>('method')
   const [promptInputs, setPromptInputs] = useState<Record<string, string>>({})
   const [promptIndex, setPromptIndex] = useState(0)
   const [promptDraft, setPromptDraft] = useState('')
@@ -66,13 +60,10 @@ export function ProviderConnectDialog({
   const flowGenerationRef = useRef(0)
 
   const selectedProvider = useMemo(
-    () => providers.providers.find((provider) => provider.id === selectedProviderID) ?? null,
-    [providers.providers, selectedProviderID]
+    () => providers.providers.find((provider) => provider.id === providerID) ?? null,
+    [providerID, providers.providers]
   )
-  const authMethods = useMemo(
-    () => (selectedProviderID ? providers.getAuthMethods(selectedProviderID) : []),
-    [providers, selectedProviderID]
-  )
+  const authMethods = useMemo(() => providers.getAuthMethods(providerID), [providerID, providers])
   const selectedMethod =
     selectedMethodIndex === null ? null : (authMethods?.[selectedMethodIndex] ?? null)
   const currentPrompt = selectedMethod
@@ -103,9 +94,8 @@ export function ProviderConnectDialog({
 
   useEffect(() => {
     if (!open) return
-    setSelectedProviderID(initialProviderID ?? null)
     setSelectedMethodIndex(null)
-    setStep(initialProviderID ? 'method' : 'provider')
+    setStep('method')
     setPromptInputs({})
     setPromptIndex(0)
     setPromptDraft('')
@@ -114,24 +104,13 @@ export function ProviderConnectDialog({
     setOAuthCode('')
     setMessage(null)
     autoSelectedMethodRef.current = null
-  }, [initialProviderID, open])
-
-  function selectProvider(providerID: string): void {
-    setSelectedProviderID(providerID)
-    setSelectedMethodIndex(null)
-    setPromptInputs({})
-    setPromptIndex(0)
-    setAuthorization(null)
-    setMessage(null)
-    autoSelectedMethodRef.current = null
-    setStep('method')
-  }
+  }, [open, providerID])
 
   function resetMethod(): void {
     setSelectedMethodIndex(null)
     clearTransientState()
     autoSelectedMethodRef.current = null
-    setStep(selectedProvider ? 'method' : 'provider')
+    setStep('method')
   }
 
   function clearTransientState(): void {
@@ -229,10 +208,10 @@ export function ProviderConnectDialog({
   )
 
   useEffect(() => {
-    if (!open || !selectedProviderID || selectedMethodIndex !== null) return
+    if (!open || selectedMethodIndex !== null) return
     if (providers.authMethodsQuery.isLoading || providers.authMethodsQuery.isError) return
     if (!authMethods || authMethods.length !== 1) return
-    const autoSelectionKey = `${selectedProviderID}:0`
+    const autoSelectionKey = `${providerID}:0`
     if (autoSelectedMethodRef.current === autoSelectionKey) return
     autoSelectedMethodRef.current = autoSelectionKey
     void selectMethod(0)
@@ -242,7 +221,7 @@ export function ProviderConnectDialog({
     providers.authMethodsQuery.isError,
     providers.authMethodsQuery.isLoading,
     selectedMethodIndex,
-    selectedProviderID,
+    providerID,
     selectMethod
   ])
 
@@ -337,23 +316,22 @@ export function ProviderConnectDialog({
   }
 
   return (
-    <Sheet open={open} onOpenChange={handleOpenChange}>
-      <SheetContent
-        side="right"
-        className="w-full sm:max-w-lg"
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="flex max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-lg flex-col gap-0 p-0"
         aria-describedby="provider-connect-description"
         showCloseButton={!isBusy}
       >
-        <SheetHeader>
-          <SheetTitle>{title}</SheetTitle>
-          <SheetDescription id="provider-connect-description">
+        <DialogHeader className="p-4 pr-12">
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription id="provider-connect-description">
             Connect through OpenCode. OpenKhodam never stores provider secrets.
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
         <Separator />
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex flex-col gap-4 p-4">
-            {selectedProvider && step !== 'provider' ? (
+            {selectedProvider ? (
               <div className="border bg-card p-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -395,7 +373,7 @@ export function ProviderConnectDialog({
             {renderDialogStep()}
           </div>
         </ScrollArea>
-        <SheetFooter>
+        <DialogFooter className="border-t p-4">
           {step === 'success' ? (
             <Button type="button" onClick={() => onOpenChange(false)}>
               Done
@@ -410,24 +388,14 @@ export function ProviderConnectDialog({
               Cancel
             </Button>
           )}
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 
   function renderDialogStep(): JSX.Element {
-    if (step === 'provider') {
-      return (
-        <ProviderPicker
-          providers={providers.providers}
-          isLoading={providers.isLoading}
-          onSelect={selectProvider}
-        />
-      )
-    }
-
     if (!selectedProvider) {
-      return <StatusMessage tone="error">Choose a provider to continue.</StatusMessage>
+      return <StatusMessage tone="error">This provider is unavailable.</StatusMessage>
     }
 
     if (providers.authMethodsQuery.isLoading) {
@@ -562,41 +530,6 @@ export function ProviderConnectDialog({
       </div>
     )
   }
-}
-
-function ProviderPicker({
-  providers,
-  isLoading,
-  onSelect
-}: {
-  providers: OpenCodeProviderOption[]
-  isLoading: boolean
-  onSelect: (providerID: string) => void
-}): JSX.Element {
-  if (isLoading) return <StatusMessage>Loading OpenCode providers…</StatusMessage>
-  if (providers.length === 0) return <StatusMessage>No OpenCode providers found.</StatusMessage>
-
-  return (
-    <div className="flex flex-col gap-2" role="list" aria-label="OpenCode providers">
-      {providers.map((provider) => (
-        <button
-          key={provider.id}
-          type="button"
-          className="flex min-h-14 items-center justify-between gap-3 border bg-card px-3 py-2 text-left text-sm hover:bg-muted"
-          onClick={() => onSelect(provider.id)}
-        >
-          <span className="min-w-0">
-            <span className="block truncate font-medium">{provider.name}</span>
-            <span className="text-muted-foreground block truncate text-xs">
-              {provider.connected ? 'Connected' : 'Disconnected'} · {provider.modelCount} model
-              {provider.modelCount === 1 ? '' : 's'}
-            </span>
-          </span>
-          <span className="text-muted-foreground text-xs">Connect</span>
-        </button>
-      ))}
-    </div>
-  )
 }
 
 function MethodPicker({
