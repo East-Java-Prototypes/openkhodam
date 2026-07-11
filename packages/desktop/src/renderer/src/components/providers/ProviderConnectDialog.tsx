@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -61,6 +61,9 @@ export function ProviderConnectDialog({
   } | null>(null)
   const [oauthCode, setOAuthCode] = useState('')
   const [message, setMessage] = useState<string | null>(null)
+  const autoSelectedMethodRef = useRef<string | null>(null)
+  const openRef = useRef(open)
+  const flowGenerationRef = useRef(0)
 
   const selectedProvider = useMemo(
     () => providers.providers.find((provider) => provider.id === selectedProviderID) ?? null,
@@ -71,7 +74,7 @@ export function ProviderConnectDialog({
     [providers, selectedProviderID]
   )
   const selectedMethod =
-    selectedMethodIndex === null ? null : (authMethods[selectedMethodIndex] ?? null)
+    selectedMethodIndex === null ? null : (authMethods?.[selectedMethodIndex] ?? null)
   const currentPrompt = selectedMethod
     ? getNextPrompt(selectedMethod, promptInputs, promptIndex)
     : null
@@ -80,6 +83,23 @@ export function ProviderConnectDialog({
     providers.connectApiProviderMutation.isPending ||
     providers.authorizeOAuthProviderMutation.isPending ||
     providers.completeOAuthProviderMutation.isPending
+
+  const isCurrentFlow = useCallback(
+    (generation: number): boolean => openRef.current && generation === flowGenerationRef.current,
+    []
+  )
+
+  useEffect(() => {
+    openRef.current = open
+    if (!open) flowGenerationRef.current += 1
+  }, [open])
+
+  useEffect(() => {
+    return () => {
+      openRef.current = false
+      flowGenerationRef.current += 1
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -93,6 +113,7 @@ export function ProviderConnectDialog({
     setAuthorization(null)
     setOAuthCode('')
     setMessage(null)
+    autoSelectedMethodRef.current = null
   }, [initialProviderID, open])
 
   function selectProvider(providerID: string): void {
@@ -102,11 +123,18 @@ export function ProviderConnectDialog({
     setPromptIndex(0)
     setAuthorization(null)
     setMessage(null)
+    autoSelectedMethodRef.current = null
     setStep('method')
   }
 
   function resetMethod(): void {
     setSelectedMethodIndex(null)
+    clearTransientState()
+    autoSelectedMethodRef.current = null
+    setStep(selectedProvider ? 'method' : 'provider')
+  }
+
+  function clearTransientState(): void {
     setPromptInputs({})
     setPromptIndex(0)
     setPromptDraft('')
@@ -114,62 +142,109 @@ export function ProviderConnectDialog({
     setAuthorization(null)
     setOAuthCode('')
     setMessage(null)
-    setStep(selectedProvider ? 'method' : 'provider')
   }
 
-  async function selectMethod(index: number, inputs: Record<string, string> = {}): Promise<void> {
-    const method = authMethods[index]
-    if (!method || !selectedProvider) return
-
-    setSelectedMethodIndex(index)
-    setPromptInputs(inputs)
-    setPromptIndex(0)
-    setAuthorization(null)
-    setMessage(null)
-
-    const prompt = getNextPrompt(method, inputs, 0)
-    if (prompt) {
-      setPromptIndex(prompt.index)
-      setPromptDraft(prompt.prompt.type === 'text' ? (inputs[prompt.prompt.key] ?? '') : '')
-      setStep('prompt')
+  function retrySelectedMethod(): void {
+    if (selectedMethodIndex === null) {
+      resetMethod()
       return
     }
-
-    await beginAuthMethod(selectedProvider, method, index, inputs)
+    flowGenerationRef.current += 1
+    clearTransientState()
+    void selectMethod(selectedMethodIndex)
   }
 
-  async function beginAuthMethod(
-    provider: OpenCodeProviderOption,
-    method: OpenCodeProviderAuthMethod,
-    index: number,
-    inputs: Record<string, string>
-  ): Promise<void> {
-    if (method.type === 'api') {
-      setStep('api')
-      return
-    }
-
-    setStep('oauth-pending')
-    try {
-      const nextAuthorization = await providers.authorizeOAuthProviderMutation.mutateAsync({
-        providerID: provider.id,
-        method: index,
-        inputs: emptyRecordToUndefined(inputs)
-      })
-      setAuthorization(nextAuthorization)
-      openAuthorizationUrl(nextAuthorization.url)
-      if (nextAuthorization.method === 'code') {
-        setStep('oauth-code')
+  const beginAuthMethod = useCallback(
+    async (
+      provider: OpenCodeProviderOption,
+      method: OpenCodeProviderAuthMethod,
+      index: number,
+      inputs: Record<string, string>
+    ): Promise<void> => {
+      if (method.type === 'api') {
+        setStep('api')
         return
       }
 
-      setStep('oauth-auto')
-      await completeOAuth(provider.id, index)
-    } catch (error) {
-      setMessage(formatUnknownError(error, 'OAuth authorization failed.'))
-      setStep('error')
-    }
-  }
+      setStep('oauth-pending')
+      const generation = ++flowGenerationRef.current
+      try {
+        const nextAuthorization = await providers.authorizeOAuthProviderMutation.mutateAsync({
+          providerID: provider.id,
+          method: index,
+          inputs: emptyRecordToUndefined(inputs)
+        })
+        if (!isCurrentFlow(generation)) return
+        setAuthorization(nextAuthorization)
+        openAuthorizationUrl(nextAuthorization.url)
+        if (nextAuthorization.method === 'code') {
+          setStep('oauth-code')
+          return
+        }
+
+        setStep('oauth-auto')
+        const callbackResponse = await providers.completeOAuthProviderMutation.mutateAsync({
+          providerID: provider.id,
+          method: index
+        })
+        void callbackResponse
+        if (!isCurrentFlow(generation)) return
+        setMessage(`${provider.name} connected.`)
+        setStep('success')
+      } catch (error) {
+        if (!isCurrentFlow(generation)) return
+        setMessage(formatUnknownError(error, 'OAuth authorization failed.'))
+        setStep('error')
+      }
+    },
+    [
+      isCurrentFlow,
+      providers.authorizeOAuthProviderMutation,
+      providers.completeOAuthProviderMutation
+    ]
+  )
+
+  const selectMethod = useCallback(
+    async (index: number, inputs: Record<string, string> = {}) => {
+      const method = authMethods?.[index]
+      if (!method || !selectedProvider) return
+
+      setSelectedMethodIndex(index)
+      setPromptInputs(inputs)
+      setPromptIndex(0)
+      setAuthorization(null)
+      setMessage(null)
+
+      const prompt = getNextPrompt(method, inputs, 0)
+      if (prompt) {
+        setPromptIndex(prompt.index)
+        setPromptDraft(prompt.prompt.type === 'text' ? (inputs[prompt.prompt.key] ?? '') : '')
+        setStep('prompt')
+        return
+      }
+
+      await beginAuthMethod(selectedProvider, method, index, inputs)
+    },
+    [authMethods, beginAuthMethod, selectedProvider]
+  )
+
+  useEffect(() => {
+    if (!open || !selectedProviderID || selectedMethodIndex !== null) return
+    if (providers.authMethodsQuery.isLoading || providers.authMethodsQuery.isError) return
+    if (!authMethods || authMethods.length !== 1) return
+    const autoSelectionKey = `${selectedProviderID}:0`
+    if (autoSelectedMethodRef.current === autoSelectionKey) return
+    autoSelectedMethodRef.current = autoSelectionKey
+    void selectMethod(0)
+  }, [
+    authMethods,
+    open,
+    providers.authMethodsQuery.isError,
+    providers.authMethodsQuery.isLoading,
+    selectedMethodIndex,
+    selectedProviderID,
+    selectMethod
+  ])
 
   async function submitPrompt(value: string): Promise<void> {
     if (!selectedMethod || selectedMethodIndex === null || !selectedProvider || !currentPrompt)
@@ -207,27 +282,37 @@ export function ProviderConnectDialog({
     }
 
     try {
+      const generation = ++flowGenerationRef.current
       await providers.connectApiProviderMutation.mutateAsync({
         providerID: selectedProvider.id,
         key,
         metadata: emptyRecordToUndefined(promptInputs)
       })
+      if (!isCurrentFlow(generation)) return
       setApiKey('')
       setMessage(`${selectedProvider.name} connected.`)
       setStep('success')
     } catch (error) {
+      if (!openRef.current) return
       setMessage(formatUnknownError(error, 'Provider connection failed.'))
       setStep('error')
     }
   }
 
-  async function completeOAuth(providerID: string, method: number, code?: string): Promise<void> {
+  async function completeOAuth(
+    providerID: string,
+    method: number,
+    code?: string,
+    generation = ++flowGenerationRef.current
+  ): Promise<void> {
     try {
       await providers.completeOAuthProviderMutation.mutateAsync({ providerID, method, code })
+      if (!isCurrentFlow(generation)) return
       const providerName = selectedProvider?.name ?? providerID
       setMessage(`${providerName} connected.`)
       setStep('success')
     } catch (error) {
+      if (!isCurrentFlow(generation)) return
       setMessage(formatUnknownError(error, 'OAuth callback failed.'))
       setStep('error')
     }
@@ -245,12 +330,19 @@ export function ProviderConnectDialog({
     await completeOAuth(selectedProvider.id, selectedMethodIndex, code)
   }
 
+  function handleOpenChange(nextOpen: boolean): void {
+    if (!nextOpen && isBusy) return
+    if (!nextOpen) flowGenerationRef.current += 1
+    onOpenChange(nextOpen)
+  }
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent
         side="right"
         className="w-full sm:max-w-lg"
         aria-describedby="provider-connect-description"
+        showCloseButton={!isBusy}
       >
         <SheetHeader>
           <SheetTitle>{title}</SheetTitle>
@@ -340,6 +432,14 @@ export function ProviderConnectDialog({
 
     if (providers.authMethodsQuery.isLoading) {
       return <StatusMessage>Loading provider auth methods…</StatusMessage>
+    }
+
+    if (providers.authMethodsQuery.isError || authMethods === null) {
+      return (
+        <StatusMessage tone="error">
+          Provider auth methods are unavailable. Retry after OpenCode can load this provider.
+        </StatusMessage>
+      )
     }
 
     if (step === 'method') {
@@ -456,7 +556,7 @@ export function ProviderConnectDialog({
     return (
       <div className="flex flex-col gap-3">
         <StatusMessage tone="error">{message ?? 'Provider connection failed.'}</StatusMessage>
-        <Button type="button" variant="outline" onClick={resetMethod}>
+        <Button type="button" variant="outline" onClick={retrySelectedMethod}>
           Try again
         </Button>
       </div>

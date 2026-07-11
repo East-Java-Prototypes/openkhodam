@@ -18,10 +18,13 @@ export type OpenCodeProviderAuthMethod = ProviderAuthMethod
 export type OpenCodeProviderOption = {
   id: string
   name: string
-  source: string | null
+  source: OpenCodeProviderSource | null
   modelCount: number
   connected: boolean
+  canDisconnect: boolean
 }
+
+export type OpenCodeProviderSource = 'env' | 'api' | 'config' | 'custom'
 
 export type ConnectApiProviderInput = {
   providerID: string
@@ -39,11 +42,6 @@ export type CompleteOAuthProviderInput = {
   providerID: string
   method: number
   code?: string
-}
-
-const defaultApiAuthMethod: OpenCodeProviderAuthMethod = {
-  type: 'api',
-  label: 'API key'
 }
 
 export function useOpenCodeProviders(directory: string | null | undefined) {
@@ -87,6 +85,7 @@ export function useOpenCodeProviders(directory: string | null | undefined) {
     () => providers.filter((provider) => !provider.connected),
     [providers]
   )
+  const authMethods = authMethodsQuery.data ?? null
 
   const connectApiProviderMutation = useMutation({
     mutationFn: async ({ providerID, key, metadata }: ConnectApiProviderInput) => {
@@ -153,8 +152,9 @@ export function useOpenCodeProviders(directory: string | null | undefined) {
     providers,
     connectedProviders,
     disconnectedProviders,
-    getAuthMethods: (providerID: string): OpenCodeProviderAuthMethod[] =>
-      authMethodsQuery.data?.[providerID] ?? [defaultApiAuthMethod],
+    authMethods,
+    getAuthMethods: (providerID: string): OpenCodeProviderAuthMethod[] | null =>
+      authMethods ? (authMethods[providerID] ?? []) : null,
     connectApiProviderMutation,
     authorizeOAuthProviderMutation,
     completeOAuthProviderMutation,
@@ -195,12 +195,20 @@ function normalizeProviderOptions(
       return {
         id,
         name: getString(provider.name) || id,
-        source: getString(provider.source) || null,
+        source: normalizeProviderSource(provider.source),
         modelCount: Object.keys(models).length,
-        connected: connected.has(id)
+        connected: connected.has(id),
+        canDisconnect: normalizeProviderSource(provider.source) !== 'env'
       }
     })
     .filter((provider) => provider.id.length > 0)
+}
+
+function normalizeProviderSource(value: unknown): OpenCodeProviderSource | null {
+  const source = getString(value)
+  return source === 'env' || source === 'api' || source === 'config' || source === 'custom'
+    ? source
+    : null
 }
 
 function getArray(value: unknown): unknown[] {

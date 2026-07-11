@@ -28,10 +28,6 @@ function SettingsPage(): JSX.Element {
     queryKey: ['google-workspace', 'status'],
     queryFn: window.api.getGoogleWorkspaceStatus
   })
-  const openedProjectFoldersQuery = useQuery({
-    queryKey: ['projects', 'opened-folders', 'settings'],
-    queryFn: window.api.listOpenedProjectFolders
-  })
   const rendererHttpHealthQuery = useQuery({
     queryKey: ['opencode', 'renderer-http-health', status.updatedAt],
     queryFn: async (): Promise<RendererHttpHealth> => ({
@@ -76,8 +72,6 @@ function SettingsPage(): JSX.Element {
     rendererHttpHealthQuery.data,
     rendererHttpHealthQuery.error
   )
-  const providerDirectory = openedProjectFoldersQuery.data?.[0]?.directory ?? null
-
   return (
     <section
       className="flex min-h-0 min-w-0 flex-col overflow-hidden"
@@ -108,7 +102,7 @@ function SettingsPage(): JSX.Element {
             onDisconnect={() => disconnectGoogleWorkspace.mutate()}
           />
 
-          <ProvidersSection directory={providerDirectory} />
+          <ProvidersSection />
 
           <OpenCodeServerView
             status={status}

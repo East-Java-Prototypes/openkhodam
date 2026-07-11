@@ -2255,10 +2255,14 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   await expect(appWindow.getByText('Renderer HTTP', { exact: true })).toBeVisible()
   await expect(appWindow.getByRole('button', { name: /^(Restart|Restarting)$/ })).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
-  await expect(appWindow.getByRole('heading', { name: 'Providers' })).toBeVisible()
+  await expect(appWindow.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible()
   await expect(appWindow.getByText('Connected Fake Provider')).toBeVisible()
-  await expect(appWindow.getByText('Disconnected Provider')).toBeVisible()
-  await expect(appWindow.getByText('OAuth Provider')).toBeVisible()
+  await expect(
+    appWindow.getByRole('heading', { name: 'Popular providers', exact: true })
+  ).toBeVisible()
+  await expect(
+    appWindow.getByRole('button', { name: 'View all providers', exact: true })
+  ).toBeVisible()
   await expect(
     appWindow.getByText(googleWorkspaceNotConfiguredMessage, { exact: true })
   ).toBeVisible()
@@ -2287,6 +2291,7 @@ test('connects and disconnects OpenCode API-key providers from settings without 
   )
   await expect(providersSection).toBeVisible()
   await expect(providersSection.getByText('Connected Fake Provider')).toBeVisible()
+  await providersSection.getByRole('button', { name: 'View all providers', exact: true }).click()
   await expect(providersSection.getByText('Disconnected Provider')).toBeVisible()
 
   const disconnectedRow = providersSection
@@ -2297,7 +2302,6 @@ test('connects and disconnects OpenCode API-key providers from settings without 
 
   const dialog = appWindow.getByRole('dialog', { name: 'Connect Disconnected Provider' })
   await expect(dialog).toBeVisible()
-  await dialog.getByRole('button', { name: /API key/ }).click()
   await dialog.getByLabel('Workspace label').fill('Fixture workspace')
   await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
   await dialog.getByRole('button', { name: 'US' }).click()
@@ -2335,7 +2339,10 @@ test('connects an OpenCode OAuth provider from settings using the fixture OAuth 
   const providersSection = appWindow.locator(
     'section[aria-labelledby="opencode-providers-heading"]'
   )
-  const oauthRow = providersSection.getByRole('listitem').filter({ hasText: 'OAuth Provider' })
+  await providersSection.getByRole('button', { name: 'View all providers', exact: true }).click()
+  const oauthRow = providersSection
+    .getByLabel('All OpenCode providers')
+    .locator('[data-provider-id="oauth-provider"]')
   await expect(oauthRow.getByText('Disconnected', { exact: true })).toBeVisible()
   await oauthRow.getByRole('button', { name: 'Connect provider', exact: true }).click()
 
@@ -2353,10 +2360,14 @@ test('connects an OpenCode OAuth provider from settings using the fixture OAuth 
   await dialog.getByRole('button', { name: 'Complete OAuth', exact: true }).click()
   await expect(dialog.getByText('OAuth Provider connected.', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+  const connectedOauthRow = providersSection
+    .getByRole('heading', { name: 'Connected providers', exact: true })
+    .locator('..')
+    .locator('[data-provider-id="oauth-provider"]')
   await expect(
-    oauthRow.getByRole('button', { name: 'Disconnect provider', exact: true })
+    connectedOauthRow.getByRole('button', { name: 'Disconnect provider', exact: true })
   ).toBeVisible()
-  await expect(oauthRow.getByText('Connected', { exact: true })).toBeVisible()
+  await expect(connectedOauthRow.getByText('Connected', { exact: true })).toBeVisible()
 })
 
 test('opens provider onboarding from the empty model picker and refreshes connected models', async ({
@@ -2380,7 +2391,6 @@ test('opens provider onboarding from the empty model picker and refreshes connec
   await providerDialog.getByRole('button', { name: /Disconnected Provider/ }).click()
   const dialog = appWindow.getByRole('dialog', { name: 'Connect Disconnected Provider' })
   await expect(dialog).toBeVisible()
-  await dialog.getByRole('button', { name: /API key/ }).click()
   await dialog.getByLabel('Workspace label').fill('CTA workspace')
   await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
   await dialog.getByRole('button', { name: 'US' }).click()
@@ -2404,6 +2414,267 @@ test('opens provider onboarding from the empty model picker and refreshes connec
       text: prompt,
       model: { providerID: 'offline-provider', modelID: 'offline-model' }
     })
+})
+
+test('keeps environment-managed providers read-only and discovers all providers by search', async ({
+  appWindow
+}) => {
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  const environmentRow = providersSection
+    .getByRole('listitem')
+    .filter({ hasText: 'Environment Provider' })
+  await expect(environmentRow.getByText('Managed by environment', { exact: true })).toBeVisible()
+  await expect(environmentRow.getByRole('button', { name: /Disconnect/ })).toHaveCount(0)
+
+  await providersSection.getByRole('button', { name: 'View all providers', exact: true }).click()
+  await providersSection.getByLabel('Search providers').fill('oauth')
+  await expect(providersSection.getByText('OAuth Provider', { exact: true })).toBeVisible()
+  await expect(providersSection.getByText('Disconnected Provider', { exact: true })).toHaveCount(0)
+})
+
+test('does not invent provider auth methods when OpenCode returns no methods', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  fakeOpenCodeServer.setProviderAuthMode('empty')
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await providersSection.getByRole('button', { name: 'View all providers', exact: true }).click()
+  await providersSection
+    .getByLabel('All OpenCode providers')
+    .getByRole('listitem')
+    .filter({ hasText: 'Disconnected Provider' })
+    .getByRole('button', { name: 'Connect provider', exact: true })
+    .click()
+
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Disconnected Provider' })
+  await expect(
+    dialog.getByText('No auth methods found for this provider.', { exact: true })
+  ).toBeVisible()
+  await expect(dialog.getByLabel('API key')).toHaveCount(0)
+  expect(fakeOpenCodeServer.getProviderAuthRequests()).toEqual([])
+})
+
+test('blocks provider connection when OpenCode provider auth fails', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  fakeOpenCodeServer.setProviderAuthMode('error')
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await providersSection.getByRole('button', { name: 'View all providers', exact: true }).click()
+  await providersSection
+    .getByLabel('All OpenCode providers')
+    .getByRole('listitem')
+    .filter({ hasText: 'Disconnected Provider' })
+    .getByRole('button', { name: 'Connect provider', exact: true })
+    .click()
+
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Disconnected Provider' })
+  await expect(dialog.getByText(/Provider auth methods are unavailable/)).toBeVisible()
+  await expect(dialog.getByLabel('API key')).toHaveCount(0)
+  expect(fakeOpenCodeServer.getProviderAuthRequests()).toEqual([])
+})
+
+test('auto-selects a sole OpenCode auth method and sends exact prompt metadata', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await providersSection.getByRole('button', { name: 'Connect provider', exact: true }).click()
+
+  const providerDialog = appWindow.getByRole('dialog', { name: 'Connect OpenCode provider' })
+  await providerDialog.getByRole('button', { name: /Connected Fake Provider/ }).click()
+  const singletonDialog = appWindow.getByRole('dialog', { name: 'Connect Connected Fake Provider' })
+  await expect(singletonDialog.getByLabel('API key')).toBeVisible()
+  await singletonDialog.getByLabel('API key').fill('singleton-key')
+  await singletonDialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(
+    singletonDialog.getByText('Connected Fake Provider connected.', { exact: true })
+  ).toBeVisible()
+  expect(fakeOpenCodeServer.getProviderAuthRequests()).toContainEqual({
+    providerID: 'fake-provider',
+    key: 'singleton-key',
+    metadata: null
+  })
+
+  await singletonDialog.getByRole('button', { name: 'Done', exact: true }).click()
+  await providersSection.getByRole('button', { name: 'View all providers', exact: true }).click()
+  const offlineRow = providersSection
+    .getByLabel('All OpenCode providers')
+    .locator('[data-provider-id="offline-provider"]')
+  await offlineRow.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Disconnected Provider' })
+  await dialog.getByLabel('Workspace label').fill('Exact workspace')
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
+  await dialog.getByRole('button', { name: 'EU' }).click()
+  await dialog.getByLabel('API key').fill('metadata-key')
+  await dialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(dialog.getByText('Disconnected Provider connected.', { exact: true })).toBeVisible()
+  expect(fakeOpenCodeServer.getProviderAuthRequests()).toContainEqual({
+    providerID: 'offline-provider',
+    key: 'metadata-key',
+    metadata: { workspace: 'Exact workspace', region: 'eu' }
+  })
+})
+
+test('completes OAuth auto without prompting for a callback code', async ({
+  appWindow,
+  electronApp
+}) => {
+  await installProviderOAuthCapture(electronApp)
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await providersSection.getByRole('button', { name: 'View all providers', exact: true }).click()
+  await providersSection
+    .getByLabel('All OpenCode providers')
+    .locator('[data-provider-id="oauth-provider"]')
+    .getByRole('button', { name: 'Connect provider', exact: true })
+    .click()
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect OAuth Provider' })
+  await dialog.getByRole('button', { name: 'OAuth auto' }).click()
+  await expect(dialog.getByText('OAuth Provider connected.', { exact: true })).toBeVisible()
+  await expect(dialog.getByLabel('Authorization code')).toHaveCount(0)
+})
+
+test('auto-enters prompted singleton API auth using the original method index', async ({
+  appWindow
+}) => {
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await providersSection.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  const picker = appWindow.getByRole('dialog', { name: 'Connect OpenCode provider' })
+  await picker.getByRole('button', { name: /Singleton Prompt Provider/ }).click()
+
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Singleton Prompt Provider' })
+  await expect(dialog.getByLabel('Tenant name')).toBeVisible()
+  await expect(dialog.getByRole('list', { name: 'Provider auth methods' })).toHaveCount(0)
+  await dialog.getByLabel('Tenant name').fill('fixture-tenant')
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
+  await expect(dialog.getByLabel('API key')).toBeVisible()
+})
+
+test('auto-starts singleton OAuth auth without a method picker', async ({
+  appWindow,
+  electronApp
+}) => {
+  await installProviderOAuthCapture(electronApp)
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await providersSection.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  const picker = appWindow.getByRole('dialog', { name: 'Connect OpenCode provider' })
+  await picker.getByRole('button', { name: /Singleton OAuth Provider/ }).click()
+
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Singleton OAuth Provider' })
+  await expect(
+    dialog.getByText('Singleton OAuth Provider connected.', { exact: true })
+  ).toBeVisible()
+  await expect(dialog.getByRole('list', { name: 'Provider auth methods' })).toHaveCount(0)
+  await expect
+    .poll(() =>
+      electronApp.evaluate(() => (globalThis as any).__providerOAuthCapture?.authUrl ?? null)
+    )
+    .toBe('https://auth.example.test/singleton-oauth-provider?method=0')
+})
+
+test('unmounting the provider dialog cancels delayed OAuth continuations', async ({
+  appWindow,
+  electronApp,
+  fakeOpenCodeServer
+}) => {
+  fakeOpenCodeServer.armOAuthAuthorizeGate('oauth-provider')
+  await installProviderOAuthCapture(electronApp)
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await providersSection.getByRole('button', { name: 'View all providers', exact: true }).click()
+  await providersSection
+    .getByLabel('All OpenCode providers')
+    .locator('[data-provider-id="oauth-provider"]')
+    .getByRole('button', { name: 'Connect provider', exact: true })
+    .click()
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect OAuth Provider' })
+  await dialog.getByRole('button', { name: 'OAuth auto' }).click()
+  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled()
+  await fakeOpenCodeServer.waitForOAuthAuthorize('oauth-provider')
+  await appWindow.evaluate(() => {
+    window.location.hash = '#/'
+  })
+  await expect(appWindow.getByRole('heading', { name: 'Settings' })).toHaveCount(0)
+  await expect(dialog).toHaveCount(0)
+  fakeOpenCodeServer.releaseOAuthAuthorize('oauth-provider')
+  await fakeOpenCodeServer.waitForOAuthAuthorizeSettlement('oauth-provider')
+  await expect
+    .poll(() =>
+      electronApp.evaluate(() => (globalThis as any).__providerOAuthCapture?.authUrl ?? null)
+    )
+    .toBe(null)
+  expect(fakeOpenCodeServer.getOAuthRequests()).toEqual([
+    { providerID: 'oauth-provider', type: 'authorize' }
+  ])
+  expect(fakeOpenCodeServer.getConnectedProviders()).not.toContain('oauth-provider')
+})
+
+test('retries provider auth after a mutation failure without stale state', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  fakeOpenCodeServer.setProviderConnectMode('fail-once')
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  await providersSection.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  const picker = appWindow.getByRole('dialog', { name: 'Connect OpenCode provider' })
+  await picker.getByRole('button', { name: /Connected Fake Provider/ }).click()
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Connected Fake Provider' })
+  await dialog.getByLabel('API key').fill('retry-key')
+  await dialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(
+    dialog.getByText('Fixture provider connection failed.', { exact: true })
+  ).toBeVisible()
+  await dialog.getByRole('button', { name: 'Try again', exact: true }).click()
+  await expect(dialog.getByLabel('API key')).toHaveValue('')
+  await dialog.getByLabel('API key').fill('retry-key')
+  await dialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(
+    dialog.getByText('Connected Fake Provider connected.', { exact: true })
+  ).toBeVisible()
+  expect(fakeOpenCodeServer.getProviderAuthRequests()).toEqual([
+    { providerID: 'fake-provider', key: 'retry-key', metadata: null },
+    { providerID: 'fake-provider', key: 'retry-key', metadata: null }
+  ])
 })
 
 test.describe('Google Workspace settings gating', () => {
