@@ -891,7 +891,18 @@ test('maximizes and collapses/restores the chat action pane', async ({
     const titlebar = paneControls(appWindow)
     const collapseSidebarButton = titlebar.getByRole('button', { name: 'Collapse project sidebar' })
     const collapseActionPaneButton = titlebar.getByRole('button', { name: 'Collapse action pane' })
-    await expect(actionPane).toBeVisible()
+    const linkedDocToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc Fixture linked Google Doc',
+      exact: true
+    })
+    const linkedDocPreviewToggle = actionPane.getByRole('button', {
+      name: 'Toggle linked Google Doc preview Fixture linked Google Doc',
+      exact: true
+    })
+    const linkedDocOpenLink = actionPane.getByRole('link', {
+      name: 'Open linked Google Doc Fixture linked Google Doc in Google Docs'
+    })
+    await expect(linkedDocToggle).toBeVisible()
     const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
     const workspaceBox = await elementBox(
       appWindow.locator('[id="active-pane-panel"]'),
@@ -910,18 +921,6 @@ test('maximizes and collapses/restores the chat action pane', async ({
       appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
     ).toHaveCount(0)
     await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toHaveCount(0)
-    const linkedDocToggle = actionPane.getByRole('button', {
-      name: 'Toggle linked Google Doc Fixture linked Google Doc',
-      exact: true
-    })
-    const linkedDocPreviewToggle = actionPane.getByRole('button', {
-      name: 'Toggle linked Google Doc preview Fixture linked Google Doc',
-      exact: true
-    })
-    const linkedDocOpenLink = actionPane.getByRole('link', {
-      name: 'Open linked Google Doc Fixture linked Google Doc in Google Docs'
-    })
-    await expect(linkedDocToggle).toBeVisible()
     await expect(linkedDocPreviewToggle).toBeVisible()
     await expect(actionPane.getByText('Doc ID: fixture-linked-doc')).toHaveCount(0)
     await expect(linkedDocOpenLink).toBeVisible()
