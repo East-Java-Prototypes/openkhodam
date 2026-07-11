@@ -2219,7 +2219,11 @@ test('shows the real live events footer heartbeat without fake SSE data', async 
   await expectFooterHeartbeat(appWindow, projectHeartbeatStatus(appWindow))
 })
 
-test('shows the real OpenCode sidecar settings surface', async ({ appWindow, electronApp }) => {
+test('shows the real OpenCode sidecar settings surface', async ({
+  appWindow,
+  electronApp,
+  fakeOpenCodeServer
+}) => {
   await waitForChatShell(appWindow)
 
   const userDataPath = await electronApp.evaluate(({ app }) => app.getPath('userData'))
@@ -2257,10 +2261,20 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
   await expect(appWindow.getByRole('heading', { name: 'Google Workspace' })).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible()
   await expect(appWindow.getByText('Connected Fake Provider')).toBeVisible()
+  await expect(appWindow.getByLabel(/Provider scope/i)).toHaveCount(0)
+  await expect(appWindow.getByRole('combobox', { name: /provider scope/i })).toHaveCount(0)
   const providerSearch = appWindow.getByLabel('Search providers')
   await expect(providerSearch).toBeVisible()
   await expect(providerSearch).not.toBeFocused()
   await expect(appWindow.getByLabel('All OpenCode providers')).toBeVisible()
+  await expect
+    .poll(() => fakeOpenCodeServer.getProviderManagementRequests())
+    .toEqual(
+      expect.arrayContaining([
+        { endpoint: 'list', directory: null },
+        { endpoint: 'auth', directory: null }
+      ])
+    )
   await expect(
     appWindow.getByText(googleWorkspaceNotConfiguredMessage, { exact: true })
   ).toBeVisible()
@@ -2467,7 +2481,7 @@ test('keeps environment-managed providers read-only and discovers all providers 
   await expect(providersSection.getByText('Disconnected Provider', { exact: true })).toHaveCount(0)
 })
 
-test('does not invent provider auth methods when OpenCode returns no methods', async ({
+test('uses generic API-key auth when OpenCode returns an empty auth method map', async ({
   appWindow,
   fakeOpenCodeServer
 }) => {
@@ -2485,11 +2499,68 @@ test('does not invent provider auth methods when OpenCode returns no methods', a
     .click()
 
   const dialog = appWindow.getByRole('dialog', { name: 'Connect Disconnected Provider' })
-  await expect(
-    dialog.getByText('No auth methods found for this provider.', { exact: true })
-  ).toBeVisible()
-  await expect(dialog.getByLabel('API key')).toHaveCount(0)
-  expect(fakeOpenCodeServer.getProviderAuthRequests()).toEqual([])
+  const apiKey = dialog.getByLabel('API key')
+  await expect(apiKey).toBeFocused()
+  await apiKey.fill('empty-map-generic-key')
+  await dialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(dialog.getByText('Disconnected Provider connected.', { exact: true })).toBeVisible()
+  expect(fakeOpenCodeServer.getProviderAuthRequests()).toContainEqual({
+    providerID: 'offline-provider',
+    key: 'empty-map-generic-key',
+    metadata: null
+  })
+})
+
+test('uses generic API-key auth for OpenCode Go without a provider-specific auth method', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  const openCodeGoRow = providersSection.locator('[data-provider-id="opencode-go"]')
+  await openCodeGoRow.getByRole('button', { name: 'Connect provider', exact: true }).click()
+
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect OpenCode Go' })
+  const apiKey = dialog.getByLabel('API key')
+  await expect(apiKey).toBeFocused()
+  await apiKey.fill('opencode-go-generic-key')
+  await dialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(dialog.getByText('OpenCode Go connected.', { exact: true })).toBeVisible()
+  expect(fakeOpenCodeServer.getProviderAuthRequests()).toContainEqual({
+    providerID: 'opencode-go',
+    key: 'opencode-go-generic-key',
+    metadata: null
+  })
+})
+
+test('uses generic API-key auth when OpenCode returns an explicit empty method array', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await waitForChatShell(appWindow)
+  await projectSettingsLink(appWindow).click()
+
+  const providersSection = appWindow.locator(
+    'section[aria-labelledby="opencode-providers-heading"]'
+  )
+  const emptyMethodsRow = providersSection.locator('[data-provider-id="empty-methods-provider"]')
+  await emptyMethodsRow.getByRole('button', { name: 'Connect provider', exact: true }).click()
+
+  const dialog = appWindow.getByRole('dialog', { name: 'Connect Empty Methods Provider' })
+  const apiKey = dialog.getByLabel('API key')
+  await expect(apiKey).toBeFocused()
+  await apiKey.fill('explicit-empty-methods-key')
+  await dialog.getByRole('button', { name: 'Connect provider', exact: true }).click()
+  await expect(dialog.getByText('Empty Methods Provider connected.', { exact: true })).toBeVisible()
+  expect(fakeOpenCodeServer.getProviderAuthRequests()).toContainEqual({
+    providerID: 'empty-methods-provider',
+    key: 'explicit-empty-methods-key',
+    metadata: null
+  })
 })
 
 test('blocks provider connection when OpenCode provider auth fails', async ({

@@ -4,6 +4,7 @@ export type FakeOpenCodeServer = {
   url: string
   getPromptRequests: () => FakePromptRequest[]
   getRequestEvents: () => string[]
+  getProviderManagementRequests: () => FakeProviderManagementRequest[]
   getConnectedProviders: () => string[]
   setConnectedProviders: (providerIDs: string[]) => void
   setProviderAuthMode: (mode: FakeProviderAuthMode) => void
@@ -24,6 +25,11 @@ export type FakeProviderAuthRequest = {
   providerID: string
   key: string
   metadata: Record<string, string> | null
+}
+
+export type FakeProviderManagementRequest = {
+  endpoint: 'list' | 'auth'
+  directory: string | null
 }
 
 export type FakeOAuthRequest = { providerID: string; type: 'authorize' | 'callback' }
@@ -75,6 +81,10 @@ const environmentProviderID = 'environment-provider'
 const environmentModelID = 'environment-model'
 const singletonPromptProviderID = 'singleton-prompt-provider'
 const singletonOAuthProviderID = 'singleton-oauth-provider'
+const openCodeGoProviderID = 'opencode-go'
+const openCodeGoModelID = 'opencode-go-model'
+const emptyMethodsProviderID = 'empty-methods-provider'
+const emptyMethodsModelID = 'empty-methods-model'
 const structuredUserPrompt = 'Structured fixture user prompt with **literal user markdown**'
 const structuredAssistantMarkdownText = [
   'Inspecting project files.',
@@ -165,6 +175,26 @@ const providerCatalog = [
     env: [],
     options: {},
     models: {}
+  },
+  {
+    id: openCodeGoProviderID,
+    name: 'OpenCode Go',
+    source: 'api',
+    env: ['OPENCODE_GO_API_KEY'],
+    options: {},
+    models: {
+      [openCodeGoModelID]: createProviderModel(openCodeGoModelID, 'OpenCode Go Fixture Model')
+    }
+  },
+  {
+    id: emptyMethodsProviderID,
+    name: 'Empty Methods Provider',
+    source: 'api',
+    env: [],
+    options: {},
+    models: {
+      [emptyMethodsModelID]: createProviderModel(emptyMethodsModelID, 'Empty Methods Fixture Model')
+    }
   }
 ]
 const providerAuthMethods = {
@@ -210,11 +240,13 @@ const providerAuthMethods = {
       ]
     }
   ],
-  [singletonOAuthProviderID]: [{ type: 'oauth', label: 'Singleton OAuth auto' }]
+  [singletonOAuthProviderID]: [{ type: 'oauth', label: 'Singleton OAuth auto' }],
+  [emptyMethodsProviderID]: []
 }
 const connectedProviderIDs = new Set<string>()
 const pendingOAuth = new Map<string, { method: 'auto' | 'code'; methodIndex: number }>()
 const providerAuthRequests: FakeProviderAuthRequest[] = []
+const providerManagementRequests: FakeProviderManagementRequest[] = []
 const oauthRequests: FakeOAuthRequest[] = []
 let providerAuthMode: FakeProviderAuthMode = 'normal'
 let providerConnectMode: FakeProviderConnectMode = 'normal'
@@ -284,9 +316,17 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       return json(response, projectForDirectory(url.searchParams.get('directory') ?? directory))
     }
     if (request.method === 'GET' && url.pathname === '/provider') {
+      providerManagementRequests.push({
+        endpoint: 'list',
+        directory: url.searchParams.get('directory')
+      })
       return json(response, currentProviders())
     }
     if (request.method === 'GET' && url.pathname === '/provider/auth') {
+      providerManagementRequests.push({
+        endpoint: 'auth',
+        directory: url.searchParams.get('directory')
+      })
       if (providerAuthMode === 'error') {
         return json(response, { message: 'Fixture provider auth is unavailable.' }, 500)
       }
@@ -492,6 +532,8 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     url: `http://127.0.0.1:${address.port}`,
     getPromptRequests: () => [...promptRequests],
     getRequestEvents: () => [...requestEvents],
+    getProviderManagementRequests: () =>
+      providerManagementRequests.map((request) => ({ ...request })),
     getProviderAuthRequests: () => providerAuthRequests.map((request) => ({ ...request })),
     getOAuthRequests: () => oauthRequests.map((request) => ({ ...request })),
     armOAuthAuthorizeGate: (providerID) => {
@@ -600,6 +642,7 @@ function resetState(): void {
   connectedProviderIDs.add(connectedProviderID)
   connectedProviderIDs.add(environmentProviderID)
   providerAuthRequests.length = 0
+  providerManagementRequests.length = 0
   oauthRequests.length = 0
   releaseOAuthAuthorizeGates()
   providerAuthMode = 'normal'

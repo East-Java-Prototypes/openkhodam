@@ -44,17 +44,14 @@ export type CompleteOAuthProviderInput = {
   code?: string
 }
 
-export function useOpenCodeProviders(directory: string | null | undefined) {
+export function useOpenCodeProviders() {
   const { status, statusQuery, connection, connectionQuery, client } = useOpenCodeSdk()
   const queryClient = useQueryClient()
-  const providerDirectory = directory ?? null
 
   const providersQuery = useQuery({
-    queryKey: openCodeQueryKeys.providerList(status, providerDirectory),
+    queryKey: openCodeQueryKeys.providerList(status),
     queryFn: async (): Promise<ProviderListResponse> => {
-      const response = await client!.provider.list(
-        providerDirectory ? { directory: providerDirectory } : undefined
-      )
+      const response = await client!.provider.list()
       if (response.error) throw response.error
       return response.data!
     },
@@ -62,11 +59,9 @@ export function useOpenCodeProviders(directory: string | null | undefined) {
   })
 
   const authMethodsQuery = useQuery({
-    queryKey: openCodeQueryKeys.providerAuthMethodsFor(status, providerDirectory),
+    queryKey: openCodeQueryKeys.providerAuthMethodsFor(status),
     queryFn: async (): Promise<ProviderAuthResponse> => {
-      const response = await client!.provider.auth(
-        providerDirectory ? { directory: providerDirectory } : undefined
-      )
+      const response = await client!.provider.auth()
       if (response.error) throw response.error
       return response.data!
     },
@@ -108,7 +103,6 @@ export function useOpenCodeProviders(directory: string | null | undefined) {
       const response = await client.provider.oauth.authorize({
         providerID,
         method,
-        ...(providerDirectory ? { directory: providerDirectory } : {}),
         ...(inputs && Object.keys(inputs).length > 0 ? { inputs } : {})
       })
       if (response.error) throw response.error
@@ -123,7 +117,6 @@ export function useOpenCodeProviders(directory: string | null | undefined) {
       const response = await client.provider.oauth.callback({
         providerID,
         method,
-        ...(providerDirectory ? { directory: providerDirectory } : {}),
         ...(code ? { code } : {})
       })
       if (response.error) throw response.error
@@ -153,8 +146,11 @@ export function useOpenCodeProviders(directory: string | null | undefined) {
     connectedProviders,
     disconnectedProviders,
     authMethods,
-    getAuthMethods: (providerID: string): OpenCodeProviderAuthMethod[] | null =>
-      authMethods ? (authMethods[providerID] ?? []) : null,
+    getAuthMethods: (providerID: string): OpenCodeProviderAuthMethod[] | null => {
+      if (!authMethods) return null
+      const methods = authMethods[providerID] ?? []
+      return methods.length > 0 ? methods : [{ type: 'api', label: 'API key' }]
+    },
     connectApiProviderMutation,
     authorizeOAuthProviderMutation,
     completeOAuthProviderMutation,
@@ -177,7 +173,8 @@ async function refreshOpenCodeProviderState(
   } finally {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: openCodeQueryKeys.providerLists() }),
-      queryClient.invalidateQueries({ queryKey: openCodeQueryKeys.providerAuthMethods() })
+      queryClient.invalidateQueries({ queryKey: openCodeQueryKeys.providerAuthMethods() }),
+      queryClient.invalidateQueries({ queryKey: openCodeQueryKeys.all })
     ])
   }
 }

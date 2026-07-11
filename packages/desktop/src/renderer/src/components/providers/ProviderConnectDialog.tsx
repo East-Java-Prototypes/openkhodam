@@ -33,15 +33,13 @@ type ProviderConnectDialogStep =
 export function ProviderConnectDialog({
   open,
   onOpenChange,
-  directory,
   providerID
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  directory?: string | null
   providerID: string
 }): JSX.Element {
-  const providers = useOpenCodeProviders(directory)
+  const providers = useOpenCodeProviders()
   const [selectedMethodIndex, setSelectedMethodIndex] = useState<number | null>(null)
   const [step, setStep] = useState<ProviderConnectDialogStep>('method')
   const [promptInputs, setPromptInputs] = useState<Record<string, string>>({})
@@ -142,6 +140,12 @@ export function ProviderConnectDialog({
     ): Promise<void> => {
       if (method.type === 'api') {
         setStep('api')
+        return
+      }
+
+      if (method.type !== 'oauth') {
+        setMessage(`Unsupported provider auth method: ${method.type}.`)
+        setStep('error')
         return
       }
 
@@ -691,7 +695,8 @@ function promptMatches(prompt: ProviderAuthPrompt, inputs: Record<string, string
 
 function methodLabel(method: OpenCodeProviderAuthMethod): string {
   if (method.type === 'api') return method.label || 'API key'
-  return method.label || 'OAuth'
+  if (method.type === 'oauth') return method.label || 'OAuth'
+  return method.label || 'Unsupported auth method'
 }
 
 function emptyRecordToUndefined(value: Record<string, string>): Record<string, string> | undefined {
