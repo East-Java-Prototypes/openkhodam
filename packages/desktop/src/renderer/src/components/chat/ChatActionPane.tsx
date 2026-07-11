@@ -33,7 +33,7 @@ export function ChatActionPane({
 }): JSX.Element {
   return (
     <aside
-      className="flex h-full min-h-0 min-w-0 flex-col border-l bg-sidebar/40 text-foreground"
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-l bg-sidebar/40 text-foreground"
       role="complementary"
       aria-label="Action pane"
     >
@@ -61,10 +61,10 @@ function LinkedGoogleArtifactList({
 }): JSX.Element {
   return (
     <section
-      className="min-h-0 flex-1 overflow-y-auto p-4"
+      className="flex min-h-0 w-full flex-1 flex-col overflow-y-auto"
       aria-label="Linked Google Workspace artifacts"
     >
-      <div className="flex flex-col gap-2">
+      <div className="flex min-h-full flex-col gap-2">
         {linkedGoogleArtifacts.map((artifact) => (
           <LinkedGoogleArtifactItem key={`${artifact.type}:${artifact.id}`} artifact={artifact} />
         ))}
@@ -82,7 +82,7 @@ function LinkedGoogleArtifactItem({ artifact }: { artifact: LinkedGoogleArtifact
 
   return (
     <Collapsible
-      className="border bg-background/60"
+      className="min-h-0 border bg-background/60 data-[open]:flex-1 data-[open]:flex data-[open]:flex-col"
       aria-label={`Linked ${display.singularName} ${title}`}
     >
       <div className="flex items-stretch">
@@ -128,7 +128,7 @@ function LinkedGoogleArtifactItem({ artifact }: { artifact: LinkedGoogleArtifact
           ) : null}
         </div>
       </div>
-      <CollapsibleContent className="border-t">
+      <CollapsibleContent className="flex min-h-0 flex-1 flex-col border-t">
         <LinkedGoogleArtifactBrowserPreview
           display={display}
           title={title}
@@ -152,11 +152,15 @@ function LinkedGoogleArtifactBrowserPreview({
   const unavailableMessage = `No ${display.productName} URL was stored, so no browser preview can be loaded.`
 
   return (
-    <section className="overflow-hidden bg-background/60" role="region" aria-label={label}>
+    <section
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background/60"
+      role="region"
+      aria-label={label}
+    >
       {sourceUrl ? (
         <webview
           aria-label={label}
-          className="h-[32rem] w-full bg-background"
+          className="h-full min-h-0 w-full flex-1 bg-background"
           data-testid={display.browserPreviewTestId}
           src={sourceUrl}
           title={label}

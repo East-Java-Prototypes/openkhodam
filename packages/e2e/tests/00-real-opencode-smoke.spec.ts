@@ -23,8 +23,6 @@ test('sends a prompt through the real OpenCode sidecar to a local fake provider'
     modelID: realOpenCode.modelID,
     modelLabel: realOpenCode.modelLabel
   })
-  await restoreChatSurface(appWindow)
-
   const composer = appWindow.getByRole('form', { name: 'Chat prompt' })
   await expect(composer).toBeVisible()
   await expectReadyModelPicker(appWindow, {
@@ -47,7 +45,6 @@ test('sends a prompt through the real OpenCode sidecar to a local fake provider'
   await appWindow.reload({ waitUntil: 'domcontentloaded' })
   await waitForConnectedSidecar(appWindow)
   await expect(appWindow).toHaveURL(sessionRoute)
-  await restoreChatSurface(appWindow)
   await expect(messages.getByText(firstPrompt, { exact: true })).toBeVisible({ timeout: 45_000 })
   await expect(messages.getByText(realOpenCode.assistantResponse, { exact: true })).toBeVisible({
     timeout: 45_000
@@ -145,20 +142,6 @@ async function sendPrompt(composer: ReturnType<Page['getByRole']>, prompt: strin
   await composer.getByLabel('Message OpenKhodam').fill(prompt)
   await expect(composer.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
   await composer.getByRole('button', { name: 'Send', exact: true }).click()
-}
-
-async function restoreChatSurface(page: Page): Promise<void> {
-  const collapseActionPaneButton = page
-    .getByRole('toolbar', { name: 'Pane controls' })
-    .getByRole('button', { name: 'Collapse action pane' })
-
-  await expect(collapseActionPaneButton).toBeVisible()
-  await collapseActionPaneButton.click()
-  await expect(
-    page
-      .getByRole('toolbar', { name: 'Pane controls' })
-      .getByRole('button', { name: 'Restore action pane' })
-  ).toBeVisible()
 }
 
 async function waitForSessionRoute(page: Page): Promise<string> {

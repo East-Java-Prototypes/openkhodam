@@ -278,7 +278,7 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('navigation', { name: 'Projects' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
   await expect(chatActionPane(page)).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'No chat selected' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toHaveCount(0)
 }
 
@@ -475,7 +475,6 @@ async function openSeededDeterministicChat(page: Page): Promise<void> {
   await expect(page.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+\/sessions\/[^/]+$/
   )
-  await restoreChatSurface(page)
   await expect(page.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
   await expect(page.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
   await expect(page.getByLabel('OpenCode model')).toHaveValue(
@@ -489,20 +488,7 @@ async function openStructuredFixtureChat(page: Page): Promise<void> {
   await projectChatLink(page).filter({ hasText: 'Fake Project' }).click()
   await expectOpenedProjectRouteResolved(page)
   await sessionChatLink(page).filter({ hasText: 'Structured fixture chat' }).click()
-  await restoreChatSurface(page)
   await expect(page.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
-}
-
-async function restoreChatSurface(page: Page): Promise<void> {
-  const collapseActionPaneButton = paneControls(page).getByRole('button', {
-    name: 'Collapse action pane'
-  })
-
-  if (await collapseActionPaneButton.isVisible()) await collapseActionPaneButton.click()
-
-  await expect(
-    paneControls(page).getByRole('button', { name: 'Restore action pane' })
-  ).toBeVisible()
 }
 
 async function sendPrompt(page: Page, prompt: string): Promise<void> {
@@ -636,7 +622,6 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   await expect(
     chatActionPane(appWindow).getByText(/Google Docs and Sheets linked to this chat/)
   ).toBeVisible()
-  await restoreChatSurface(appWindow)
   const transcript = messageTranscript(appWindow)
   await expect(transcript).toBeVisible()
   await expect(transcript.getByText('Select a project to view sessions.')).toHaveCount(0)
@@ -710,7 +695,6 @@ test('renders basename project labels and opens the project new-conversation she
     /\/projects\/dir-[^/]+\/sessions\/seeded-session$/
   )
   await expect(chatActionPane(appWindow)).toBeVisible()
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
 
   await newConversationLink.click()
@@ -720,7 +704,6 @@ test('renders basename project labels and opens the project new-conversation she
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.not.toContain(
     'showActiveProjectSessions'
   )
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expectChatComposerWithoutHelperCopy(appWindow)
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
@@ -758,7 +741,6 @@ test('resizes and collapses/restores the project sidebar', async ({ appWindow, e
       message: 'project sidebar should resize beyond the former 32rem cap'
     })
     .toBeGreaterThan(Math.round(formerSidebarMaxWidth) + 20)
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
 
   await collapseSidebarButton.click()
@@ -832,7 +814,6 @@ test('toggles active project sessions without collapsing the project sidebar', a
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+\/sessions\/seeded-session$/
   )
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
 
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
@@ -873,10 +854,7 @@ test('toggles active project sessions without collapsing the project sidebar', a
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
 })
 
-test('maximizes and collapses/restores the chat action pane', async ({
-  appWindow,
-  electronApp
-}) => {
+test('resizes and collapses/restores the chat action pane', async ({ appWindow, electronApp }) => {
   const restoreProjectArtifacts = await seedSessionLinkedDocs('structured-session')
 
   try {
@@ -903,7 +881,10 @@ test('maximizes and collapses/restores the chat action pane', async ({
       name: 'Open linked Google Doc Fixture linked Google Doc in Google Docs'
     })
     await expect(linkedDocToggle).toBeVisible()
+    const chatPanel = appWindow.locator('[id="chat-center-panel"]')
+    const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
     const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
+    const initialChatBox = await elementBox(chatPanel, 'chat panel')
     const workspaceBox = await elementBox(
       appWindow.locator('[id="active-pane-panel"]'),
       'active workspace'
@@ -913,10 +894,12 @@ test('maximizes and collapses/restores the chat action pane', async ({
     await expectSplitCornerPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
     await expect.poll(() => appRegion(titlebar)).toBe('drag')
     await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
-    expect(Math.round(initialActionPaneBox.width)).toBe(Math.round(workspaceBox.width))
+    expect(initialChatBox.width + initialActionPaneBox.width).toBeLessThanOrEqual(
+      workspaceBox.width + 8
+    )
     expect(Math.round(initialActionPaneBox.height)).toBe(Math.round(workspaceBox.height))
-    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toHaveCount(0)
-    await expect(appWindow.getByRole('separator', { name: 'Resize action pane' })).toHaveCount(0)
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
+    await expect(resizeHandle).toBeVisible()
     await expect(
       appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
     ).toHaveCount(0)
@@ -937,6 +920,15 @@ test('maximizes and collapses/restores the chat action pane', async ({
     })
     await expect(browserPreview).toBeVisible()
     await expect(browserPreview.locator('webview')).toHaveAttribute('src', fixtureLinkedDocUrl)
+    const artifactList = actionPane.getByRole('region', {
+      name: 'Linked Google Workspace artifacts'
+    })
+    const artifactItem = actionPane.locator(
+      '[data-slot="collapsible"][aria-label="Linked Google Doc Fixture linked Google Doc"]'
+    )
+    const artifactListBox = await elementBox(artifactList, 'artifact list')
+    const artifactItemBox = await elementBox(artifactItem, 'document artifact item')
+    expect(Math.round(artifactItemBox.width)).toBe(Math.round(artifactListBox.width))
     await expect
       .poll(
         async () =>
@@ -956,8 +948,6 @@ test('maximizes and collapses/restores the chat action pane', async ({
     await expect(actionPane.getByText('Google Docs URL', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('First linked', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Last linked', { exact: true })).toHaveCount(0)
-    await linkedDocToggle.click()
-    await expect(browserPreview).toHaveCount(0)
     const linkedSheetToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Sheet Fixture linked Google Sheet',
       exact: true
@@ -988,6 +978,41 @@ test('maximizes and collapses/restores the chat action pane', async ({
       'src',
       fixtureLinkedSheetUrl
     )
+    const browserPreviewBox = await elementBox(browserPreview, 'document browser preview')
+    const sheetBrowserPreviewBox = await elementBox(sheetBrowserPreview, 'sheet browser preview')
+    const documentWebviewBox = await elementBox(
+      browserPreview.locator('webview'),
+      'document webview'
+    )
+    const sheetWebviewBox = await elementBox(
+      sheetBrowserPreview.locator('webview'),
+      'sheet webview'
+    )
+    expect(Math.abs(browserPreviewBox.height - sheetBrowserPreviewBox.height)).toBeLessThanOrEqual(
+      2
+    )
+    expect(Math.round(documentWebviewBox.width)).toBe(Math.round(browserPreviewBox.width))
+    expect(Math.round(documentWebviewBox.height)).toBe(Math.round(browserPreviewBox.height))
+    expect(Math.round(sheetWebviewBox.width)).toBe(Math.round(sheetBrowserPreviewBox.width))
+    expect(Math.round(sheetWebviewBox.height)).toBe(Math.round(sheetBrowserPreviewBox.height))
+    const resizeHandleBox = await elementBox(resizeHandle, 'action pane resize handle')
+    await appWindow.mouse.move(
+      resizeHandleBox.x + resizeHandleBox.width / 2,
+      resizeHandleBox.y + resizeHandleBox.height / 2
+    )
+    await appWindow.mouse.down()
+    await appWindow.mouse.move(
+      resizeHandleBox.x + resizeHandleBox.width / 2 - 200,
+      resizeHandleBox.y + resizeHandleBox.height / 2,
+      { steps: 10 }
+    )
+    await appWindow.mouse.up()
+    await expect
+      .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0))
+      .toBeGreaterThan(Math.round(initialActionPaneBox.width) + 100)
+    const resizedActionPaneBox = await elementBox(actionPane, 'resized action pane')
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
+    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
     await expect(actionPane.getByText('Sheet ID', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Google Sheets URL', { exact: true })).toHaveCount(0)
     await linkedSheetToggle.click()
@@ -1047,19 +1072,21 @@ test('maximizes and collapses/restores the chat action pane', async ({
     await collapseActionPaneButton.click()
     await expect(actionPane).toHaveCount(0)
     await expect(titlebar.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
-    await expect(
-      appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
-    ).toHaveCount(0)
-    await expect(appWindow.getByRole('separator', { name: 'Resize action pane' })).toHaveCount(0)
+    const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
+    await expect(collapsedRail).toBeVisible()
+    await expect(collapsedRail.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
+    await expect(resizeHandle).toBeVisible()
     await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
     await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 
     await titlebar.getByRole('button', { name: 'Restore action pane' }).click()
     await expect(actionPane).toBeVisible()
     const restoredActionPaneBox = await elementBox(actionPane, 'restored action pane')
-    expect(Math.round(restoredActionPaneBox.width)).toBe(Math.round(workspaceBox.width))
     expect(Math.round(restoredActionPaneBox.height)).toBe(Math.round(workspaceBox.height))
-    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toHaveCount(0)
+    expect(Math.abs(restoredActionPaneBox.width - resizedActionPaneBox.width)).toBeLessThanOrEqual(
+      4
+    )
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
     const restoredLinkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
@@ -1193,7 +1220,6 @@ test('opens a project by native folder picker into a directory-derived project r
   )
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
   await expectOpenedProjectRouteResolved(appWindow)
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expectChatComposerWithoutHelperCopy(appWindow)
 })
@@ -1224,7 +1250,6 @@ test('keeps a selected empty session transcript quiet', async ({
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     new RegExp(`/projects/[^/]+/sessions/${emptySession.id}$`)
   )
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: emptySession.title })).toBeVisible()
   await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 
@@ -1246,7 +1271,6 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   await expect(terminalProjectState).toBeVisible()
 
   if ((await projectLinks.count()) === 0) {
-    await restoreChatSurface(appWindow)
     await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
     return
   }
@@ -1255,7 +1279,6 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+$/
   )
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
   await expectChatComposerWithoutHelperCopy(appWindow)
@@ -1268,7 +1291,6 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   const projectUrl = appWindow.url()
   await appWindow.reload()
   await expect(appWindow).toHaveURL(projectUrl)
-  await restoreChatSurface(appWindow)
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
   await expect(
     appWindow
@@ -1289,7 +1311,6 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+\/sessions\/[^/]+$/
   )
-  await restoreChatSurface(appWindow)
   await expect(appWindow.locator('#active-chat-heading')).not.toHaveText('No chat selected')
   await expectChatComposerWithoutHelperCopy(appWindow)
   await expect(messageTranscript(appWindow)).toBeVisible()
@@ -1300,14 +1321,12 @@ test('shows real project/session selection in the reused chat shell', async ({ a
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+$/
   )
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expectChatComposerWithoutHelperCopy(appWindow)
   await appWindow.goForward()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+\/sessions\/[^/]+$/
   )
-  await restoreChatSurface(appWindow)
   await expect(appWindow.locator('#active-chat-heading')).not.toHaveText('No chat selected')
   await expectChatComposerWithoutHelperCopy(appWindow)
 })
@@ -1347,7 +1366,6 @@ test('filters parented subagent sessions from normal chat rendering', async ({ a
   ).toHaveCount(0)
 
   await sessionChatLink(appWindow).filter({ hasText: 'Seeded deterministic chat' }).click()
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
   await expect(appWindow.getByText('Seeded user prompt')).toBeVisible()
   await expect(appWindow.getByText('Seeded assistant response')).toBeVisible()
@@ -1361,7 +1379,6 @@ test('filters parented subagent sessions from normal chat rendering', async ({ a
   await expect
     .poll(() => appWindow.evaluate(() => window.location.hash))
     .toMatch(/\/projects\/[^/]+\/sessions\/child-subagent-session$/)
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByText('Session not found.')).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(appWindow.getByRole('button', { name: 'Send' })).toBeDisabled()
@@ -1567,7 +1584,6 @@ test('keeps a long collapsed tool disclosure anchored when opening it', async ({
 test('shows only connected OpenCode models in the composer picker', async ({ appWindow }) => {
   await seedOpenedFakeProject(appWindow)
   await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
-  await restoreChatSurface(appWindow)
 
   const modelPicker = appWindow.getByLabel('OpenCode model')
   await expect(modelPicker).toBeVisible()
@@ -1692,7 +1708,6 @@ test('starts a new stable chat from the project route', async ({ appWindow }) =>
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/[^/]+$/
   )
-  await restoreChatSurface(appWindow)
 
   await appWindow.getByLabel('Message OpenKhodam').fill('Create a deterministic test chat')
   await expect(appWindow.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -1703,7 +1718,6 @@ test('starts a new stable chat from the project route', async ({ appWindow }) =>
   await expect(
     sessionChatLink(appWindow).filter({ hasText: 'New deterministic chat' })
   ).toBeVisible()
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'New deterministic chat' })).toBeVisible()
   await expect(
     appWindow.getByText('Create a deterministic test chat', { exact: true })
@@ -1944,7 +1958,6 @@ test('shows the real OpenCode sidecar settings surface', async ({ appWindow, ele
 
   await projectHomeLink(appWindow).click()
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(/#\/$/)
-  await restoreChatSurface(appWindow)
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(appWindow.getByText('OpenCode', { exact: true })).toHaveCount(0)
 })

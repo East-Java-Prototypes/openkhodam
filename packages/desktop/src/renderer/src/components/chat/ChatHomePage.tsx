@@ -753,59 +753,131 @@ export function ActiveChatPanel({
   composer?: ReactNode
   composerErrorMessage?: string | null
 }): JSX.Element {
-  const { isActionPaneOpen, setActionPaneAvailable } = useActionPaneControls()
+  const { isActionPaneOpen, setActionPaneOpen, setActionPaneAvailable } = useActionPaneControls()
+  const actionPanePanelRef = useRef<PanelImperativeHandle | null>(null)
   const messages = session?.messages ?? emptyChatMessages
+
+  const syncActionPanePanel = useCallback((open: boolean): void => {
+    const actionPanePanel = actionPanePanelRef.current
+    if (!actionPanePanel) return
+    if (open) return actionPanePanel.expand()
+    actionPanePanel.collapse()
+  }, [])
+
+  const handleActionPaneOpenChange = useCallback(
+    (open: boolean): void => {
+      syncActionPanePanel(open)
+      setActionPaneOpen(open)
+    },
+    [setActionPaneOpen, syncActionPanePanel]
+  )
+
+  const handleActionPaneResize = useCallback(
+    (size: PanelSize): void => {
+      const isCollapsed = actionPanePanelRef.current?.isCollapsed() ?? size.inPixels <= 64
+      setActionPaneOpen(!isCollapsed)
+    },
+    [setActionPaneOpen]
+  )
 
   useEffect(() => {
     setActionPaneAvailable(true)
     return () => setActionPaneAvailable(false)
   }, [setActionPaneAvailable])
 
-  if (isActionPaneOpen) return <ChatActionPane linkedGoogleArtifacts={linkedGoogleArtifacts} />
+  useEffect(() => {
+    syncActionPanePanel(isActionPaneOpen)
+  }, [isActionPaneOpen, syncActionPanePanel])
 
   return (
-    <section
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
-      aria-labelledby="active-chat-heading"
+    <ResizablePanelGroup
+      id="active-chat-layout"
+      orientation="horizontal"
+      className="min-h-0 min-w-0"
     >
-      <header className="shrink-0 px-6 py-3">
-        <h2 id="active-chat-heading" className="text-base font-semibold tracking-tight">
-          {session?.activeChat?.title ?? 'No chat selected'}
-        </h2>
-      </header>
-      <Separator />
-      <ChatMessageList
-        messages={messages}
-        isAwaitingAssistantResponse={session?.isAwaitingAssistantResponse ?? false}
-        transcriptStatusMessage={
-          session?.transcriptStatusMessage ?? project?.transcriptStatusMessage ?? null
-        }
-        isLoading={session?.isLoading ?? false}
-        errorMessage={session?.errorMessage ?? composerErrorMessage ?? null}
-        successMessage={session?.successMessage ?? null}
-      />
-      {composer ??
-        (session ? (
-          <ChatPromptComposer
-            promptText={session.promptText}
-            setPromptText={session.setPromptText}
-            sendPrompt={session.sendPrompt}
-            canSendPrompt={session.canSendPrompt}
-            isSending={session.isSending}
-            modelOptions={session.modelOptions}
-            agentOptions={session.agentOptions}
-            effortOptions={session.effortOptions}
-            selectedModelID={session.selectedModelID}
-            setSelectedModelID={session.setSelectedModelID}
-            selectedAgentID={session.selectedAgentID}
-            setSelectedAgentID={session.setSelectedAgentID}
-            selectedEffortID={session.selectedEffortID}
-            setSelectedEffortID={session.setSelectedEffortID}
-            isLoadingModels={session.isLoadingModels}
-            isLoadingAgents={session.isLoadingAgents}
+      <ResizablePanel id="chat-center-panel" defaultSize="70%" minSize="20rem">
+        <section
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+          aria-labelledby="active-chat-heading"
+        >
+          <header className="shrink-0 px-6 py-3">
+            <h2 id="active-chat-heading" className="text-base font-semibold tracking-tight">
+              {session?.activeChat?.title ?? 'No chat selected'}
+            </h2>
+          </header>
+          <Separator />
+          <ChatMessageList
+            messages={messages}
+            isAwaitingAssistantResponse={session?.isAwaitingAssistantResponse ?? false}
+            transcriptStatusMessage={
+              session?.transcriptStatusMessage ?? project?.transcriptStatusMessage ?? null
+            }
+            isLoading={session?.isLoading ?? false}
+            errorMessage={session?.errorMessage ?? composerErrorMessage ?? null}
+            successMessage={session?.successMessage ?? null}
           />
-        ) : null)}
-    </section>
+          {composer ??
+            (session ? (
+              <ChatPromptComposer
+                promptText={session.promptText}
+                setPromptText={session.setPromptText}
+                sendPrompt={session.sendPrompt}
+                canSendPrompt={session.canSendPrompt}
+                isSending={session.isSending}
+                modelOptions={session.modelOptions}
+                agentOptions={session.agentOptions}
+                effortOptions={session.effortOptions}
+                selectedModelID={session.selectedModelID}
+                setSelectedModelID={session.setSelectedModelID}
+                selectedAgentID={session.selectedAgentID}
+                setSelectedAgentID={session.setSelectedAgentID}
+                selectedEffortID={session.selectedEffortID}
+                setSelectedEffortID={session.setSelectedEffortID}
+                isLoadingModels={session.isLoadingModels}
+                isLoadingAgents={session.isLoadingAgents}
+              />
+            ) : null)}
+        </section>
+      </ResizablePanel>
+      <ResizableHandle withHandle aria-label="Resize action pane" />
+      <ResizablePanel
+        id="action-pane-panel"
+        panelRef={actionPanePanelRef}
+        defaultSize="30%"
+        minSize="16rem"
+        collapsedSize="3rem"
+        collapsible
+        onResize={handleActionPaneResize}
+      >
+        {isActionPaneOpen ? (
+          <ChatActionPane linkedGoogleArtifacts={linkedGoogleArtifacts} />
+        ) : (
+          <CollapsedActionPaneRail onRestore={() => handleActionPaneOpenChange(true)} />
+        )}
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  )
+}
+
+function CollapsedActionPaneRail({ onRestore }: { onRestore: () => void }): JSX.Element {
+  return (
+    <aside
+      className="flex h-full w-full flex-col items-center border-l bg-sidebar/40 py-3 text-sidebar-foreground"
+      role="complementary"
+      aria-label="Collapsed action pane"
+    >
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-auto min-h-28 w-8 px-1 py-2 [writing-mode:vertical-rl]"
+        aria-label="Restore action pane"
+        title="Restore action pane"
+        onClick={onRestore}
+      >
+        Actions
+      </Button>
+    </aside>
   )
 }
 
