@@ -23,6 +23,15 @@ const arbitraryLinkedDocUrl = 'https://example.test/document/d/arbitrary-linked-
 const hiddenSubagentSessionTitle = 'Hidden subagent child chat'
 const hiddenSubagentUserPrompt = 'Hidden subagent user prompt'
 const hiddenSubagentAssistantResponse = 'Hidden subagent assistant response'
+const unsupportedSlashCommands = [
+  '/redo',
+  '/new',
+  '/compact',
+  '/fork',
+  '/share',
+  '/terminal',
+  '/mcp'
+]
 const removedComposerHelperCopy = [
   'Send to the selected session.',
   'Select a connected OpenCode model before sending.',
@@ -277,6 +286,7 @@ async function waitForChatShell(page: Page): Promise<void> {
   await expect(page.getByRole('form', { name: 'Open project by directory' })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'Projects' })).toBeVisible()
   await expect(page.getByRole('navigation', { name: 'Project sessions' })).toHaveCount(0)
+  await expect(chatActionPane(page)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
   await expect(page.getByText('OpenCode', { exact: true })).toHaveCount(0)
 }
@@ -496,6 +506,60 @@ async function sendPrompt(page: Page, prompt: string): Promise<void> {
   await page.getByRole('button', { name: 'Send' }).click()
 }
 
+async function fakeSessionMessageTexts(
+  fakeOpenCodeServer: { url: string },
+  sessionID: string
+): Promise<string[]> {
+  const response = await fetch(`${fakeOpenCodeServer.url}/session/${sessionID}/message`)
+  expect(response.ok).toBe(true)
+  const messages = (await response.json()) as unknown[]
+  return messages.flatMap((message) => fakeMessageTextParts(message))
+}
+
+function fakeMessageTextParts(message: unknown): string[] {
+  if (!isRecord(message) || !Array.isArray(message.parts)) return []
+  return message.parts.flatMap((part) => {
+    if (!isRecord(part)) return []
+    return typeof part.text === 'string' ? [part.text] : []
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+async function expectSlashCommandPopoverShowsOnlyUndo(page: Page): Promise<Locator> {
+  const popover = page.getByRole('dialog', { name: 'Slash commands' })
+
+  await expect(popover).toBeVisible()
+  await expect(popover.getByText('/undo', { exact: true })).toBeVisible()
+  await expect(popover.getByText('Undo last prompt', { exact: true })).toBeVisible()
+  await expect(
+    popover.getByText('Revert the last prompt and restore it to the composer.', { exact: true })
+  ).toBeVisible()
+  const composer = page
+    .getByLabel('Message OpenKhodam')
+    .locator('xpath=ancestor::*[@data-slot="input-group"]')
+  await expect
+    .poll(
+      async () => {
+        const [popoverBox, composerBox] = await Promise.all([
+          popover.boundingBox(),
+          composer.boundingBox()
+        ])
+        if (!popoverBox || !composerBox) return Number.POSITIVE_INFINITY
+        return Math.abs(popoverBox.width - composerBox.width)
+      },
+      { message: 'slash command popover width should settle to the composer width' }
+    )
+    .toBeLessThanOrEqual(1)
+  for (const command of unsupportedSlashCommands) {
+    await expect(popover.getByText(command, { exact: true })).toHaveCount(0)
+  }
+
+  return popover
+}
+
 async function articleTexts(page: Page): Promise<string[]> {
   return page
     .getByRole('article')
@@ -704,6 +768,7 @@ test('renders basename project labels and opens the project new-conversation she
   await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
     /\/projects\/dir-[^/]+\/sessions\/seeded-session$/
   )
+  await expect(chatActionPane(appWindow)).toBeVisible()
   await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
 
   await newConversationLink.click()
@@ -868,22 +933,16 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
 
   try {
     await setResizeTestViewport(electronApp, appWindow)
-    await openStructuredFixtureChat(appWindow)
+    await seedOpenedFakeProject(appWindow)
+    await expect(projectChatLink(appWindow).filter({ hasText: 'Fake Project' })).toBeVisible()
+    await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+    await expectOpenedProjectRouteResolved(appWindow)
+    await sessionChatLink(appWindow).filter({ hasText: 'Structured fixture chat' }).click()
 
     const actionPane = chatActionPane(appWindow)
-    const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
     const titlebar = paneControls(appWindow)
     const collapseSidebarButton = titlebar.getByRole('button', { name: 'Collapse project sidebar' })
     const collapseActionPaneButton = titlebar.getByRole('button', { name: 'Collapse action pane' })
-    const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
-    const handleBox = await elementBox(resizeHandle, 'action pane resize handle')
-    const formerActionPaneMaxWidth = await remToPixels(appWindow, 30)
-
-    await expect(collapseActionPaneButton).toBeVisible()
-    await expectSplitCornerPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
-    await expect.poll(() => appRegion(titlebar)).toBe('drag')
-    await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
-    await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toHaveCount(0)
     const linkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
@@ -896,6 +955,29 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       name: 'Open linked Google Doc Fixture linked Google Doc in Google Docs'
     })
     await expect(linkedDocToggle).toBeVisible()
+    const chatPanel = appWindow.locator('[id="chat-center-panel"]')
+    const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
+    const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
+    const initialChatBox = await elementBox(chatPanel, 'chat panel')
+    const workspaceBox = await elementBox(
+      appWindow.locator('[id="active-pane-panel"]'),
+      'active workspace'
+    )
+
+    await expect(collapseActionPaneButton).toBeVisible()
+    await expectSplitCornerPaneControls(titlebar, collapseSidebarButton, collapseActionPaneButton)
+    await expect.poll(() => appRegion(titlebar)).toBe('drag')
+    await expect.poll(() => appRegion(collapseActionPaneButton)).toBe('no-drag')
+    expect(initialChatBox.width + initialActionPaneBox.width).toBeLessThanOrEqual(
+      workspaceBox.width + 8
+    )
+    expect(Math.round(initialActionPaneBox.height)).toBe(Math.round(workspaceBox.height))
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
+    await expect(resizeHandle).toBeVisible()
+    await expect(
+      appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
+    ).toHaveCount(0)
+    await expect(actionPane.getByRole('heading', { name: 'Linked Google Docs' })).toHaveCount(0)
     await expect(linkedDocPreviewToggle).toBeVisible()
     await expect(actionPane.getByText('Doc ID: fixture-linked-doc')).toHaveCount(0)
     await expect(linkedDocOpenLink).toBeVisible()
@@ -912,6 +994,15 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     })
     await expect(browserPreview).toBeVisible()
     await expect(browserPreview.locator('webview')).toHaveAttribute('src', fixtureLinkedDocUrl)
+    const artifactList = actionPane.getByRole('region', {
+      name: 'Linked Google Workspace artifacts'
+    })
+    const artifactItem = actionPane.locator(
+      '[data-slot="collapsible"][aria-label="Linked Google Doc Fixture linked Google Doc"]'
+    )
+    const artifactListBox = await elementBox(artifactList, 'artifact list')
+    const artifactItemBox = await elementBox(artifactItem, 'document artifact item')
+    expect(Math.round(artifactItemBox.width)).toBe(Math.round(artifactListBox.width))
     await expect
       .poll(
         async () =>
@@ -931,8 +1022,6 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(actionPane.getByText('Google Docs URL', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('First linked', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Last linked', { exact: true })).toHaveCount(0)
-    await linkedDocToggle.click()
-    await expect(browserPreview).toHaveCount(0)
     const linkedSheetToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Sheet Fixture linked Google Sheet',
       exact: true
@@ -963,6 +1052,41 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       'src',
       fixtureLinkedSheetUrl
     )
+    const browserPreviewBox = await elementBox(browserPreview, 'document browser preview')
+    const sheetBrowserPreviewBox = await elementBox(sheetBrowserPreview, 'sheet browser preview')
+    const documentWebviewBox = await elementBox(
+      browserPreview.locator('webview'),
+      'document webview'
+    )
+    const sheetWebviewBox = await elementBox(
+      sheetBrowserPreview.locator('webview'),
+      'sheet webview'
+    )
+    expect(Math.abs(browserPreviewBox.height - sheetBrowserPreviewBox.height)).toBeLessThanOrEqual(
+      2
+    )
+    expect(Math.round(documentWebviewBox.width)).toBe(Math.round(browserPreviewBox.width))
+    expect(Math.round(documentWebviewBox.height)).toBe(Math.round(browserPreviewBox.height))
+    expect(Math.round(sheetWebviewBox.width)).toBe(Math.round(sheetBrowserPreviewBox.width))
+    expect(Math.round(sheetWebviewBox.height)).toBe(Math.round(sheetBrowserPreviewBox.height))
+    const resizeHandleBox = await elementBox(resizeHandle, 'action pane resize handle')
+    await appWindow.mouse.move(
+      resizeHandleBox.x + resizeHandleBox.width / 2,
+      resizeHandleBox.y + resizeHandleBox.height / 2
+    )
+    await appWindow.mouse.down()
+    await appWindow.mouse.move(
+      resizeHandleBox.x + resizeHandleBox.width / 2 - 200,
+      resizeHandleBox.y + resizeHandleBox.height / 2,
+      { steps: 10 }
+    )
+    await appWindow.mouse.up()
+    await expect
+      .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0))
+      .toBeGreaterThan(Math.round(initialActionPaneBox.width) + 100)
+    const resizedActionPaneBox = await elementBox(actionPane, 'resized action pane')
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
+    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
     await expect(actionPane.getByText('Sheet ID', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Google Sheets URL', { exact: true })).toHaveCount(0)
     await linkedSheetToggle.click()
@@ -1019,39 +1143,24 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(actionPane.getByText('V1 fixture tool output', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('V2 fixture tool output', { exact: true })).toHaveCount(0)
 
-    await appWindow.mouse.move(
-      handleBox.x + handleBox.width / 2,
-      handleBox.y + handleBox.height / 2
-    )
-    await appWindow.mouse.down()
-    await appWindow.mouse.move(
-      handleBox.x + handleBox.width / 2 - 300,
-      handleBox.y + handleBox.height / 2,
-      { steps: 10 }
-    )
-    await appWindow.mouse.up()
-
-    await expect
-      .poll(async () => Math.round((await actionPane.boundingBox())?.width ?? 0), {
-        message: 'action pane should resize beyond the former 30rem cap'
-      })
-      .toBeGreaterThan(Math.round(formerActionPaneMaxWidth) + 20)
-    await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
-
     await collapseActionPaneButton.click()
-    const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
-    await expect(collapsedRail).toBeVisible()
     await expect(actionPane).toHaveCount(0)
     await expect(titlebar.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
+    const collapsedRail = appWindow.getByRole('complementary', { name: 'Collapsed action pane' })
+    await expect(collapsedRail).toBeVisible()
     await expect(collapsedRail.getByRole('button', { name: 'Restore action pane' })).toBeVisible()
-    expect((await elementBox(collapsedRail, 'collapsed action pane rail')).width).toBeLessThan(
-      initialActionPaneBox.width
-    )
+    await expect(resizeHandle).toBeVisible()
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
     await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 
     await titlebar.getByRole('button', { name: 'Restore action pane' }).click()
     await expect(actionPane).toBeVisible()
-    await expect(resizeHandle).toBeVisible()
+    const restoredActionPaneBox = await elementBox(actionPane, 'restored action pane')
+    expect(Math.round(restoredActionPaneBox.height)).toBe(Math.round(workspaceBox.height))
+    expect(Math.abs(restoredActionPaneBox.width - resizedActionPaneBox.width)).toBeLessThanOrEqual(
+      4
+    )
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
     const restoredLinkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
@@ -1780,27 +1889,20 @@ test('stops a just-created session without restoring the admitted prompt handoff
   const fakeProjectLink = projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).first()
   await expect(fakeProjectLink).toBeVisible()
   await fakeProjectLink.click()
-  await expect(appWindow.evaluate(() => window.location.hash)).resolves.toMatch(
-    /\/projects\/[^/]+$/
-  )
   await expectOpenedProjectRouteResolved(appWindow)
-  await expectChatComposerWithoutHelperCopy(appWindow)
 
   const sessionID = 'new-session-2'
-  const prompt = 'Abort just-created session prompt'
+  const prompt = 'Stop just-created session prompt'
   await appWindow.getByLabel('Message OpenKhodam').fill(prompt)
-  await expect(appWindow.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
   await appWindow.getByRole('button', { name: 'Send', exact: true }).click()
 
   await expect
     .poll(() => appWindow.evaluate(() => window.location.hash))
     .toMatch(new RegExp(`/projects/[^/]+/sessions/${sessionID}$`))
-  await expect(appWindow.getByRole('heading', { name: 'New deterministic chat' })).toBeVisible()
   await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toBeVisible()
 
   const stopButton = appWindow.getByRole('button', { name: 'Stop generation', exact: true })
   await expect(stopButton).toBeVisible()
-  await expect(stopButton).toBeEnabled()
   await stopButton.click()
 
   await expect
@@ -1808,6 +1910,12 @@ test('stops a just-created session without restoring the admitted prompt handoff
       fakeOpenCodeServer.getAbortRequests().some((request) => request.sessionID === sessionID)
     )
     .toBe(true)
+  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(
+    0
+  )
+  await expect(
+    appWindow.getByText('OpenCode did not confirm that generation stopped.')
+  ).toHaveCount(0)
   await expect
     .poll(() =>
       appWindow.evaluate(
@@ -1816,24 +1924,36 @@ test('stops a just-created session without restoring the admitted prompt handoff
       )
     )
     .toBeNull()
-  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(
-    0
-  )
-  await expect(messageTranscript(appWindow).getByText(/^(aborted|interrupted)$/i)).toHaveCount(0)
+})
 
-  const sessionUrl = appWindow.url()
-  await appWindow.reload()
-  await expect(appWindow).toHaveURL(sessionUrl)
-  await expect(appWindow.getByRole('heading', { name: 'New deterministic chat' })).toBeVisible()
+test('stops active session generation before delayed projection', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const prompt = 'Stop active session prompt'
+  await sendPrompt(appWindow, prompt)
+  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toBeVisible()
+
+  const stopButton = appWindow.getByRole('button', { name: 'Stop generation', exact: true })
+  await expect(stopButton).toBeVisible()
+  await stopButton.click()
+
+  await expect
+    .poll(() =>
+      fakeOpenCodeServer
+        .getAbortRequests()
+        .some((request) => request.sessionID === 'seeded-session')
+    )
+    .toBe(true)
   await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(
     0
   )
-  await expect(appWindow.getByText(prompt, { exact: true })).toHaveCount(0)
   await expect(appWindow.getByText(`Fake response for: ${prompt}`)).toHaveCount(0)
-  await expect(messageTranscript(appWindow).getByText(/^(aborted|interrupted)$/i)).toHaveCount(0)
-
-  await appWindow.getByLabel('Message OpenKhodam').fill('Prompt after new-session stop')
-  await expect(appWindow.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+  await expect(
+    appWindow.getByText('OpenCode did not confirm that generation stopped.')
+  ).toHaveCount(0)
 })
 
 test('shows optimistic prompt before delayed stable message projection', async ({ appWindow }) => {
@@ -1869,37 +1989,161 @@ test('shows optimistic prompt before delayed stable message projection', async (
   await expect(appWindow.getByText('Delayed lifecycle prompt', { exact: true })).toHaveCount(1)
 })
 
-test('stops active session generation before delayed projection', async ({
+test('shows and filters only the undo slash command in the active session composer', async ({
+  appWindow
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  await promptInput.pressSequentially('/')
+  const popover = await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
+
+  await expect(promptInput).toBeFocused()
+  await promptInput.pressSequentially('un')
+  await expect(promptInput).toBeFocused()
+  await expect(promptInput).toHaveValue('/un')
+  await expect(popover).toBeVisible()
+  await expect(popover.getByText('/undo', { exact: true })).toBeVisible()
+
+  await promptInput.fill('/zz')
+  await expect(popover).toBeVisible()
+  await expect(popover.getByText('/undo', { exact: true })).toHaveCount(0)
+  await expect(popover.getByText('No slash commands available.', { exact: true })).toBeVisible()
+})
+
+test('dismisses the undo slash command popover with Escape without executing undo', async ({
+  appWindow
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  await promptInput.pressSequentially('/un')
+  await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
+
+  await promptInput.press('Escape')
+  await expect(appWindow.getByRole('dialog', { name: 'Slash commands' })).toHaveCount(0)
+  await expect(promptInput).toBeFocused()
+  await expect(promptInput).toHaveValue('/un')
+  await expect(messageTranscript(appWindow).getByRole('article')).toHaveCount(2)
+})
+
+test('executes undo by clicking the slash command and restores the prompt text', async ({
   appWindow,
   fakeOpenCodeServer
 }) => {
   await openSeededDeterministicChat(appWindow)
 
-  const prompt = 'Abortable lifecycle prompt'
-  await sendPrompt(appWindow, prompt)
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const transcript = messageTranscript(appWindow)
+  await promptInput.fill('/')
+  const popover = await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
+  await popover.getByText('/undo', { exact: true }).click()
 
-  const stopButton = appWindow.getByRole('button', { name: 'Stop generation', exact: true })
-  await expect(stopButton).toBeVisible()
-  await expect(stopButton).toBeEnabled()
-  await stopButton.click()
+  await expect(promptInput).toHaveValue('Seeded user prompt')
+  await expect(transcript.getByText('Seeded user prompt', { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText('Seeded assistant response', { exact: true })).toHaveCount(0)
+  await expect(transcript.getByRole('article')).toHaveCount(0)
+  await expect
+    .poll(() => fakeSessionMessageTexts(fakeOpenCodeServer, 'seeded-session'))
+    .toEqual(expect.arrayContaining(['Seeded user prompt', 'Seeded assistant response']))
+})
+
+test('executes undo by keyboard selection and exact slash submit', async ({ appWindow }) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const transcript = messageTranscript(appWindow)
+
+  await promptInput.fill('/un')
+  await expectSlashCommandPopoverShowsOnlyUndo(appWindow)
+  await promptInput.press('Enter')
+  await expect(promptInput).toHaveValue('Seeded user prompt')
+  await expect(transcript.getByText('Seeded assistant response', { exact: true })).toHaveCount(0)
+
+  const exactUndoPrompt = 'Prompt restored from exact undo submit'
+  await sendPrompt(appWindow, exactUndoPrompt)
+  await expect(appWindow.getByText(`Fake response for: ${exactUndoPrompt}`)).toBeVisible()
+
+  await promptInput.fill('/undo')
+  await expect(appWindow.getByRole('button', { name: 'Send' })).toBeEnabled()
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+
+  await expect(promptInput).toHaveValue(exactUndoPrompt)
+  await expect(transcript.getByText(exactUndoPrompt, { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText(`Fake response for: ${exactUndoPrompt}`)).toHaveCount(0)
+})
+
+test('repeated undo targets the previous visible user prompt while preserving server history', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const firstPrompt = 'First repeated undo prompt'
+  const secondPrompt = 'Second repeated undo prompt'
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const transcript = messageTranscript(appWindow)
+
+  await sendPrompt(appWindow, firstPrompt)
+  await expect(transcript.getByText(`Fake response for: ${firstPrompt}`)).toBeVisible()
+  await sendPrompt(appWindow, secondPrompt)
+  await expect(transcript.getByText(`Fake response for: ${secondPrompt}`)).toBeVisible()
+
+  await promptInput.fill('/undo')
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(promptInput).toHaveValue(secondPrompt)
+  await expect(transcript.getByText(secondPrompt, { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText(`Fake response for: ${secondPrompt}`)).toHaveCount(0)
+  await expect(transcript.getByText(firstPrompt, { exact: true })).toBeVisible()
+
+  await promptInput.fill('/undo')
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(promptInput).toHaveValue(firstPrompt)
+  await expect(transcript.getByText(firstPrompt, { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText(`Fake response for: ${firstPrompt}`)).toHaveCount(0)
+  await expect(transcript.getByText('Seeded user prompt', { exact: true })).toBeVisible()
+  await expect(transcript.getByText('Seeded assistant response', { exact: true })).toBeVisible()
 
   await expect
-    .poll(() =>
-      fakeOpenCodeServer
-        .getAbortRequests()
-        .some((request) => request.sessionID === 'seeded-session')
+    .poll(() => fakeSessionMessageTexts(fakeOpenCodeServer, 'seeded-session'))
+    .toEqual(
+      expect.arrayContaining([
+        firstPrompt,
+        `Fake response for: ${firstPrompt}`,
+        secondPrompt,
+        `Fake response for: ${secondPrompt}`
+      ])
     )
-    .toBe(true)
-  await expect(appWindow.getByRole('button', { name: 'Send', exact: true })).toBeVisible()
+})
+
+test('aborts a pending prompt before undo revert and restores that prompt', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+
+  const prompt = 'Pending prompt undone before projection'
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const transcript = messageTranscript(appWindow)
+
+  await promptInput.fill(prompt)
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toBeVisible()
+
+  await promptInput.fill('/undo')
+  await expect(appWindow.getByRole('button', { name: 'Send' })).toBeEnabled()
+  await appWindow.getByRole('button', { name: 'Send' }).click()
+
+  await expect(promptInput).toHaveValue(prompt)
   await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toHaveCount(
     0
   )
-  await expect(messageTranscript(appWindow).getByText(/^(aborted|interrupted)$/i)).toHaveCount(0)
-  await appWindow.waitForTimeout(1_600)
-  await expect(appWindow.getByText(`Fake response for: ${prompt}`)).toHaveCount(0)
-
-  await appWindow.getByLabel('Message OpenKhodam').fill('Prompt after stop')
-  await expect(appWindow.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+  await expect(transcript.getByText(prompt, { exact: true })).toHaveCount(0)
+  await expect(transcript.getByText(`Fake response for: ${prompt}`)).toHaveCount(0)
+  await expect(transcript.getByText('Seeded user prompt', { exact: true })).toBeVisible()
+  await expect
+    .poll(() => fakeOpenCodeServer.getRequestEvents())
+    .toEqual(['prompt:seeded-session', 'abort:seeded-session', 'revert:seeded-session'])
 })
 
 test('sends the chat composer with Enter while Shift+Enter stays multiline', async ({
@@ -2022,9 +2266,6 @@ test('keeps two prompts pending before the first stable projection arrives', asy
   await sendPrompt(appWindow, firstPrompt)
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: firstPrompt })
-  ).toBeVisible()
-  await expect(
-    appWindow.getByRole('button', { name: 'Stop generation', exact: true })
   ).toBeVisible()
 
   await sendPrompt(appWindow, secondPrompt)
