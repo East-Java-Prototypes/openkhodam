@@ -27,6 +27,8 @@ export type FakeOpenCodeServer = {
   releaseAbort: () => void
   setAbortFalseOnce: () => void
   emitSessionError: (options: FakeSessionErrorEvent) => void
+  setSessionRetry: (options: FakeSessionRetryStatus) => void
+  clearSessionStatus: (sessionID: string) => void
   close: () => Promise<void>
 }
 
@@ -57,6 +59,13 @@ export type FakeSessionErrorEvent = {
   message: string
 }
 
+export type FakeSessionRetryStatus = {
+  sessionID: string
+  message: string
+  attempt: number
+  next: number
+}
+
 export type FakePromptRequest = {
   sessionID: string
   text: string
@@ -73,7 +82,10 @@ const pendingPrompts = new Map<
   string,
   { id: string; text: string; fetches: number; projected: boolean; statusFetches: number }[]
 >()
-const sessionStatuses = new Map<string, { type: 'busy' | 'retry' }>()
+const sessionStatuses = new Map<
+  string,
+  { type: 'busy' } | { type: 'retry'; message: string; attempt: number; next: number }
+>()
 const promptRequests: FakePromptRequest[] = []
 const requestEvents: string[] = []
 const abortRequests: FakeAbortRequest[] = []
@@ -608,6 +620,14 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
         directory: eventDirectory,
         payload: { type: 'session.error', properties: { sessionID, error: { name, message } } }
       })
+    },
+    setSessionRetry: ({ sessionID, message, attempt, next }) => {
+      sessionStatuses.set(sessionID, { type: 'retry', message, attempt, next })
+      emitGlobalEvent({ directory, payload: { type: 'session.status', properties: { sessionID } } })
+    },
+    clearSessionStatus: (sessionID) => {
+      sessionStatuses.delete(sessionID)
+      emitGlobalEvent({ directory, payload: { type: 'session.status', properties: { sessionID } } })
     },
     getProviderManagementRequests: () =>
       providerManagementRequests.map((request) => ({ ...request })),
