@@ -42,11 +42,6 @@ const sourceGoogleWorkspacePluginPath = join(
   'google-workspace.ts'
 )
 const toolName = 'openkhodam_plugin_ping'
-const googleDriveToolName = 'google_drive_search_files'
-const googleDocsReadToolName = 'google_docs_read'
-const googleDocsEditToolName = 'google_docs_edit'
-const googleSheetsReadToolName = 'google_sheets_read'
-const googleSheetsEditToolName = 'google_sheets_edit'
 const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.metadata.readonly'
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 const googleSheetsSpreadsheetsScope = 'https://www.googleapis.com/auth/spreadsheets.readonly'
@@ -88,95 +83,6 @@ type GoogleWorkspacePlugin = {
       description: string
       execute: (args: { query: string }, context: { abort?: AbortSignal }) => Promise<string>
     }
-    google_docs_edit: {
-      description: string
-      execute: (
-        args: {
-          documentId?: string
-          operation?: {
-            match?: string
-            occurrence?: number | string
-            text?: string
-            type?: string
-          }
-        },
-        context: {
-          abort?: AbortSignal
-          directory?: string
-          messageID?: string
-          sessionID?: string
-          worktree?: string
-        }
-      ) => Promise<string>
-    }
-    google_docs_read: {
-      description: string
-      execute: (
-        args: { documentId?: string },
-        context: {
-          abort?: AbortSignal
-          directory?: string
-          messageID?: string
-          sessionID?: string
-          worktree?: string
-        }
-      ) => Promise<string>
-    }
-    google_drive_search_files: {
-      description: string
-      execute: (
-        args: { limit?: number; query?: string },
-        context: { abort?: AbortSignal }
-      ) => Promise<string>
-    }
-    google_sheets_read: {
-      args: {
-        ranges: Record<string, unknown>
-        spreadsheetId: Record<string, unknown>
-        valueRenderOption: Record<string, unknown>
-      }
-      description: string
-      execute: (
-        args: { ranges?: string[]; spreadsheetId?: string; valueRenderOption?: string },
-        context: {
-          abort?: AbortSignal
-          directory?: string
-          messageID?: string
-          sessionID?: string
-          worktree?: string
-        }
-      ) => Promise<string>
-    }
-    google_sheets_edit: {
-      args: {
-        operation: {
-          properties: Record<string, unknown>
-          required: string[]
-        }
-        spreadsheetId: Record<string, unknown>
-      }
-      description: string
-      execute: (
-        args: {
-          operation?: {
-            range?: string
-            rows?: unknown
-            type?: string
-            valueInputOption?: string
-            values?: unknown
-          }
-          spreadsheetId?: string
-        },
-        context: {
-          abort?: AbortSignal
-          directory?: string
-          messageID?: string
-          sessionID?: string
-          worktree?: string
-          ask?: (...args: unknown[]) => Promise<unknown>
-        }
-      ) => Promise<string>
-    }
   }
 }
 
@@ -199,6 +105,43 @@ type OpenKhodamConfigFixture = {
       updatedAt: number | null
     }
   }
+}
+
+type GoogleWorkspaceCommandContext = {
+  abort?: AbortSignal
+  directory?: string
+  messageID?: string
+  sessionID?: string
+  worktree?: string
+}
+
+async function executeGoogleWorkspaceCommand(
+  plugin: GoogleWorkspacePlugin,
+  command: string,
+  input: Record<string, unknown>,
+  context: GoogleWorkspaceCommandContext
+): Promise<string> {
+  return plugin.tool.google_workspace_execute_command.execute({ command, input }, context)
+}
+
+async function listGoogleWorkspaceCommands(plugin: GoogleWorkspacePlugin): Promise<{
+  commands: Array<{
+    description: string
+    id: string
+    inputSchema: { properties?: Record<string, unknown>; required: string[] }
+  }>
+}> {
+  return JSON.parse(await plugin.tool.google_workspace_list_commands.execute({ query: '' }, {}))
+}
+
+function googleDocsOperationCommandInput(operation: {
+  match?: string
+  occurrence?: number | string
+  text?: string
+  type: string
+}): Record<string, unknown> {
+  const { type: _type, ...input } = operation
+  return input
 }
 
 type JsonConfigFileModule = typeof import('../../desktop/src/main/config/json-config-file')
@@ -1189,10 +1132,10 @@ test('loads the Google Workspace ESM plugin and searches Drive with safe metadat
 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
-    expect(plugin.tool.google_drive_search_files.description).toContain('metadata only')
-
     const output = JSON.parse(
-      await plugin.tool.google_drive_search_files.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.drive.search_files',
         { limit: 50, query: "budget's \\ plan" },
         {}
       )
@@ -1336,10 +1279,8 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
-    expect(plugin.tool.google_docs_read.description).toContain('google.doc.document')
-
     const output = JSON.parse(
-      await plugin.tool.google_docs_read.execute({ documentId: ' doc-1 ' }, {})
+      await executeGoogleWorkspaceCommand(plugin, 'google.docs.read', { documentId: ' doc-1 ' }, {})
     ) as {
       document: Record<string, unknown>
     }
@@ -1421,44 +1362,46 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
   }
 })
 
-test('registers Google Sheets read and edit tools with bounded A1 schemas', async () => {
+test('registers exactly generic Google Workspace tools and discovers strict Sheets command schemas', async () => {
   const plugin = await loadGoogleWorkspacePlugin()
 
-  expect(plugin.tool.google_sheets_read.description).toContain('google.sheet.spreadsheet')
-  expect(plugin.tool.google_sheets_read.description).toContain('Read-only')
-  expect(plugin.tool.google_sheets_read.args.spreadsheetId).toMatchObject({ type: 'string' })
-  expect(plugin.tool.google_sheets_read.args.ranges).toMatchObject({
-    items: { type: 'string' },
-    maxItems: 5,
-    type: 'array'
+  expect(Object.keys(plugin.tool)).toEqual([
+    'google_workspace_list_commands',
+    'google_workspace_execute_command'
+  ])
+  const commands = await listGoogleWorkspaceCommands(plugin)
+  expect(commands.commands).toHaveLength(11)
+  const byId = new Map(commands.commands.map((command) => [command.id, command.inputSchema]))
+  expect(byId.get('google.sheets.read')).toMatchObject({
+    additionalProperties: false,
+    required: ['spreadsheetId'],
+    properties: {
+      spreadsheetId: { type: 'string' },
+      ranges: {
+        items: { type: 'string' },
+        maxItems: 5,
+        type: 'array'
+      },
+      valueRenderOption: {
+        default: 'FORMATTED_VALUE',
+        enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'],
+        type: 'string'
+      }
+    }
   })
-  expect(plugin.tool.google_sheets_read.args.valueRenderOption).toMatchObject({
-    default: 'FORMATTED_VALUE',
-    enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'],
-    type: 'string'
+  expect(byId.get('google.sheets.set_values')).toMatchObject({
+    additionalProperties: false,
+    required: ['spreadsheetId', 'range', 'values'],
+    properties: { valueInputOption: { default: 'USER_ENTERED', enum: ['USER_ENTERED', 'RAW'] } }
   })
-  expect(plugin.tool.google_sheets_edit.description).toContain('writes directly')
-  expect(plugin.tool.google_sheets_edit.description).toContain('bounded')
-  expect(plugin.tool.google_sheets_edit.description).not.toMatch(/approval/i)
-  expect(plugin.tool.google_sheets_edit.args.spreadsheetId).toMatchObject({ type: 'string' })
-  expect(plugin.tool.google_sheets_edit.args.operation.required).toEqual(['type', 'range'])
-  expect(plugin.tool.google_sheets_edit.args.operation.properties.type).toMatchObject({
-    enum: ['set_values', 'append_rows', 'clear_range'],
-    type: 'string'
+  expect(byId.get('google.sheets.append_rows')).toMatchObject({
+    additionalProperties: false,
+    required: ['spreadsheetId', 'range', 'rows']
   })
-  expect(plugin.tool.google_sheets_edit.args.operation.properties.range).toMatchObject({
-    type: 'string'
+  expect(byId.get('google.sheets.clear_range')).toMatchObject({
+    additionalProperties: false,
+    required: ['spreadsheetId', 'range']
   })
-  expect(plugin.tool.google_sheets_edit.args.operation.properties.valueInputOption).toMatchObject({
-    default: 'USER_ENTERED',
-    enum: ['USER_ENTERED', 'RAW'],
-    type: 'string'
-  })
-  const operationSchemaText = JSON.stringify(plugin.tool.google_sheets_edit.args.operation)
-  expect(operationSchemaText).not.toContain('startIndex')
-  expect(operationSchemaText).not.toContain('endIndex')
-  expect(operationSchemaText).not.toContain('sheetId')
-  expect(operationSchemaText).not.toContain('gridRange')
 })
 
 test('reads explicit Google Sheets ranges through Sheets API and persists a spreadsheet artifact', async () => {
@@ -1564,7 +1507,9 @@ test('reads explicit Google Sheets ranges through Sheets API and persists a spre
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     const output = JSON.parse(
-      await plugin.tool.google_sheets_read.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.read',
         {
           spreadsheetId: ` ${spreadsheetId} `,
           ranges: [' Summary!A1:C3 ', "'Data Sheet'!B2:D4"],
@@ -1798,7 +1743,12 @@ test('derives bounded default visible-sheet ranges for Google Sheets reads', asy
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     const output = JSON.parse(
-      await plugin.tool.google_sheets_read.execute({ spreadsheetId: 'default-sheet' }, {})
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.read',
+        { spreadsheetId: 'default-sheet', ranges: [] },
+        {}
+      )
     ) as {
       spreadsheet: { ranges: Array<{ range: string; values: string[][] }> }
     }
@@ -1816,6 +1766,30 @@ test('derives bounded default visible-sheet ranges for Google Sheets reads', asy
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('rejects blank Google Sheets read ranges before network access', async () => {
+  const plugin = await loadGoogleWorkspacePlugin()
+  let fetchCalls = 0
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => {
+    fetchCalls += 1
+    throw new Error('google.sheets.read should validate blank ranges before network access')
+  }) as typeof fetch
+
+  try {
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.read',
+        { spreadsheetId: 'default-sheet', ranges: [' '] },
+        {}
+      )
+    ).rejects.toThrow('requires ranges to be an array of at most 5 strings')
+    expect(fetchCalls).toBe(0)
+  } finally {
+    globalThis.fetch = originalFetch
   }
 })
 
@@ -1883,7 +1857,12 @@ test('logs sanitized Google Sheets API failures without request bodies or cell c
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     await expect(
-      plugin.tool.google_sheets_read.execute({ spreadsheetId: 'sheet-denied' }, {})
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.read',
+        { spreadsheetId: 'sheet-denied' },
+        {}
+      )
     ).rejects.toThrow(
       'Google Sheets values.batchGet failed (HTTP 403, PERMISSION_DENIED, ACCESS_TOKEN_SCOPE_INSUFFICIENT): Sheets permission denied.'
     )
@@ -2079,25 +2058,24 @@ test('writes Google Sheets edits directly and persists refreshed spreadsheet art
     const context = {
       ask: async () => {
         askCalls += 1
-        throw new Error('google_sheets_edit should not call context.ask')
+        throw new Error('google.sheets command should not call context.ask')
       },
       directory: projectPath,
       sessionID: 'session-sheets-edit'
     }
 
     const setOutput = JSON.parse(
-      await plugin.tool.google_sheets_edit.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.set_values',
         {
           spreadsheetId,
-          operation: {
-            range: ' Summary!A1:B2 ',
-            type: 'set_values',
-            valueInputOption: 'RAW',
-            values: [
-              ['Name', 'Amount'],
-              ['Launch', 42]
-            ]
-          }
+          range: ' Summary!A1:B2 ',
+          valueInputOption: 'RAW',
+          values: [
+            ['Name', 'Amount'],
+            ['Launch', 42]
+          ]
         },
         context
       )
@@ -2106,14 +2084,13 @@ test('writes Google Sheets edits directly and persists refreshed spreadsheet art
       spreadsheet: { ranges: Array<{ range: string; values: unknown[][] }> }
     }
     const appendOutput = JSON.parse(
-      await plugin.tool.google_sheets_edit.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.append_rows',
         {
           spreadsheetId,
-          operation: {
-            range: 'Summary!A:C',
-            rows: [['Appended', true]],
-            type: 'append_rows'
-          }
+          range: 'Summary!A:C',
+          rows: [['Appended', true]]
         },
         context
       )
@@ -2122,13 +2099,12 @@ test('writes Google Sheets edits directly and persists refreshed spreadsheet art
       spreadsheet: { ranges: Array<{ range: string; values: unknown[][] }> }
     }
     const clearOutput = JSON.parse(
-      await plugin.tool.google_sheets_edit.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.clear_range',
         {
           spreadsheetId,
-          operation: {
-            range: 'Summary!C1:C2',
-            type: 'clear_range'
-          }
+          range: 'Summary!C1:C2'
         },
         context
       )
@@ -2369,14 +2345,13 @@ test('logs sanitized Google Sheets write failures without request bodies or cell
     const plugin = await loadGoogleWorkspacePlugin()
     let thrownMessage = ''
     try {
-      await plugin.tool.google_sheets_edit.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.set_values',
         {
           spreadsheetId: 'sheet-conflict',
-          operation: {
-            range: 'Summary!A1:B1',
-            type: 'set_values',
-            values: [[multilineCell, escapedCell, repeatedWhitespaceCell, longCell]]
-          }
+          range: 'Summary!A1:B1',
+          values: [[multilineCell, escapedCell, repeatedWhitespaceCell, longCell]]
         },
         {}
       )
@@ -2538,35 +2513,27 @@ test('writes semantic Google Docs insert edits directly and returns a bounded re
 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
-    expect(plugin.tool.google_docs_edit.description).toContain('semantic operations')
-    expect(plugin.tool.google_docs_edit.description).toContain('writes directly')
-    expect(plugin.tool.google_docs_edit.description).toContain('bounded')
-    expect(plugin.tool.google_docs_edit.description).not.toMatch(/approval/i)
-    expect((plugin.tool as Record<string, unknown>).google_docs_append_text).toBeUndefined()
-    expect(plugin.tool.google_docs_edit.args.operation.required).toEqual(['type'])
-    expect(plugin.tool.google_docs_edit.args.operation.properties.type).toMatchObject({
-      enum: [
-        'append_text',
-        'insert_after_text',
-        'insert_before_text',
-        'replace_text',
-        'delete_text'
-      ]
+    const discovery = await listGoogleWorkspaceCommands(plugin)
+    const insertAfterCommand = discovery.commands.find(
+      (command) => command.id === 'google.docs.insert_after_text'
+    )
+    expect(insertAfterCommand).toMatchObject({
+      description: expect.stringContaining('Insert literal text after'),
+      inputSchema: { required: ['documentId', 'match', 'text'] }
     })
-    const operationSchemaText = JSON.stringify(plugin.tool.google_docs_edit.args.operation)
+    const operationSchemaText = JSON.stringify(insertAfterCommand?.inputSchema)
     expect(operationSchemaText).not.toContain('startIndex')
     expect(operationSchemaText).not.toContain('endIndex')
     expect(operationSchemaText).not.toContain('insertionIndex')
 
     const output = JSON.parse(
-      await plugin.tool.google_docs_edit.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.insert_after_text',
         {
           documentId: 'doc-edit',
-          operation: {
-            match: 'this is nice',
-            text: rawInsertedText,
-            type: 'insert_after_text'
-          }
+          match: 'this is nice',
+          text: rawInsertedText
         },
         {}
       )
@@ -2861,10 +2828,12 @@ test('supports semantic Google Docs insert-before, replace, and delete edits', a
     const plugin = await loadGoogleWorkspacePlugin()
     for (const scenario of scenarios) {
       const output = JSON.parse(
-        await plugin.tool.google_docs_edit.execute(
+        await executeGoogleWorkspaceCommand(
+          plugin,
+          `google.docs.${scenario.operation.type}`,
           {
             documentId: scenario.documentId,
-            operation: scenario.operation
+            ...googleDocsOperationCommandInput(scenario.operation)
           },
           {}
         )
@@ -3002,10 +2971,12 @@ test('refreshes full Google Docs artifacts after successful append_text edits', 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     const output = JSON.parse(
-      await plugin.tool.google_docs_edit.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.append_text',
         {
           documentId,
-          operation: { text: appendedText, type: 'append_text' }
+          text: appendedText
         },
         {
           directory: projectPath,
@@ -3317,10 +3288,12 @@ test('writes every Google Docs edit operation directly without context.ask', asy
     const plugin = await loadGoogleWorkspacePlugin()
     for (const directWriteCase of directWriteCases) {
       const output = JSON.parse(
-        await plugin.tool.google_docs_edit.execute(
+        await executeGoogleWorkspaceCommand(
+          plugin,
+          `google.docs.${directWriteCase.operation.type}`,
           {
             documentId: directWriteCase.documentId,
-            operation: directWriteCase.operation
+            ...googleDocsOperationCommandInput(directWriteCase.operation)
           },
           {}
         )
@@ -3460,25 +3433,43 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
         inputSchema: { properties?: Record<string, unknown>; required: string[] }
       }>
     }
-    expect(discovery.commands).toHaveLength(5)
-    expect(discovery.commands.map((command) => command.id)).toEqual(
-      cases.map((item) => item.command)
-    )
+    expect(discovery.commands).toHaveLength(11)
+    expect(discovery.commands.map((command) => command.id)).toEqual([
+      'google.drive.search_files',
+      'google.docs.read',
+      ...cases.map((item) => item.command),
+      'google.sheets.read',
+      'google.sheets.set_values',
+      'google.sheets.append_rows',
+      'google.sheets.clear_range'
+    ])
     expect(discovery.commands.map((command) => command.inputSchema.required)).toEqual([
+      [],
+      ['documentId'],
       ['documentId', 'text'],
       ['documentId', 'match', 'text'],
       ['documentId', 'match', 'text'],
       ['documentId', 'match', 'text'],
-      ['documentId', 'match']
+      ['documentId', 'match'],
+      ['spreadsheetId'],
+      ['spreadsheetId', 'range', 'values'],
+      ['spreadsheetId', 'range', 'rows'],
+      ['spreadsheetId', 'range']
     ])
     expect(
       discovery.commands.map((command) => Object.keys(command.inputSchema.properties ?? {}))
     ).toEqual([
+      ['query', 'limit'],
+      ['documentId'],
       ['documentId', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
-      ['documentId', 'match', 'occurrence']
+      ['documentId', 'match', 'occurrence'],
+      ['spreadsheetId', 'ranges', 'valueRenderOption'],
+      ['spreadsheetId', 'range', 'values', 'valueInputOption'],
+      ['spreadsheetId', 'range', 'rows', 'valueInputOption'],
+      ['spreadsheetId', 'range']
     ])
     expect(plugin.tool.google_workspace_list_commands.args.query).toMatchObject({ type: 'string' })
     expect(
@@ -3532,6 +3523,182 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('executes newly registered Google Workspace commands with strict pre-network validation', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-workspace-registry-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const requests: Array<{ body: unknown; method: string; url: URL }> = []
+
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: [
+      'email',
+      googleDriveMetadataReadonlyScope,
+      googleDocsDocumentsScope,
+      googleSheetsSpreadsheetsWriteScope,
+      'openid',
+      'profile'
+    ],
+    token: {
+      accessToken: 'registry-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    requests.push({ body: init?.body, method: init?.method ?? 'GET', url })
+    if (url.hostname === 'www.googleapis.com' && url.pathname === '/drive/v3/files') {
+      return new Response(JSON.stringify({ files: [{ id: 'drive-file', name: 'Budget' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    if (url.hostname === 'docs.googleapis.com') {
+      const documentId = decodeURIComponent(url.pathname.slice('/v1/documents/'.length))
+      return new Response(
+        JSON.stringify({
+          body: { content: [] },
+          documentId,
+          revisionId: 'registry-revision',
+          title: 'Registry Doc'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+    if (url.hostname === 'sheets.googleapis.com') {
+      const spreadsheetId = decodeURIComponent(url.pathname.split('/')[4] ?? '')
+      if (url.pathname.endsWith('/values:batchGet')) {
+        return new Response(
+          JSON.stringify({
+            spreadsheetId,
+            valueRanges: [{ majorDimension: 'ROWS', range: 'Sheet1!A1', values: [['value']] }]
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          properties: { title: 'Registry Sheet' },
+          spreadsheetId,
+          spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+          sheets: [{ properties: { index: 0, sheetId: 1, sheetType: 'GRID', title: 'Sheet1' } }]
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const context = {
+      directory: projectPath,
+      messageID: 'registry-message',
+      sessionID: 'registry-session'
+    }
+    const execute = plugin.tool.google_workspace_execute_command.execute
+
+    await execute({ command: 'google.drive.search_files', input: { query: 'Budget' } }, context)
+    await execute({ command: 'google.docs.read', input: { documentId: 'registry-doc' } }, context)
+    await execute(
+      { command: 'google.sheets.read', input: { spreadsheetId: 'registry-read' } },
+      context
+    )
+    await execute(
+      {
+        command: 'google.sheets.set_values',
+        input: { range: 'Sheet1!A1', spreadsheetId: 'registry-set', values: [['set']] }
+      },
+      context
+    )
+    await execute(
+      {
+        command: 'google.sheets.append_rows',
+        input: { range: 'Sheet1!A1', rows: [[]], spreadsheetId: 'registry-append' }
+      },
+      context
+    )
+    await execute(
+      {
+        command: 'google.sheets.clear_range',
+        input: { range: 'Sheet1!A1', spreadsheetId: 'registry-clear' }
+      },
+      context
+    )
+
+    const driveRequest = requests.find((request) => request.url.hostname === 'www.googleapis.com')
+    expect(driveRequest?.url.searchParams.get('pageSize')).toBe('10')
+    expect(driveRequest?.url.searchParams.get('q')).toContain("name contains 'Budget'")
+    expect(
+      requests
+        .find(
+          (request) => request.url.pathname === '/v4/spreadsheets/registry-read/values:batchGet'
+        )
+        ?.url.searchParams.get('valueRenderOption')
+    ).toBe('FORMATTED_VALUE')
+    expect(requests.some((request) => request.url.pathname.includes('/registry-set/values/'))).toBe(
+      true
+    )
+    expect(
+      requests.some((request) => request.url.pathname.includes('/registry-append/values/'))
+    ).toBe(true)
+    expect(
+      requests.some((request) =>
+        request.url.pathname.endsWith('/registry-clear/values/Sheet1%21A1:clear')
+      )
+    ).toBe(true)
+    expect(
+      await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, 'registry-doc'), 'utf8')
+    ).toContain('registry-doc')
+    expect(await readFile(join(projectPath, '.openkhodam', 'artifacts.json'), 'utf8')).toContain(
+      'registry-session'
+    )
+
+    const fetchCount = requests.length
+    await expect(
+      execute(
+        {
+          command: 'google.sheets.read',
+          input: { ranges: ['   '], spreadsheetId: 'invalid-read' }
+        },
+        context
+      )
+    ).rejects.toThrow('requires ranges')
+    await expect(
+      execute(
+        {
+          command: 'google.sheets.set_values',
+          input: { range: 'Sheet1!A1', spreadsheetId: 'invalid-set', values: [] }
+        },
+        context
+      )
+    ).rejects.toThrow('requires values')
+    await expect(
+      execute(
+        {
+          command: 'google.sheets.append_rows',
+          input: { range: 'Sheet1!A1', rows: [], spreadsheetId: 'invalid-append' }
+        },
+        context
+      )
+    ).rejects.toThrow('requires rows')
+    expect(requests).toHaveLength(fetchCount)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
@@ -3603,14 +3770,13 @@ test('rejects unsupported insert_after_text matches before batchUpdate', async (
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     await expect(
-      plugin.tool.google_docs_edit.execute(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.insert_after_text',
         {
           documentId: 'doc-mixed-match',
-          operation: {
-            match: 'this is nice',
-            text: 'Should not write',
-            type: 'insert_after_text'
-          }
+          match: 'this is nice',
+          text: 'Should not write'
         },
         {}
       )
@@ -3704,10 +3870,12 @@ test('logs sanitized Google Docs batchUpdate failures after direct append_text e
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     await expect(
-      plugin.tool.google_docs_edit.execute(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.append_text',
         {
           documentId: 'doc-conflict',
-          operation: { text: 'Sensitive inserted text', type: 'append_text' }
+          text: 'Sensitive inserted text'
         },
         {}
       )
@@ -3845,7 +4013,12 @@ test('bounds Google Docs read previews while persisting the full normalized arti
     }
 
     const textCapOutput = JSON.parse(
-      await plugin.tool.google_docs_read.execute({ documentId: textCapDocumentId }, context)
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId: textCapDocumentId },
+        context
+      )
     ) as {
       document: Record<string, unknown>
     }
@@ -3866,7 +4039,12 @@ test('bounds Google Docs read previews while persisting the full normalized arti
     expect(JSON.stringify(textCapDocument)).not.toContain('markdown')
 
     const blockCapOutput = JSON.parse(
-      await plugin.tool.google_docs_read.execute({ documentId: blockCapDocumentId }, context)
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId: blockCapDocumentId },
+        context
+      )
     ) as {
       document: Record<string, unknown>
     }
@@ -3887,7 +4065,9 @@ test('bounds Google Docs read previews while persisting the full normalized arti
     const noSessionProjectPath = join(tempRoot, 'no-session-project')
     await mkdir(noSessionProjectPath, { recursive: true })
     const noSessionOutput = JSON.parse(
-      await plugin.tool.google_docs_read.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
         { documentId: noSessionDocumentId },
         { directory: noSessionProjectPath }
       )
@@ -4009,7 +4189,12 @@ test('records linked Google Docs from directory context when worktree is root-li
     }
 
     const firstOutput = JSON.parse(
-      await plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, context)
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId: 'doc-1' },
+        context
+      )
     ) as {
       document: Record<string, unknown>
     }
@@ -4056,7 +4241,12 @@ test('records linked Google Docs from directory context when worktree is root-li
     })
 
     const secondOutput = JSON.parse(
-      await plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, context)
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId: 'doc-1' },
+        context
+      )
     ) as {
       document: Record<string, unknown>
     }
@@ -4185,13 +4375,17 @@ test('records tool-call message provenance for linked Google Docs and Sheets art
       messageID: 'assistant-message-2'
     }
 
-    await plugin.tool.google_docs_read.execute({ documentId }, firstContext)
-    await plugin.tool.google_sheets_read.execute(
+    await executeGoogleWorkspaceCommand(plugin, 'google.docs.read', { documentId }, firstContext)
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.sheets.read',
       { spreadsheetId, ranges: ['Summary!A1:B2'] },
       firstContext
     )
-    await plugin.tool.google_docs_read.execute({ documentId }, secondContext)
-    await plugin.tool.google_sheets_read.execute(
+    await executeGoogleWorkspaceCommand(plugin, 'google.docs.read', { documentId }, secondContext)
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.sheets.read',
       { spreadsheetId, ranges: ['Summary!A1:B2'] },
       secondContext
     )
@@ -4296,7 +4490,9 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     const output = JSON.parse(
-      await plugin.tool.google_docs_read.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
         { documentId: 'doc-index-failure' },
         { directory: projectPath, sessionID: 'session-1' }
       )
@@ -4459,7 +4655,9 @@ test('cleans up only newly created Google Sheet artifacts when session index rec
     const context = { directory: projectPath, sessionID: 'session-1' }
 
     const existingOutput = JSON.parse(
-      await plugin.tool.google_sheets_read.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.read',
         { spreadsheetId: existingSpreadsheetId, ranges: ['Summary!A1:A1'] },
         context
       )
@@ -4479,7 +4677,9 @@ test('cleans up only newly created Google Sheet artifacts when session index rec
     })
 
     const createdOutput = JSON.parse(
-      await plugin.tool.google_sheets_read.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.read',
         { spreadsheetId: createdSpreadsheetId, ranges: ['Summary!A1:A1'] },
         context
       )
@@ -4594,7 +4794,9 @@ test('keeps Google Docs read output when linked-doc artifact recording fails', a
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     const output = JSON.parse(
-      await plugin.tool.google_docs_read.execute(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
         { documentId: 'doc-1' },
         { directory: projectPath, sessionID: 'session-1' }
       )
@@ -4715,12 +4917,12 @@ test('logs sanitized Google API failures for Drive and Docs permission errors', 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     await expect(
-      plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
+      executeGoogleWorkspaceCommand(plugin, 'google.drive.search_files', { query: 'budget' }, {})
     ).rejects.toThrow(
       'Google Drive files.list failed (HTTP 403, PERMISSION_DENIED, ACCESS_TOKEN_SCOPE_INSUFFICIENT): Drive permission denied.'
     )
     await expect(
-      plugin.tool.google_docs_read.execute({ documentId: 'doc-denied' }, {})
+      executeGoogleWorkspaceCommand(plugin, 'google.docs.read', { documentId: 'doc-denied' }, {})
     ).rejects.toThrow(
       'Google Docs documents.get failed (HTTP 403, PERMISSION_DENIED, ACCESS_TOKEN_SCOPE_INSUFFICIENT): Request had insufficient authentication scopes.'
     )
@@ -4773,7 +4975,7 @@ test('returns a clear Settings connection error when Google Workspace is disconn
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     await expect(
-      plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
+      executeGoogleWorkspaceCommand(plugin, 'google.drive.search_files', { query: 'budget' }, {})
     ).rejects.toThrow(
       'Google Workspace is disconnected. Connect Google Workspace in Settings before using google_drive_search_files.'
     )
@@ -4805,7 +5007,7 @@ test('returns a clear reconnect error when the Drive metadata scope is missing',
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     await expect(
-      plugin.tool.google_drive_search_files.execute({ query: 'budget' }, {})
+      executeGoogleWorkspaceCommand(plugin, 'google.drive.search_files', { query: 'budget' }, {})
     ).rejects.toThrow(
       'Google Drive access is not enabled. Reconnect Google Workspace in Settings to grant Drive metadata read-only access.'
     )
@@ -4836,7 +5038,9 @@ test('returns a clear reconnect error when the Google Docs scope is missing', as
 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
-    await expect(plugin.tool.google_docs_read.execute({ documentId: 'doc-1' }, {})).rejects.toThrow(
+    await expect(
+      executeGoogleWorkspaceCommand(plugin, 'google.docs.read', { documentId: 'doc-1' }, {})
+    ).rejects.toThrow(
       'Google Docs access is not enabled. Reconnect Google Workspace in Settings to grant Google Docs read/write access.'
     )
   } finally {
@@ -4873,7 +5077,7 @@ test('returns a clear reconnect error when the Google Sheets scope is missing', 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     await expect(
-      plugin.tool.google_sheets_read.execute({ spreadsheetId: 'sheet-1' }, {})
+      executeGoogleWorkspaceCommand(plugin, 'google.sheets.read', { spreadsheetId: 'sheet-1' }, {})
     ).rejects.toThrow(
       'Google Sheets access is not enabled. Reconnect Google Workspace in Settings with Sheets access enabled.'
     )
@@ -4905,17 +5109,16 @@ test('returns a clear reconnect error when Google Sheets write scope is missing 
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async () => {
     fetchCalls += 1
-    throw new Error('google_sheets_edit should not call Google APIs without write scope')
+    throw new Error('google.sheets.set_values should not call Google APIs without write scope')
   }) as typeof fetch
 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
     await expect(
-      plugin.tool.google_sheets_edit.execute(
-        {
-          spreadsheetId: 'sheet-1',
-          operation: { range: 'Summary!A1:B1', type: 'set_values', values: [['new value']] }
-        },
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.sheets.set_values',
+        { spreadsheetId: 'sheet-1', range: 'Summary!A1:B1', values: [['new value']] },
         {}
       )
     ).rejects.toThrow(
@@ -5087,11 +5290,13 @@ async function expectOpenCodeLoadsPlugins(pluginPaths: string[]): Promise<void> 
 
     expect(response.status, `${body}\n${server.logs()}`).toBe(200)
     expect(JSON.parse(body) as string[]).toContain(toolName)
-    expect(JSON.parse(body) as string[]).toContain(googleDriveToolName)
-    expect(JSON.parse(body) as string[]).toContain(googleDocsReadToolName)
-    expect(JSON.parse(body) as string[]).toContain(googleDocsEditToolName)
-    expect(JSON.parse(body) as string[]).toContain(googleSheetsReadToolName)
-    expect(JSON.parse(body) as string[]).toContain(googleSheetsEditToolName)
+    expect(JSON.parse(body) as string[]).not.toContain('google_drive_search_files')
+    expect(JSON.parse(body) as string[]).not.toContain('google_docs_read')
+    expect(JSON.parse(body) as string[]).not.toContain('google_docs_edit')
+    expect(JSON.parse(body) as string[]).toContain('google_workspace_list_commands')
+    expect(JSON.parse(body) as string[]).toContain('google_workspace_execute_command')
+    expect(JSON.parse(body) as string[]).not.toContain('google_sheets_read')
+    expect(JSON.parse(body) as string[]).not.toContain('google_sheets_edit')
     expect(JSON.parse(body) as string[]).not.toContain('google_docs_append_text')
     expect(server.logs()).not.toMatch(/failed to load plugin/i)
   } finally {
