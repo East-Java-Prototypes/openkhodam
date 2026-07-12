@@ -1956,6 +1956,96 @@ test('stops active session generation before delayed projection', async ({
   ).toHaveCount(0)
 })
 
+test('serializes send, undo, and stop mutations while their responses are delayed', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+  const promptInput = appWindow.getByLabel('Message OpenKhodam')
+  const sendButton = appWindow.getByRole('button', { name: /^(Send|Sending…)$/, exact: true })
+  const stopButton = appWindow.getByRole('button', { name: 'Stop generation', exact: true })
+
+  fakeOpenCodeServer.armPromptGate()
+  await promptInput.fill('Delayed mutation serialization prompt')
+  await sendButton.click()
+  await fakeOpenCodeServer.waitForPrompt()
+  await expect(appWindow.getByRole('button', { name: 'Sending…', exact: true })).toBeDisabled()
+  await expect(stopButton).toHaveCount(0)
+  fakeOpenCodeServer.releasePrompt()
+  await expect(stopButton).toBeVisible()
+
+  fakeOpenCodeServer.armRevertGate()
+  await promptInput.fill('/undo')
+  await sendButton.click()
+  await fakeOpenCodeServer.waitForRevert()
+  await expect(stopButton).toHaveCount(0)
+  await expect(promptInput).toBeDisabled()
+  fakeOpenCodeServer.releaseRevert()
+  await expect(promptInput).toHaveValue('Delayed mutation serialization prompt')
+})
+
+test('keeps the stop control visible and disables the composer while stopping', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+  await sendPrompt(appWindow, 'Delayed stop mutation prompt')
+  const stopButton = appWindow.getByRole('button', { name: 'Stop generation', exact: true })
+  fakeOpenCodeServer.armAbortGate()
+  await stopButton.click()
+  await fakeOpenCodeServer.waitForAbort()
+  await expect(stopButton).toBeVisible()
+  await expect(stopButton).toBeDisabled()
+  await expect(appWindow.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+  fakeOpenCodeServer.releaseAbort()
+})
+
+test('preserves pending generation and shows an error when OpenCode rejects stop', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+  const prompt = 'False stop retains generation'
+  await sendPrompt(appWindow, prompt)
+  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toBeVisible()
+  fakeOpenCodeServer.setAbortFalseOnce()
+  await appWindow.getByRole('button', { name: 'Stop generation', exact: true }).click()
+  await expect(
+    appWindow.getByText('OpenCode did not confirm that generation stopped.')
+  ).toBeVisible()
+  await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toBeVisible()
+})
+
+test('suppresses matching MessageAbortedError events before and after Stop confirmation', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+  await sendPrompt(appWindow, 'Stop event suppression prompt')
+  fakeOpenCodeServer.armAbortGate()
+  await appWindow.getByRole('button', { name: 'Stop generation', exact: true }).click()
+  await fakeOpenCodeServer.waitForAbort()
+  fakeOpenCodeServer.emitSessionError({
+    sessionID: 'seeded-session',
+    name: 'MessageAbortedError',
+    message: 'Generation aborted.'
+  })
+  await expect(appWindow.getByText('Generation aborted.')).toBeVisible()
+  fakeOpenCodeServer.releaseAbort()
+  await expect(appWindow.getByText('Generation aborted.')).toHaveCount(0)
+
+  await appWindow.reload()
+  await expect(appWindow.getByRole('heading', { name: 'Seeded deterministic chat' })).toBeVisible()
+  await expect(appWindow.getByText('Generation aborted.')).toHaveCount(0)
+
+  fakeOpenCodeServer.emitSessionError({
+    sessionID: 'seeded-session',
+    name: 'UnexpectedError',
+    message: 'Unrelated session failure remains visible.'
+  })
+  await expect(appWindow.getByText('Unrelated session failure remains visible.')).toBeVisible()
+})
+
 test('shows optimistic prompt before delayed stable message projection', async ({ appWindow }) => {
   await openSeededDeterministicChat(appWindow)
 

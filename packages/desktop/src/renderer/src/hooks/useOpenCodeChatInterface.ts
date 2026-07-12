@@ -52,6 +52,8 @@ type StoppedGeneration = {
   at: number
 }
 
+const stoppedGenerationMarkerLifetimeMs = 30_000
+
 export type OpenCodeHeartbeatStatus = {
   connected: boolean
   ariaLabel: string
@@ -302,6 +304,7 @@ export function useOpenCodeSessionRoute(
   const [promptText, setPromptText] = useState('')
   const [optimisticPrompts, setOptimisticPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
   const [awaitingPrompts, setAwaitingPrompts] = useState<OpenCodeAdmittedPrompt[]>([])
+  const stoppedGenerationRef = useRef<StoppedGeneration | null>(null)
   const [stoppedGeneration, setStoppedGeneration] = useState<StoppedGeneration | null>(null)
   const queryClient = useQueryClient()
   const { sessionQuery } = useOpenCodeSession(directory, sessionID)
@@ -330,6 +333,9 @@ export function useOpenCodeSessionRoute(
     directory,
     sessionID
   )
+  const [isStartingPrompt, setStartingPrompt] = useState(false)
+  const [isStartingUndo, setStartingUndo] = useState(false)
+  const [isStartingStop, setStartingStop] = useState(false)
   const messages = messagesQuery.data ?? emptyMessages
   const sessionEventErrorsQuery = useQuery({
     queryKey: openCodeSessionEventErrorsQueryKey,
@@ -344,15 +350,32 @@ export function useOpenCodeSessionRoute(
   const sessionEventError = sessionEventErrors.find(
     (error) =>
       isMatchingSessionEventError(error, directory, sessionID) &&
-      !isBenignStoppedGenerationFeedback(error.message, stoppedGeneration, {
-        directory: error.directory,
-        sessionID: error.sessionID,
-        at: error.at
-      })
+      !isBenignStoppedGenerationFeedback(error, stoppedGeneration)
   )
-  const isSending = sendPromptMutation.isPending
-  const isUndoingPrompt = undoPromptMutation.isPending
-  const isStoppingGeneration = abortSessionMutation.isPending
+
+  useEffect(() => {
+    if (!stoppedGeneration) return
+    if (Date.now() > stoppedGeneration.at + stoppedGenerationMarkerLifetimeMs) {
+      stoppedGenerationRef.current = null
+      setStoppedGeneration(null)
+      return
+    }
+
+    const benignError = sessionEventErrors.find((error) =>
+      isBenignStoppedGenerationFeedback(error, stoppedGeneration)
+    )
+    if (!benignError) return
+
+    stoppedGenerationRef.current = null
+    setStoppedGeneration(null)
+    queryClient.setQueryData<OpenCodeSessionEventError[]>(
+      openCodeSessionEventErrorsQueryKey,
+      (current = []) => current.filter((error) => error !== benignError)
+    )
+  }, [queryClient, sessionEventErrors, stoppedGeneration])
+  const isSending = sendPromptMutation.isPending || isStartingPrompt
+  const isUndoingPrompt = undoPromptMutation.isPending || isStartingUndo
+  const isStoppingGeneration = abortSessionMutation.isPending || isStartingStop
   const sessionStatus = sessionID ? sessionStatusesQuery.data?.[sessionID] : undefined
   const isGenerationActive = isActiveSessionStatus(sessionStatus)
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
@@ -361,6 +384,8 @@ export function useOpenCodeSessionRoute(
     canSendToActiveSession &&
     abortConnection !== null &&
     isGenerationActive &&
+    !isSending &&
+    !isUndoingPrompt &&
     !isStoppingGeneration
   const revertMessageID = activeSession ? getSessionRevertMessageID(fetchedSession) : null
 
@@ -490,7 +515,9 @@ export function useOpenCodeSessionRoute(
       canSendToActiveSession &&
       undoConnection !== null &&
       lastVisibleUserPrompt !== null &&
-      !isUndoingPrompt,
+      !isSending &&
+      !isUndoingPrompt &&
+      !isStoppingGeneration,
     canStopGeneration,
     emptyMessage: getSessionEmptyMessage(
       sessionID,
@@ -532,6 +559,9 @@ export function useOpenCodeSessionRoute(
     isLoadingAgents: agents.isLoading,
     setPromptText,
     sendPrompt: () => {
+      if (isSending || isUndoingPrompt || isStoppingGeneration) return
+      stoppedGenerationRef.current = null
+      setStoppedGeneration(null)
       const options = buildPromptOptions(
         promptText,
         models.selectedModel,
@@ -539,17 +569,29 @@ export function useOpenCodeSessionRoute(
         models.selectedEffortID
       )
       if (sessionID && activeSession) {
+        setStartingPrompt(true)
         sendPromptMutation.mutate(options, {
           onSuccess: (admittedPrompt) => {
             setOptimisticPrompts((current) => addUniquePrompt(current, admittedPrompt))
             setAwaitingPrompts((current) => addUniquePrompt(current, admittedPrompt))
             setPromptText('')
-          }
+          },
+          onSettled: () => setStartingPrompt(false)
         })
       }
     },
     undoLastPrompt: () => {
-      if (!activeSession || !lastVisibleUserPrompt) return
+      if (
+        !activeSession ||
+        !lastVisibleUserPrompt ||
+        isSending ||
+        isUndoingPrompt ||
+        isStoppingGeneration
+      )
+        return
+      stoppedGenerationRef.current = null
+      setStoppedGeneration(null)
+      setStartingUndo(true)
       undoPromptMutation.mutate(
         { messageID: lastVisibleUserPrompt.messageID },
         {
@@ -561,25 +603,31 @@ export function useOpenCodeSessionRoute(
               removePromptByMessageID(current, lastVisibleUserPrompt.messageID)
             )
             setPromptText(lastVisibleUserPrompt.text)
-          }
+          },
+          onSettled: () => setStartingUndo(false)
         }
       )
     },
     stopGeneration: () => {
-      if (!canStopGeneration || !sessionID) return
+      if (!canStopGeneration || !sessionID || isSending || isUndoingPrompt || isStoppingGeneration)
+        return
+      stoppedGenerationRef.current = null
+      setStoppedGeneration(null)
+      setStartingStop(true)
       const stopped: StoppedGeneration = { directory: directory ?? null, sessionID, at: Date.now() }
       abortSessionMutation.mutate(undefined, {
         onSuccess: () => {
+          stoppedGenerationRef.current = stopped
           setStoppedGeneration(stopped)
           clearAdmittedPromptHandoff(sessionID)
-          removeBenignStoppedGenerationErrors(queryClient, stopped)
           setOptimisticPrompts((current) =>
             current.filter((prompt) => prompt.sessionID !== sessionID)
           )
           setAwaitingPrompts((current) =>
             current.filter((prompt) => prompt.sessionID !== sessionID)
           )
-        }
+        },
+        onSettled: () => setStartingStop(false)
       })
     }
   }
@@ -593,35 +641,20 @@ function isMatchingSessionEventError(
   return error.sessionID === sessionID || (!error.sessionID && error.directory === directory)
 }
 
-function removeBenignStoppedGenerationErrors(
-  queryClient: ReturnType<typeof useQueryClient>,
-  stoppedGeneration: StoppedGeneration
-): void {
-  queryClient.setQueryData<OpenCodeSessionEventError[]>(
-    openCodeSessionEventErrorsQueryKey,
-    (current = []) =>
-      current.filter(
-        (error) =>
-          !isBenignStoppedGenerationFeedback(error.message, stoppedGeneration, {
-            directory: error.directory,
-            sessionID: error.sessionID,
-            at: error.at
-          })
-      )
-  )
-}
-
 function isBenignStoppedGenerationFeedback(
-  error: unknown,
-  stoppedGeneration: StoppedGeneration | null,
-  source: { directory: string | null; sessionID: string | null; at: number }
+  error: OpenCodeSessionEventError,
+  stoppedGeneration: StoppedGeneration | null
 ): boolean {
   if (!stoppedGeneration) return false
-  if (!isSameStoppedGenerationSource(stoppedGeneration, source)) return false
-  if (source.at < stoppedGeneration.at - 1000 || source.at > stoppedGeneration.at + 30_000) {
+  if (error.type !== 'session.error' || error.name !== 'MessageAbortedError') return false
+  if (!isSameStoppedGenerationSource(stoppedGeneration, error)) return false
+  if (
+    error.at < stoppedGeneration.at - 1000 ||
+    error.at > stoppedGeneration.at + stoppedGenerationMarkerLifetimeMs
+  ) {
     return false
   }
-  return /\b(aborted?|interrupt(?:ed)?)\b/i.test(formatUnknownError(error))
+  return true
 }
 
 function isSameStoppedGenerationSource(
