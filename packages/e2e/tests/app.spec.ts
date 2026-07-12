@@ -1798,7 +1798,7 @@ test('stops a just-created session without restoring the admitted prompt handoff
   await expect(appWindow.getByRole('heading', { name: 'New deterministic chat' })).toBeVisible()
   await expect(appWindow.locator('[data-pending="true"]').filter({ hasText: prompt })).toBeVisible()
 
-  const stopButton = appWindow.getByRole('button', { name: 'Stop', exact: true })
+  const stopButton = appWindow.getByRole('button', { name: 'Stop generation', exact: true })
   await expect(stopButton).toBeVisible()
   await expect(stopButton).toBeEnabled()
   await stopButton.click()
@@ -1878,7 +1878,7 @@ test('stops active session generation before delayed projection', async ({
   const prompt = 'Abortable lifecycle prompt'
   await sendPrompt(appWindow, prompt)
 
-  const stopButton = appWindow.getByRole('button', { name: 'Stop', exact: true })
+  const stopButton = appWindow.getByRole('button', { name: 'Stop generation', exact: true })
   await expect(stopButton).toBeVisible()
   await expect(stopButton).toBeEnabled()
   await stopButton.click()
@@ -2023,7 +2023,9 @@ test('keeps two prompts pending before the first stable projection arrives', asy
   await expect(
     appWindow.locator('[data-pending="true"]').filter({ hasText: firstPrompt })
   ).toBeVisible()
-  await expect(appWindow.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
+  await expect(
+    appWindow.getByRole('button', { name: 'Stop generation', exact: true })
+  ).toBeVisible()
 
   await sendPrompt(appWindow, secondPrompt)
   await expect(
