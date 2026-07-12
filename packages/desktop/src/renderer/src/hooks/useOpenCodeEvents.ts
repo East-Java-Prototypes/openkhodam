@@ -23,6 +23,7 @@ export type OpenCodeSessionEventError = {
   directory: string | null
   sessionID: string | null
   message: string
+  name: string | null
   type: string
   at: number
 }
@@ -155,6 +156,7 @@ function captureEventError(
     directory: event.directory ?? null,
     sessionID: getSessionID(event.payload),
     message: formatEventError(error),
+    name: getEventErrorName(error),
     at: Date.now()
   }
 
@@ -192,6 +194,23 @@ function formatEventError(error: unknown): string {
     getString(record, 'name') ??
     getString(record, '_tag')
   return message ?? JSON.stringify(error)
+}
+
+function getEventErrorName(error: unknown): string | null {
+  if (error instanceof Error) return error.name || null
+  if (typeof error !== 'object' || error === null) return null
+
+  const record = error as Record<string, unknown>
+  const data =
+    typeof record.data === 'object' && record.data !== null
+      ? (record.data as Record<string, unknown>)
+      : null
+  return (
+    getString(record, 'name') ??
+    getString(record, '_tag') ??
+    getString(data, 'name') ??
+    getString(data, '_tag')
+  )
 }
 
 function getString(record: Record<string, unknown> | null, property: string): string | null {

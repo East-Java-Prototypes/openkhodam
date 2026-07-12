@@ -16,6 +16,17 @@ export type FakeOpenCodeServer = {
   releaseOAuthAuthorize: (providerID: string) => void
   waitForOAuthAuthorizeSettlement: (providerID: string) => Promise<void>
   getAbortRequests: () => FakeAbortRequest[]
+  armPromptGate: () => void
+  waitForPrompt: () => Promise<void>
+  releasePrompt: () => void
+  armRevertGate: () => void
+  waitForRevert: () => Promise<void>
+  releaseRevert: () => void
+  armAbortGate: () => void
+  waitForAbort: () => Promise<void>
+  releaseAbort: () => void
+  setAbortFalseOnce: () => void
+  emitSessionError: (options: FakeSessionErrorEvent) => void
   close: () => Promise<void>
 }
 
@@ -37,6 +48,13 @@ export type FakeOAuthRequest = { providerID: string; type: 'authorize' | 'callba
 
 export type FakeAbortRequest = {
   sessionID: string
+}
+
+export type FakeSessionErrorEvent = {
+  sessionID: string
+  directory?: string
+  name: string
+  message: string
 }
 
 export type FakePromptRequest = {
@@ -258,6 +276,11 @@ let providerAuthMode: FakeProviderAuthMode = 'normal'
 let providerConnectMode: FakeProviderConnectMode = 'normal'
 let didFailProviderConnect = false
 const oauthAuthorizeGates = new Map<string, DeferredGate>()
+let promptGate: DeferredGate | null = null
+let revertGate: DeferredGate | null = null
+let abortGate: DeferredGate | null = null
+let abortFalseOnce = false
+const globalEventSubscribers = new Set<ServerResponse>()
 const agents = [
   createAgent('build', 'Primary fake build agent', 'primary'),
   createAgent('plan', 'All-mode fake planning agent', 'all'),
@@ -314,6 +337,20 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
 
     if (request.method === 'GET' && url.pathname === '/global/health') {
       return json(response, { healthy: true, version: 'fake-stable' })
+    }
+    if (request.method === 'GET' && url.pathname === '/global/event') {
+      response.writeHead(
+        200,
+        corsHeaders({
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive'
+        })
+      )
+      response.write(': connected\n\n')
+      globalEventSubscribers.add(response)
+      request.on('close', () => globalEventSubscribers.delete(response))
+      return
     }
     if (request.method === 'GET' && url.pathname === '/project') {
       return json(response, [project, rootProject])
@@ -489,6 +526,7 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
         { id, text, fetches: 0, projected: false, statusFetches: 0 }
       ])
       sessionStatuses.set(sessionID, { type: 'busy' })
+      await waitForGateOnce('prompt')
       return json(response, {})
     }
     const abortMatch = url.pathname.match(/^\/session\/([^/]+)\/abort$/)
@@ -501,6 +539,11 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
 
       requestEvents.push(`abort:${sessionID}`)
       abortRequests.push({ sessionID })
+      if (abortFalseOnce) {
+        abortFalseOnce = false
+        return json(response, false)
+      }
+      await waitForGateOnce('abort')
       pendingPrompts.delete(sessionID)
       sessionStatuses.delete(sessionID)
       session.time.updated = Date.now()
@@ -518,6 +561,7 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
       }
 
       requestEvents.push(`revert:${sessionID}`)
+      await waitForGateOnce('revert')
       setSessionRevertMarker(session, body.messageID, body?.partID)
       session.time.updated = Date.now()
       return json(response, session)
@@ -541,6 +585,30 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     getPromptRequests: () => [...promptRequests],
     getRequestEvents: () => [...requestEvents],
     getAbortRequests: () => [...abortRequests],
+    armPromptGate: () => {
+      promptGate = createGate()
+    },
+    waitForPrompt: () => getRequiredGate(promptGate, 'prompt').arrive.promise,
+    releasePrompt: () => getRequiredGate(promptGate, 'prompt').release.resolve(),
+    armRevertGate: () => {
+      revertGate = createGate()
+    },
+    waitForRevert: () => getRequiredGate(revertGate, 'revert').arrive.promise,
+    releaseRevert: () => getRequiredGate(revertGate, 'revert').release.resolve(),
+    armAbortGate: () => {
+      abortGate = createGate()
+    },
+    waitForAbort: () => getRequiredGate(abortGate, 'abort').arrive.promise,
+    releaseAbort: () => getRequiredGate(abortGate, 'abort').release.resolve(),
+    setAbortFalseOnce: () => {
+      abortFalseOnce = true
+    },
+    emitSessionError: ({ sessionID, directory: eventDirectory = directory, name, message }) => {
+      emitGlobalEvent({
+        directory: eventDirectory,
+        payload: { type: 'session.error', properties: { sessionID, error: { name, message } } }
+      })
+    },
     getProviderManagementRequests: () =>
       providerManagementRequests.map((request) => ({ ...request })),
     getProviderAuthRequests: () => providerAuthRequests.map((request) => ({ ...request })),
@@ -570,6 +638,9 @@ export async function startFakeOpenCodeServer(): Promise<FakeOpenCodeServer> {
     },
     close: async () => {
       releaseOAuthAuthorizeGates()
+      releaseMutationGates()
+      for (const subscriber of globalEventSubscribers) subscriber.end()
+      globalEventSubscribers.clear()
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   }
@@ -654,6 +725,8 @@ function resetState(): void {
   providerManagementRequests.length = 0
   oauthRequests.length = 0
   releaseOAuthAuthorizeGates()
+  releaseMutationGates()
+  abortFalseOnce = false
   providerAuthMode = 'normal'
   providerConnectMode = 'normal'
   didFailProviderConnect = false
@@ -699,6 +772,45 @@ function releaseOAuthAuthorizeGates(): void {
     gate.settled.resolve()
   }
   oauthAuthorizeGates.clear()
+}
+
+function createGate(): DeferredGate {
+  return {
+    arrive: createDeferred<void>(),
+    release: createDeferred<void>(),
+    settled: createDeferred<void>()
+  }
+}
+
+function getRequiredGate(gate: DeferredGate | null, name: string): DeferredGate {
+  if (!gate) throw new Error(`No ${name} gate is armed.`)
+  return gate
+}
+
+async function waitForGateOnce(name: 'prompt' | 'revert' | 'abort'): Promise<void> {
+  const gate = name === 'prompt' ? promptGate : name === 'revert' ? revertGate : abortGate
+  if (!gate) return
+  gate.arrive.resolve()
+  await gate.release.promise
+  gate.settled.resolve()
+  if (name === 'prompt') promptGate = null
+  else if (name === 'revert') revertGate = null
+  else abortGate = null
+}
+
+function releaseMutationGates(): void {
+  for (const gate of [promptGate, revertGate, abortGate]) {
+    gate?.release.resolve()
+    gate?.settled.resolve()
+  }
+  promptGate = null
+  revertGate = null
+  abortGate = null
+}
+
+function emitGlobalEvent(event: unknown): void {
+  const payload = `data: ${JSON.stringify(event)}\n\n`
+  for (const subscriber of globalEventSubscribers) subscriber.write(payload)
 }
 
 function projectPendingMessages(sessionID: string): void {

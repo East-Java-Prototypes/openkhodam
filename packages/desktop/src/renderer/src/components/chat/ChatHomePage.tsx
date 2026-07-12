@@ -1194,7 +1194,7 @@ function ChatPromptComposer({
   }, [canRunUndoCommand, slashCommandQuery])
   const isSlashCommandPopoverOpen = slashCommandQuery !== null && !isSlashCommandPopoverDismissed
   const canSubmitPrompt = isExactUndoCommand ? canRunUndoCommand : canSendPrompt
-  const isComposerBusy = isSending || isUndoingPrompt
+  const isComposerBusy = isSending || isUndoingPrompt || isStoppingGeneration
   const isStopVisible = canStopGeneration || isStoppingGeneration
 
   useEffect(() => {
