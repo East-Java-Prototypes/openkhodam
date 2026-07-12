@@ -350,13 +350,6 @@ export function useOpenCodeSessionRoute(
         at: error.at
       })
   )
-  const abortSessionError = isBenignStoppedGenerationFeedback(
-    abortSessionMutation.error,
-    stoppedGeneration,
-    { directory: directory ?? null, sessionID: sessionID ?? null, at: Date.now() }
-  )
-    ? null
-    : abortSessionMutation.error
   const isSending = sendPromptMutation.isPending
   const isUndoingPrompt = undoPromptMutation.isPending
   const isStoppingGeneration = abortSessionMutation.isPending
@@ -517,7 +510,7 @@ export function useOpenCodeSessionRoute(
       sessionStatusesQuery.error,
       sendPromptMutation.error,
       undoPromptMutation.error,
-      abortSessionError,
+      abortSessionMutation.error,
       sessionEventError?.message
     ),
     successMessage: null,
@@ -575,9 +568,9 @@ export function useOpenCodeSessionRoute(
     stopGeneration: () => {
       if (!canStopGeneration || !sessionID) return
       const stopped: StoppedGeneration = { directory: directory ?? null, sessionID, at: Date.now() }
-      setStoppedGeneration(stopped)
       abortSessionMutation.mutate(undefined, {
         onSuccess: () => {
+          setStoppedGeneration(stopped)
           clearAdmittedPromptHandoff(sessionID)
           removeBenignStoppedGenerationErrors(queryClient, stopped)
           setOptimisticPrompts((current) =>

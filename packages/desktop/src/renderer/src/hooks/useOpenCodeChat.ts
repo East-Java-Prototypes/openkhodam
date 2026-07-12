@@ -152,7 +152,10 @@ export function useAbortOpenCodeSession(
 
       const response = await client!.session.abort({ sessionID, directory })
       if (response.error) throw response.error
-      return { aborted: response.data === true, sessionID }
+      if (response.data !== true) {
+        throw new Error('OpenCode did not confirm that generation stopped.')
+      }
+      return { sessionID }
     },
     onSettled: async () => {
       await invalidateSessionRunQueries(queryClient, status, directory, sessionID)
