@@ -26,42 +26,6 @@ import {
   persistGoogleSheetSpreadsheetArtifact
 } from '../integrations/project-artifacts'
 
-type GoogleDriveSearchFilesToolArgs = {
-  limit?: number
-  query?: string
-}
-
-type GoogleDocsReadToolArgs = {
-  documentId?: string
-}
-
-type GoogleSheetsReadToolArgs = {
-  ranges?: string[]
-  spreadsheetId?: string
-  valueRenderOption?: string
-}
-
-type GoogleSheetsEditToolArgs = {
-  operation?: {
-    range?: string
-    rows?: unknown
-    type?: string
-    valueInputOption?: string
-    values?: unknown
-  }
-  spreadsheetId?: string
-}
-
-type GoogleDocsEditToolArgs = {
-  documentId?: string
-  operation?: {
-    match?: string
-    occurrence?: number | string
-    text?: string
-    type?: string
-  }
-}
-
 type GoogleWorkspaceListCommandsToolArgs = {
   query: string
 }
@@ -94,97 +58,6 @@ type DeletePersistedGoogleWorkspaceArtifact = (input: {
   artifactPath: string
   projectDirectory: string
 }) => Promise<{ deleted: boolean }>
-
-type GoogleDriveSearchFilesToolDefinition = {
-  args: {
-    limit: {
-      default: 10
-      description: string
-      maximum: 20
-      minimum: 1
-      type: 'number'
-    }
-    query: {
-      description: string
-      type: 'string'
-    }
-  }
-  description: string
-  execute: (
-    args: GoogleDriveSearchFilesToolArgs,
-    context: GoogleWorkspaceToolContext
-  ) => Promise<string>
-}
-
-type GoogleDocsReadToolDefinition = {
-  args: {
-    documentId: {
-      description: string
-      type: 'string'
-    }
-  }
-  description: string
-  execute: (args: GoogleDocsReadToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
-}
-
-type GoogleSheetsReadToolDefinition = {
-  args: {
-    ranges: {
-      description: string
-      items: { type: 'string' }
-      maxItems: 5
-      type: 'array'
-    }
-    spreadsheetId: {
-      description: string
-      type: 'string'
-    }
-    valueRenderOption: {
-      default: 'FORMATTED_VALUE'
-      description: string
-      enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA']
-      type: 'string'
-    }
-  }
-  description: string
-  execute: (args: GoogleSheetsReadToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
-}
-
-type GoogleSheetsEditToolDefinition = {
-  args: {
-    operation: {
-      additionalProperties: boolean
-      description: string
-      properties: Record<string, unknown>
-      required: string[]
-      type: 'object'
-    }
-    spreadsheetId: {
-      description: string
-      type: 'string'
-    }
-  }
-  description: string
-  execute: (args: GoogleSheetsEditToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
-}
-
-type GoogleDocsEditToolDefinition = {
-  args: {
-    documentId: {
-      description: string
-      type: 'string'
-    }
-    operation: {
-      additionalProperties: boolean
-      description: string
-      properties: Record<string, unknown>
-      required: string[]
-      type: 'object'
-    }
-  }
-  description: string
-  execute: (args: GoogleDocsEditToolArgs, context: GoogleWorkspaceToolContext) => Promise<string>
-}
 
 type GoogleWorkspaceListCommandsToolDefinition = {
   args: {
@@ -221,11 +94,6 @@ type GoogleWorkspaceExecuteCommandToolDefinition = {
 
 type GoogleWorkspaceHooks = {
   tool: {
-    google_docs_edit: GoogleDocsEditToolDefinition
-    google_docs_read: GoogleDocsReadToolDefinition
-    google_drive_search_files: GoogleDriveSearchFilesToolDefinition
-    google_sheets_edit: GoogleSheetsEditToolDefinition
-    google_sheets_read: GoogleSheetsReadToolDefinition
     google_workspace_execute_command: GoogleWorkspaceExecuteCommandToolDefinition
     google_workspace_list_commands: GoogleWorkspaceListCommandsToolDefinition
   }
@@ -233,221 +101,6 @@ type GoogleWorkspaceHooks = {
 
 export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
   tool: {
-    google_drive_search_files: {
-      description:
-        'Search Google Drive files by name using the Google Workspace account connected in OpenKhodam Settings. Returns file metadata only.',
-      args: {
-        query: {
-          description:
-            'File name text to search for. Leave empty to list recently modified non-trashed files.',
-          type: 'string'
-        },
-        limit: {
-          default: 10,
-          description: 'Maximum number of files to return. Defaults to 10 and is capped at 20.',
-          maximum: 20,
-          minimum: 1,
-          type: 'number'
-        }
-      },
-      async execute(args, context) {
-        const query = typeof args.query === 'string' ? args.query : ''
-        const result = await searchGoogleDriveFiles({
-          limit: args.limit,
-          query,
-          signal: context.abort
-        })
-
-        return JSON.stringify(result)
-      }
-    },
-    google_docs_read: {
-      description:
-        'Read a Google Docs document using the Google Workspace account connected in OpenKhodam Settings. Returns a safe google.doc.document artifact with a bounded head preview.',
-      args: {
-        documentId: {
-          description: 'The Google Docs document ID to read.',
-          type: 'string'
-        }
-      },
-      async execute(args, context) {
-        const documentId = stringArg(args.documentId)
-        const result = await readGoogleDocDocument({
-          documentId,
-          signal: context.abort
-        })
-        await recordReadGoogleDocArtifact(context, result.document)
-
-        return JSON.stringify({
-          document: createGoogleDocDocumentPreview(result.document)
-        })
-      }
-    },
-    google_sheets_read: {
-      description:
-        'Read a Google Sheets spreadsheet using the Google Workspace account connected in OpenKhodam Settings. Returns a safe google.sheet.spreadsheet artifact with bounded A1 range previews. Read-only; does not edit spreadsheets.',
-      args: {
-        spreadsheetId: {
-          description: 'The Google Sheets spreadsheet ID to read.',
-          type: 'string'
-        },
-        ranges: {
-          description:
-            'Optional A1 notation ranges to read. If omitted, the first visible sheets are read with bounded A1:Z200 preview ranges. At most 5 ranges are used.',
-          items: { type: 'string' },
-          maxItems: 5,
-          type: 'array'
-        },
-        valueRenderOption: {
-          default: 'FORMATTED_VALUE',
-          description:
-            'How Sheets should render cell values: FORMATTED_VALUE, UNFORMATTED_VALUE, or FORMULA. Defaults to FORMATTED_VALUE.',
-          enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'],
-          type: 'string'
-        }
-      },
-      async execute(args, context) {
-        const spreadsheetId = stringArg(args.spreadsheetId)
-        const result = await readGoogleSheetSpreadsheet({
-          ranges: rangesArg(args.ranges),
-          signal: context.abort,
-          spreadsheetId,
-          valueRenderOption: valueRenderOptionArg(args.valueRenderOption)
-        })
-        await recordReadGoogleSheetArtifact(context, result.spreadsheet)
-
-        return JSON.stringify({
-          spreadsheet: createGoogleSheetSpreadsheetPreview(result.spreadsheet)
-        })
-      }
-    },
-    google_sheets_edit: {
-      description:
-        'Edit a Google Sheets spreadsheet using narrow A1 range operations with the Google Workspace account connected in OpenKhodam Settings. Supports set_values, append_rows, and clear_range; writes directly with the connected account; rereads the affected range; persists the updated spreadsheet artifact; and returns a bounded updated-spreadsheet preview.',
-      args: {
-        spreadsheetId: {
-          description: 'The Google Sheets spreadsheet ID to edit.',
-          type: 'string'
-        },
-        operation: {
-          additionalProperties: false,
-          description:
-            'One Google Sheets edit operation. Use set_values with an A1 range and 2D values array; append_rows with an A1 range and 2D rows array; or clear_range with an A1 range. valueInputOption defaults to USER_ENTERED and may be RAW. Do not provide raw grid coordinates, formatting, or structural edits.',
-          properties: {
-            type: {
-              description: 'Operation type: set_values, append_rows, or clear_range.',
-              enum: ['set_values', 'append_rows', 'clear_range'],
-              type: 'string'
-            },
-            range: {
-              description:
-                "Required A1 notation range such as Summary!A1:C3 or 'Data Sheet'!B2:D4.",
-              type: 'string'
-            },
-            values: {
-              description:
-                '2D primitive values array for set_values. Cells must be strings, finite numbers, booleans, or null.',
-              items: {
-                items: { type: ['string', 'number', 'boolean', 'null'] },
-                type: 'array'
-              },
-              type: 'array'
-            },
-            rows: {
-              description:
-                '2D primitive rows array for append_rows. Cells must be strings, finite numbers, booleans, or null.',
-              items: {
-                items: { type: ['string', 'number', 'boolean', 'null'] },
-                type: 'array'
-              },
-              type: 'array'
-            },
-            valueInputOption: {
-              default: 'USER_ENTERED',
-              description:
-                'How Sheets should interpret written cell values for set_values or append_rows: USER_ENTERED or RAW. Defaults to USER_ENTERED.',
-              enum: ['USER_ENTERED', 'RAW'],
-              type: 'string'
-            }
-          },
-          required: ['type', 'range'],
-          type: 'object'
-        }
-      },
-      async execute(args, context) {
-        const spreadsheetId = stringArg(args.spreadsheetId)
-        const result = await editGoogleSheetSpreadsheet({
-          operation: toGoogleSheetsEditOperation(args.operation),
-          signal: context.abort,
-          spreadsheetId
-        })
-        await recordReadGoogleSheetArtifact(context, result.spreadsheet)
-
-        return JSON.stringify({
-          edit: result.edit,
-          spreadsheet: createGoogleSheetSpreadsheetPreview(result.spreadsheet)
-        })
-      }
-    },
-    google_docs_edit: {
-      description:
-        'Edit a Google Docs document using semantic operations with the Google Workspace account connected in OpenKhodam Settings. Supports append_text, insert_after_text, insert_before_text, replace_text, and delete_text; writes directly with the connected account after resolving semantic targets; and returns a bounded updated-document preview.',
-      args: {
-        documentId: {
-          description: 'The Google Docs document ID to edit.',
-          type: 'string'
-        },
-        operation: {
-          additionalProperties: false,
-          description:
-            'One semantic edit operation. Use append_text with text; insert_after_text or insert_before_text with match, optional occurrence (defaults to last), and text; replace_text with match, optional occurrence, and replacement text; or delete_text with match and optional occurrence. Do not provide raw Google Docs indexes.',
-          properties: {
-            type: {
-              description:
-                'Operation type: append_text, insert_after_text, insert_before_text, replace_text, or delete_text.',
-              enum: [
-                'append_text',
-                'insert_after_text',
-                'insert_before_text',
-                'replace_text',
-                'delete_text'
-              ],
-              type: 'string'
-            },
-            match: {
-              description:
-                'Text to find for insert_after_text, insert_before_text, replace_text, and delete_text.',
-              type: 'string'
-            },
-            occurrence: {
-              description:
-                'Optional match occurrence for match-based edits: first, last, or a 1-based number. Defaults to last.',
-              type: ['number', 'string']
-            },
-            text: {
-              description:
-                'Text to append, insert, or use as replacement text. Literal newline escapes like \\n are normalized before writing. Not required for delete_text.',
-              type: 'string'
-            }
-          },
-          required: ['type'],
-          type: 'object'
-        }
-      },
-      async execute(args, context) {
-        const operation = toGoogleDocsEditOperation(args.operation)
-        const command = commandForGoogleDocsOperation(operation.type)
-        const input = command.parseInput(
-          googleDocsOperationToCommandInput(stringArg(args.documentId), operation),
-          { rejectUndefinedProperties: false }
-        )
-        return executeGoogleDocsEdit({
-          context,
-          documentId: input.documentId,
-          operation: input.operation
-        })
-      }
-    },
     google_workspace_list_commands: {
       description:
         'List available Google Workspace commands and their input schemas. This is read-only and does not access Google.',
@@ -493,11 +146,7 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
         }
 
         const input = command.parseInput(args.input)
-        return executeGoogleDocsEdit({
-          context,
-          documentId: input.documentId,
-          operation: input.operation
-        })
+        return command.execute(input, context)
       }
     }
   }
@@ -519,14 +168,14 @@ type GoogleWorkspaceCommand = {
   description: string
   id: string
   inputSchema: GoogleWorkspaceCommandInputSchema
-  operationType: GoogleDocsEditOperation['type']
-  parseInput: (
-    input: unknown,
-    options?: { rejectUndefinedProperties?: boolean }
-  ) => { documentId: string; operation: GoogleDocsEditOperation }
+  execute: (input: unknown, context: GoogleWorkspaceToolContext) => Promise<string>
+  operationType?: GoogleDocsEditOperation['type'] | GoogleSheetsEditOperation['type']
+  parseInput: (input: unknown, options?: { rejectUndefinedProperties?: boolean }) => unknown
 }
 
 const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
+  createGoogleDriveSearchCommand(),
+  createGoogleDocsReadCommand(),
   createGoogleDocsCommand({
     description: 'Append literal text to the end of a Google Docs document.',
     id: 'google.docs.append_text',
@@ -556,6 +205,24 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
     id: 'google.docs.delete_text',
     operationType: 'delete_text',
     required: ['documentId', 'match']
+  }),
+  createGoogleSheetsReadCommand(),
+  createGoogleSheetsEditCommand({
+    description: 'Set 2D values in a Google Sheets A1 range.',
+    id: 'google.sheets.set_values',
+    operationType: 'set_values',
+    valueProperty: 'values'
+  }),
+  createGoogleSheetsEditCommand({
+    description: 'Append 2D rows to a Google Sheets A1 range.',
+    id: 'google.sheets.append_rows',
+    operationType: 'append_rows',
+    valueProperty: 'rows'
+  }),
+  createGoogleSheetsEditCommand({
+    description: 'Clear values from a Google Sheets A1 range.',
+    id: 'google.sheets.clear_range',
+    operationType: 'clear_range'
   })
 ]
 
@@ -575,6 +242,14 @@ function createGoogleDocsCommand(input: {
   return {
     ...input,
     inputSchema,
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
     parseInput(value, options) {
       const record = objectArg(value, `Google Workspace command ${input.id} input`)
       rejectAdditionalProperties(
@@ -604,6 +279,269 @@ function createGoogleDocsCommand(input: {
       }
     }
   }
+}
+
+function createGoogleDriveSearchCommand(): GoogleWorkspaceCommand {
+  return {
+    description: 'Search Google Drive files by name. Returns file metadata only.',
+    id: 'google.drive.search_files',
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        query: { description: 'Optional file name text to search for.', type: 'string' },
+        limit: {
+          default: 10,
+          description: 'Maximum files to return, from 1 to 20.',
+          maximum: 20,
+          minimum: 1,
+          type: 'number'
+        }
+      },
+      required: [],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const input = parsedInput as { limit?: number; query?: string }
+      return JSON.stringify(
+        await searchGoogleDriveFiles({
+          limit: input.limit,
+          query: input.query ?? '',
+          signal: context.abort
+        })
+      )
+    },
+    parseInput(value) {
+      const record = objectArg(value, 'Google Workspace command google.drive.search_files input')
+      rejectAdditionalProperties(record, ['query', 'limit'], 'google.drive.search_files')
+      if (record.query !== undefined && typeof record.query !== 'string') {
+        throw new Error(
+          'Google Workspace command google.drive.search_files requires query to be a string.'
+        )
+      }
+      if (
+        record.limit !== undefined &&
+        (typeof record.limit !== 'number' || !Number.isFinite(record.limit) || record.limit < 1)
+      ) {
+        throw new Error(
+          'Google Workspace command google.drive.search_files requires limit to be a number of at least 1.'
+        )
+      }
+      return {
+        limit: record.limit as number | undefined,
+        query: record.query as string | undefined
+      }
+    }
+  }
+}
+
+function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
+  return {
+    description: 'Read a Google Docs document and return a bounded artifact preview.',
+    id: 'google.docs.read',
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        documentId: { description: 'The Google Docs document ID to read.', type: 'string' }
+      },
+      required: ['documentId'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const input = parsedInput as { documentId: string }
+      const result = await readGoogleDocDocument({
+        documentId: input.documentId,
+        signal: context.abort
+      })
+      await recordReadGoogleDocArtifact(context, result.document)
+      return JSON.stringify({ document: createGoogleDocDocumentPreview(result.document) })
+    },
+    parseInput(value) {
+      const record = objectArg(value, 'Google Workspace command google.docs.read input')
+      rejectAdditionalProperties(record, ['documentId'], 'google.docs.read')
+      return { documentId: requiredStringArg(record.documentId, 'google.docs.read', 'documentId') }
+    }
+  }
+}
+
+function createGoogleSheetsReadCommand(): GoogleWorkspaceCommand {
+  return {
+    description: 'Read a Google Sheets spreadsheet and return bounded A1 range previews.',
+    id: 'google.sheets.read',
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        spreadsheetId: { description: 'The Google Sheets spreadsheet ID to read.', type: 'string' },
+        ranges: {
+          description: 'Optional A1 ranges, up to 5.',
+          items: { type: 'string' },
+          maxItems: 5,
+          type: 'array'
+        },
+        valueRenderOption: {
+          default: 'FORMATTED_VALUE',
+          description: 'Cell rendering mode.',
+          enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'],
+          type: 'string'
+        }
+      },
+      required: ['spreadsheetId'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const input = parsedInput as {
+        ranges?: string[]
+        spreadsheetId: string
+        valueRenderOption?: GoogleSheetsValueRenderOption
+      }
+      const result = await readGoogleSheetSpreadsheet({ ...input, signal: context.abort })
+      await recordReadGoogleSheetArtifact(context, result.spreadsheet)
+      return JSON.stringify({
+        spreadsheet: createGoogleSheetSpreadsheetPreview(result.spreadsheet)
+      })
+    },
+    parseInput(value) {
+      const record = objectArg(value, 'Google Workspace command google.sheets.read input')
+      rejectAdditionalProperties(
+        record,
+        ['spreadsheetId', 'ranges', 'valueRenderOption'],
+        'google.sheets.read'
+      )
+      const spreadsheetId = requiredStringArg(
+        record.spreadsheetId,
+        'google.sheets.read',
+        'spreadsheetId'
+      )
+      if (
+        record.ranges !== undefined &&
+        (!Array.isArray(record.ranges) ||
+          record.ranges.length > 5 ||
+          record.ranges.some((range) => typeof range !== 'string' || !range.trim()))
+      ) {
+        throw new Error(
+          'Google Workspace command google.sheets.read requires ranges to be an array of at most 5 strings.'
+        )
+      }
+      if (
+        record.valueRenderOption !== undefined &&
+        !['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'].includes(
+          record.valueRenderOption as string
+        )
+      ) {
+        throw new Error(
+          'Google Workspace command google.sheets.read requires a valid valueRenderOption.'
+        )
+      }
+      return {
+        spreadsheetId,
+        ranges: record.ranges as string[] | undefined,
+        valueRenderOption: record.valueRenderOption as GoogleSheetsValueRenderOption | undefined
+      }
+    }
+  }
+}
+
+function createGoogleSheetsEditCommand(input: {
+  description: string
+  id: string
+  operationType: GoogleSheetsEditOperation['type']
+  valueProperty?: 'rows' | 'values'
+}): GoogleWorkspaceCommand {
+  const properties: Record<string, unknown> = {
+    spreadsheetId: { description: 'The Google Sheets spreadsheet ID to edit.', type: 'string' },
+    range: { description: 'Required A1 notation range.', type: 'string' }
+  }
+  if (input.valueProperty) {
+    properties[input.valueProperty] = {
+      description: '2D primitive cell values.',
+      items: {
+        items: { type: ['string', 'number', 'boolean', 'null'] },
+        type: 'array'
+      },
+      minItems: 1,
+      type: 'array'
+    }
+    properties.valueInputOption = {
+      default: 'USER_ENTERED',
+      description: 'USER_ENTERED or RAW.',
+      enum: ['USER_ENTERED', 'RAW'],
+      type: 'string'
+    }
+  }
+  const allowed = Object.keys(properties)
+  return {
+    ...input,
+    inputSchema: {
+      additionalProperties: false,
+      properties,
+      required: input.valueProperty
+        ? ['spreadsheetId', 'range', input.valueProperty]
+        : ['spreadsheetId', 'range'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { spreadsheetId: string; operation: GoogleSheetsEditOperation }
+      const result = await editGoogleSheetSpreadsheet({ ...parsed, signal: context.abort })
+      await recordReadGoogleSheetArtifact(context, result.spreadsheet)
+      return JSON.stringify({
+        edit: result.edit,
+        spreadsheet: createGoogleSheetSpreadsheetPreview(result.spreadsheet)
+      })
+    },
+    parseInput(value) {
+      const record = objectArg(value, `Google Workspace command ${input.id} input`)
+      rejectAdditionalProperties(record, allowed, input.id)
+      const spreadsheetId = requiredStringArg(record.spreadsheetId, input.id, 'spreadsheetId')
+      const range = requiredStringArg(record.range, input.id, 'range')
+      if (input.valueProperty && !isGoogleSheetValues(record[input.valueProperty])) {
+        throw new Error(
+          `Google Workspace command ${input.id} requires ${input.valueProperty} to be a 2D primitive values array.`
+        )
+      }
+      if (
+        record.valueInputOption !== undefined &&
+        record.valueInputOption !== 'USER_ENTERED' &&
+        record.valueInputOption !== 'RAW'
+      ) {
+        throw new Error(`Google Workspace command ${input.id} requires a valid valueInputOption.`)
+      }
+      const valueInputOption = record.valueInputOption as GoogleSheetsValueInputOption | undefined
+      const operation =
+        input.operationType === 'clear_range'
+          ? { range, type: 'clear_range' as const }
+          : input.operationType === 'set_values'
+            ? {
+                range,
+                type: 'set_values' as const,
+                valueInputOption,
+                values: record.values as GoogleSheetCellValue[][]
+              }
+            : {
+                range,
+                rows: record.rows as GoogleSheetCellValue[][],
+                type: 'append_rows' as const,
+                valueInputOption
+              }
+      return { spreadsheetId, operation }
+    }
+  }
+}
+
+function isGoogleSheetValues(value: unknown): value is GoogleSheetCellValue[][] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (row) =>
+        Array.isArray(row) &&
+        row.every(
+          (cell) =>
+            cell === null ||
+            typeof cell === 'string' ||
+            typeof cell === 'boolean' ||
+            (typeof cell === 'number' && Number.isFinite(cell))
+        )
+    )
+  )
 }
 
 function googleDocsCommandInputProperties(
@@ -639,32 +577,6 @@ function googleDocsCommandInputProperties(
     }
   }
   return { allowed, properties }
-}
-
-function commandForGoogleDocsOperation(
-  operationType: GoogleDocsEditOperation['type']
-): GoogleWorkspaceCommand {
-  const command = GOOGLE_WORKSPACE_COMMANDS.find(
-    (candidate) => candidate.operationType === operationType
-  )
-  if (!command) throw new Error(`Unsupported Google Docs edit operation: ${operationType}.`)
-  return command
-}
-
-function googleDocsOperationToCommandInput(
-  documentId: string,
-  operation: GoogleDocsEditOperation
-): Record<string, unknown> {
-  if (operation.type === 'append_text') return { documentId, text: operation.text }
-  if (operation.type === 'delete_text') {
-    return { documentId, match: operation.match, occurrence: operation.occurrence }
-  }
-  return {
-    documentId,
-    match: operation.match,
-    occurrence: operation.occurrence,
-    text: operation.text
-  }
 }
 
 async function executeGoogleDocsEdit(input: {
@@ -717,109 +629,6 @@ function rejectAdditionalProperties(
       `Google Workspace command ${command} does not accept input property ${additionalProperties[0]}.`
     )
   }
-}
-
-function rangesArg(value: unknown): string[] | undefined {
-  if (value === undefined || value === null) return undefined
-  if (!Array.isArray(value)) return undefined
-  return value.map((range) => stringArg(range))
-}
-
-function valueRenderOptionArg(value: unknown): GoogleSheetsValueRenderOption | undefined {
-  if (value === undefined || value === null || value === '') return undefined
-  if (value === 'FORMATTED_VALUE' || value === 'UNFORMATTED_VALUE' || value === 'FORMULA') {
-    return value
-  }
-
-  return value as GoogleSheetsValueRenderOption
-}
-
-function valueInputOptionArg(value: unknown): GoogleSheetsValueInputOption | undefined {
-  if (value === undefined || value === null || value === '') return undefined
-  if (value === 'USER_ENTERED' || value === 'RAW') return value
-
-  return value as GoogleSheetsValueInputOption
-}
-
-function toGoogleSheetsEditOperation(
-  value: GoogleSheetsEditToolArgs['operation']
-): GoogleSheetsEditOperation {
-  if (!value || typeof value !== 'object') {
-    throw new Error('Google Sheets edit operation is required.')
-  }
-
-  if (value.type === 'set_values') {
-    return {
-      range: stringArg(value.range),
-      type: 'set_values',
-      valueInputOption: valueInputOptionArg(value.valueInputOption),
-      values: valuesArg(value.values)
-    }
-  }
-
-  if (value.type === 'append_rows') {
-    return {
-      range: stringArg(value.range),
-      rows: valuesArg(value.rows),
-      type: 'append_rows',
-      valueInputOption: valueInputOptionArg(value.valueInputOption)
-    }
-  }
-
-  if (value.type === 'clear_range') {
-    return {
-      range: stringArg(value.range),
-      type: 'clear_range'
-    }
-  }
-
-  throw new Error(
-    'Google Sheets edit operation type must be set_values, append_rows, or clear_range.'
-  )
-}
-
-function valuesArg(value: unknown): GoogleSheetCellValue[][] {
-  return Array.isArray(value) ? (value as GoogleSheetCellValue[][]) : []
-}
-
-function toGoogleDocsEditOperation(
-  value: GoogleDocsEditToolArgs['operation']
-): GoogleDocsEditOperation {
-  if (!value || typeof value !== 'object') {
-    throw new Error('Google Docs edit operation is required.')
-  }
-
-  if (value.type === 'append_text') {
-    return {
-      text: stringArg(value.text),
-      type: 'append_text'
-    }
-  }
-
-  if (
-    value.type === 'insert_after_text' ||
-    value.type === 'insert_before_text' ||
-    value.type === 'replace_text'
-  ) {
-    return {
-      match: stringArg(value.match),
-      occurrence: occurrenceArg(value.occurrence),
-      text: stringArg(value.text),
-      type: value.type
-    }
-  }
-
-  if (value.type === 'delete_text') {
-    return {
-      match: stringArg(value.match),
-      occurrence: occurrenceArg(value.occurrence),
-      type: 'delete_text'
-    }
-  }
-
-  throw new Error(
-    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, or delete_text.'
-  )
 }
 
 function occurrenceArg(value: unknown): GoogleDocsTextOccurrence | undefined {
