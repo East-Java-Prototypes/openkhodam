@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 
@@ -29,6 +29,7 @@ describe('OpenKhodamConfigFileStore', () => {
     await expect(new OpenKhodamConfigStore(userDataPath).read()).resolves.toEqual({
       version: 1,
       projects: { openedFolders: [] },
+      preferences: { openCode: { modelSelectionsByDirectory: {} } },
       integrations: {
         googleWorkspace: { account: null, scopes: [], token: null, updatedAt: null }
       }
@@ -62,8 +63,51 @@ describe('OpenKhodamConfigFileStore', () => {
           { directory: normalize('other'), lastOpenedAt: 0 }
         ]
       },
+      preferences: { openCode: { modelSelectionsByDirectory: {} } },
       integrations: {
         googleWorkspace: { account: null, scopes: ['email'], token: null, updatedAt: null }
+      }
+    })
+  })
+
+  it('normalizes persisted model selections and persists public selection updates', async () => {
+    const userDataPath = await createTemporaryDirectory()
+    const projectDirectory = join(userDataPath, 'project')
+    await mkdir(projectDirectory)
+    const canonicalProjectDirectory = await realpath(projectDirectory)
+    await writeFile(
+      join(userDataPath, 'openkhodam-config.json'),
+      JSON.stringify({
+        preferences: {
+          openCode: {
+            modelSelectionsByDirectory: {
+              [canonicalProjectDirectory]: { providerID: ' provider ', modelID: ' model ' },
+              relative: { providerID: 'ignored', modelID: 'ignored' },
+              [join(userDataPath, 'invalid')]: { providerID: '', modelID: 'ignored' }
+            }
+          }
+        }
+      })
+    )
+    const store = new OpenKhodamConfigStore(userDataPath)
+
+    await expect(store.getOpenCodeModelSelection({ projectDirectory })).resolves.toEqual({
+      providerID: 'provider',
+      modelID: 'model'
+    })
+    await expect(
+      store.setOpenCodeModelSelection({
+        projectDirectory,
+        model: { providerID: 'anthropic', modelID: 'claude' }
+      })
+    ).resolves.toEqual({ providerID: 'anthropic', modelID: 'claude' })
+    await expect(store.read()).resolves.toMatchObject({
+      preferences: {
+        openCode: {
+          modelSelectionsByDirectory: {
+            [canonicalProjectDirectory]: { providerID: 'anthropic', modelID: 'claude' }
+          }
+        }
       }
     })
   })
