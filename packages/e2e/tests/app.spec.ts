@@ -2046,6 +2046,61 @@ test('suppresses matching MessageAbortedError events before and after Stop confi
   await expect(appWindow.getByText('Unrelated session failure remains visible.')).toBeVisible()
 })
 
+test('shows active retry details and generation API failures at the transcript tail', async ({
+  appWindow,
+  fakeOpenCodeServer
+}) => {
+  await openSeededDeterministicChat(appWindow)
+  const transcript = messageTranscript(appWindow)
+  const retryNext = Date.now() + 2_500
+
+  fakeOpenCodeServer.setSessionRetry({
+    sessionID: 'seeded-session',
+    message: 'Provider is temporarily unavailable.',
+    attempt: 2,
+    next: retryNext
+  })
+  const retryRow = transcript.locator('[data-slot="assistant-retry-row"]')
+  await expect(retryRow).toContainText('Provider is temporarily unavailable.')
+  await expect(retryRow).toContainText('Retry attempt 2')
+  await expect(retryRow).toContainText(/\d+s/)
+  await expect(retryRow).toBeVisible()
+  await expect(transcript.locator('[data-slot="assistant-thinking-row"]')).toBeVisible()
+  await expect(retryRow).toHaveText(/0s/, { timeout: 5_000 })
+
+  fakeOpenCodeServer.clearSessionStatus('seeded-session')
+  await expect(retryRow).toHaveCount(0)
+
+  fakeOpenCodeServer.emitSessionError({
+    sessionID: 'seeded-session',
+    name: 'AI_APICallError',
+    message: 'Internal Server Error'
+  })
+  await expect(
+    transcript.getByText('AI_APICallError: Internal Server Error', { exact: true })
+  ).toBeVisible()
+  fakeOpenCodeServer.emitSessionError({
+    sessionID: 'structured-session',
+    name: 'AI_APICallError',
+    message: 'Other session failure remains cached.'
+  })
+
+  await sendPrompt(appWindow, 'Clear prior generation failure')
+  await expect(
+    transcript.getByText('AI_APICallError: Internal Server Error', { exact: true })
+  ).toHaveCount(0)
+
+  await sessionChatLink(appWindow).filter({ hasText: 'Structured fixture chat' }).click()
+  await expect(
+    messageTranscript(appWindow).getByText(
+      'AI_APICallError: Other session failure remains cached.',
+      {
+        exact: true
+      }
+    )
+  ).toBeVisible()
+})
+
 test('shows optimistic prompt before delayed stable message projection', async ({ appWindow }) => {
   await openSeededDeterministicChat(appWindow)
 

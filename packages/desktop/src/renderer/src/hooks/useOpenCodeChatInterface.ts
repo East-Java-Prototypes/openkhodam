@@ -127,6 +127,8 @@ export type OpenCodeSessionRouteState = {
   canStopGeneration: boolean
   emptyMessage: string | null
   transcriptStatusMessage: string | null
+  generationErrorMessage: string | null
+  retry: OpenCodeSessionRetry | null
   errorMessage: string | null
   successMessage: string | null
   modelOptions: OpenCodeModelOption[]
@@ -149,6 +151,12 @@ export type OpenCodeSessionRouteState = {
   sendPrompt: () => void
   undoLastPrompt: () => void
   stopGeneration: () => void
+}
+
+export type OpenCodeSessionRetry = {
+  message: string
+  attempt: number | null
+  next: number | null
 }
 
 export type OpenCodeChatInterfaceState = OpenCodeChatShellState &
@@ -377,6 +385,7 @@ export function useOpenCodeSessionRoute(
   const isUndoingPrompt = undoPromptMutation.isPending || isStartingUndo
   const isStoppingGeneration = abortSessionMutation.isPending || isStartingStop
   const sessionStatus = sessionID ? sessionStatusesQuery.data?.[sessionID] : undefined
+  const retry = getSessionRetry(sessionStatus)
   const isGenerationActive = isActiveSessionStatus(sessionStatus)
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
   const canStopGeneration =
@@ -531,14 +540,15 @@ export function useOpenCodeSessionRoute(
       sessionQuery.isSuccess,
       activeSession
     ),
+    generationErrorMessage: sessionEventError?.message ?? null,
+    retry,
     errorMessage: firstErrorMessage(
       activeSession ? null : sessionQuery.error,
       messagesQuery.error,
       sessionStatusesQuery.error,
       sendPromptMutation.error,
       undoPromptMutation.error,
-      abortSessionMutation.error,
-      sessionEventError?.message
+      abortSessionMutation.error
     ),
     successMessage: null,
     modelOptions: models.options,
@@ -562,6 +572,7 @@ export function useOpenCodeSessionRoute(
       if (isSending || isUndoingPrompt || isStoppingGeneration) return
       stoppedGenerationRef.current = null
       setStoppedGeneration(null)
+      clearSessionGenerationErrors(queryClient, directory, sessionID)
       const options = buildPromptOptions(
         promptText,
         models.selectedModel,
@@ -631,6 +642,33 @@ export function useOpenCodeSessionRoute(
       })
     }
   }
+}
+
+function clearSessionGenerationErrors(
+  queryClient: ReturnType<typeof useQueryClient>,
+  directory: string | null | undefined,
+  sessionID: string | null | undefined
+): void {
+  queryClient.setQueryData<OpenCodeSessionEventError[]>(
+    openCodeSessionEventErrorsQueryKey,
+    (current = []) =>
+      current.filter((error) => !isMatchingSessionEventError(error, directory, sessionID))
+  )
+}
+
+function getSessionRetry(status: unknown): OpenCodeSessionRetry | null {
+  if (!isRecord(status) || status.type !== 'retry') return null
+  const message = getStringFromRecord(status, 'message') ?? 'Retrying provider request.'
+  const attempt = typeof status.attempt === 'number' ? status.attempt : null
+  const next = getRetryTimestamp(status.next)
+  return { message, attempt, next }
+}
+
+function getRetryTimestamp(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value !== 'string' || value.length === 0) return null
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? null : parsed
 }
 
 function isMatchingSessionEventError(

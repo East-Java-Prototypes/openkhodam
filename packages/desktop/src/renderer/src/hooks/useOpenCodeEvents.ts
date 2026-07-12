@@ -179,6 +179,14 @@ function getEventError(payload: OpenCodeEventPayload): unknown {
 }
 
 function formatEventError(error: unknown): string {
+  const name = getEventErrorName(error)
+  const message = getEventErrorMessage(error)
+  if (!name) return message
+  if (message === name || message.startsWith(`${name}:`)) return message
+  return `${name}: ${message}`
+}
+
+function getEventErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   if (typeof error === 'string') return error
   if (typeof error !== 'object' || error === null) return String(error)
@@ -188,12 +196,9 @@ function formatEventError(error: unknown): string {
     typeof record.data === 'object' && record.data !== null
       ? (record.data as Record<string, unknown>)
       : null
-  const message =
-    getString(record, 'message') ??
-    getString(data, 'message') ??
-    getString(record, 'name') ??
-    getString(record, '_tag')
-  return message ?? JSON.stringify(error)
+  const message = getString(record, 'message') ?? getString(data, 'message')
+  if (message) return message
+  return JSON.stringify(error)
 }
 
 function getEventErrorName(error: unknown): string | null {

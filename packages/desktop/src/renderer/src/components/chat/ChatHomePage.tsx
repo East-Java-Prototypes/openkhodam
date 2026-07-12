@@ -71,6 +71,7 @@ import type {
   OpenCodeHeartbeatStatus,
   OpenCodeModelOption,
   OpenCodeProjectRouteState,
+  OpenCodeSessionRetry,
   OpenCodeSessionRouteState,
   OpenCodeStartConversationState
 } from '../../hooks/useOpenCodeChatInterface'
@@ -823,11 +824,13 @@ export function ActiveChatPanel({
           <ChatMessageList
             messages={messages}
             isAwaitingAssistantResponse={session?.isAwaitingAssistantResponse ?? false}
+            retry={session?.retry ?? null}
             transcriptStatusMessage={
               session?.transcriptStatusMessage ?? project?.transcriptStatusMessage ?? null
             }
             isLoading={session?.isLoading ?? false}
             errorMessage={session?.errorMessage ?? composerErrorMessage ?? null}
+            generationErrorMessage={session?.generationErrorMessage ?? null}
             successMessage={session?.successMessage ?? null}
           />
           {composer ??
@@ -962,16 +965,20 @@ export function SessionRouteActivePane({
 function ChatMessageList({
   messages,
   isAwaitingAssistantResponse,
+  retry,
   transcriptStatusMessage,
   isLoading,
   errorMessage,
+  generationErrorMessage,
   successMessage
 }: {
   messages: ChatMessage[]
   isAwaitingAssistantResponse: boolean
+  retry: OpenCodeSessionRetry | null
   transcriptStatusMessage: string | null
   isLoading: boolean
   errorMessage: string | null
+  generationErrorMessage: string | null
   successMessage: string | null
 }): JSX.Element {
   const viewportRef = useRef<HTMLDivElement | null>(null)
@@ -1039,6 +1046,10 @@ function ChatMessageList({
                   )
                 })}
               </div>
+              {generationErrorMessage ? (
+                <TranscriptGenerationError message={generationErrorMessage} />
+              ) : null}
+              {retry ? <AssistantRetryRow retry={retry} /> : null}
               {isAwaitingAssistantResponse ? <AssistantThinkingRow /> : null}
             </div>
           </MessageScrollerContent>
@@ -1046,6 +1057,30 @@ function ChatMessageList({
         <MessageScrollerButton />
       </MessageScroller>
     </MessageScrollerProvider>
+  )
+}
+
+function TranscriptGenerationError({ message }: { message: string }): JSX.Element {
+  return <StatusCard tone="error">{message}</StatusCard>
+}
+
+function AssistantRetryRow({ retry }: { retry: OpenCodeSessionRetry }): JSX.Element {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    setNow(Date.now())
+    const interval = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(interval)
+  }, [retry.next])
+
+  const seconds = retry.next === null ? null : Math.max(0, Math.round((retry.next - now) / 1000))
+  const attempt = retry.attempt === null ? 'Retrying' : `Retry attempt ${retry.attempt}`
+  const countdown = seconds === null ? '' : ` · ${seconds}s`
+
+  return (
+    <div data-slot="assistant-retry-row" role="status" aria-live="polite" className="min-w-0">
+      <StatusCard tone="error">{`${retry.message} — ${attempt}${countdown}`}</StatusCard>
+    </div>
   )
 }
 
