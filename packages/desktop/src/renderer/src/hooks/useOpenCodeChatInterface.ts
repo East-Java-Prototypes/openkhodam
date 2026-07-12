@@ -363,6 +363,12 @@ export function useOpenCodeSessionRoute(
   const sessionStatus = sessionID ? sessionStatusesQuery.data?.[sessionID] : undefined
   const isGenerationActive = isActiveSessionStatus(sessionStatus)
   const canSendToActiveSession = Boolean(sessionID) && activeSession !== null
+  const canStopGeneration =
+    Boolean(directory) &&
+    canSendToActiveSession &&
+    abortConnection !== null &&
+    isGenerationActive &&
+    !isStoppingGeneration
   const revertMessageID = activeSession ? getSessionRevertMessageID(fetchedSession) : null
 
   const mappedMessages = useMemo(() => messages.map(mapMessage).filter(isChatMessage), [messages])
@@ -492,12 +498,7 @@ export function useOpenCodeSessionRoute(
       undoConnection !== null &&
       lastVisibleUserPrompt !== null &&
       !isUndoingPrompt,
-    canStopGeneration:
-      Boolean(directory) &&
-      canSendToActiveSession &&
-      abortConnection !== null &&
-      isGenerationActive &&
-      !isStoppingGeneration,
+    canStopGeneration,
     emptyMessage: getSessionEmptyMessage(
       sessionID,
       sessionQuery.isSuccess,
