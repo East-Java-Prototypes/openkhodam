@@ -59,6 +59,9 @@ const GOOGLE_SHEETS_VALUE_RENDER_OPTIONS = [
   'FORMULA'
 ] as const
 const GOOGLE_SHEETS_VALUE_INPUT_OPTIONS = ['USER_ENTERED', 'RAW'] as const
+const GOOGLE_DOCS_HTTP_LINK_PATTERN = new RegExp(
+  '^[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?:[/?#].*)?$'
+)
 
 type Fetch = typeof fetch
 
@@ -286,8 +289,50 @@ export type GoogleDocsEditOperation =
       occurrence?: GoogleDocsTextOccurrence
       type: 'delete_text'
     }
+  | {
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      style: GoogleDocsTextStyle
+      type: 'format_text'
+    }
+  | {
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      style: GoogleDocsParagraphStyle
+      type: 'format_paragraph'
+    }
 
 export type GoogleDocsTextOccurrence = 'first' | 'last' | number
+
+export type GoogleDocsTextStyle = {
+  backgroundColor?: string | null
+  bold?: boolean | null
+  fontFamily?: string | null
+  fontSizePt?: number | null
+  foregroundColor?: string | null
+  italic?: boolean | null
+  linkUrl?: string | null
+  strikethrough?: boolean | null
+  underline?: boolean | null
+}
+
+export type GoogleDocsParagraphStyle = {
+  alignment?: 'START' | 'CENTER' | 'END' | 'JUSTIFIED' | null
+  lineSpacingPercent?: number | null
+  namedStyle?:
+    | 'NORMAL_TEXT'
+    | 'TITLE'
+    | 'SUBTITLE'
+    | 'HEADING_1'
+    | 'HEADING_2'
+    | 'HEADING_3'
+    | 'HEADING_4'
+    | 'HEADING_5'
+    | 'HEADING_6'
+    | null
+  spaceAbovePt?: number | null
+  spaceBelowPt?: number | null
+}
 
 export type GoogleDocsEditDocumentResult = {
   document: GoogleDocDocumentArtifact
@@ -352,6 +397,22 @@ type ResolvedGoogleDocsEditOperation =
       occurrence: GoogleDocsTextOccurrence
       type: 'delete_text'
     }
+  | {
+      match: string
+      matchEndIndex: number
+      matchStartIndex: number
+      occurrence: GoogleDocsTextOccurrence
+      style: GoogleDocsTextStyle
+      type: 'format_text'
+    }
+  | {
+      match: string
+      occurrence: GoogleDocsTextOccurrence
+      paragraphEndIndex: number
+      paragraphStartIndex: number
+      style: GoogleDocsParagraphStyle
+      type: 'format_paragraph'
+    }
 
 type GoogleDocsBatchUpdateRequestBody = {
   requests: GoogleDocsBatchUpdateRequest[]
@@ -371,6 +432,20 @@ type GoogleDocsBatchUpdateRequest =
           endIndex: number
           startIndex: number
         }
+      }
+    }
+  | {
+      updateTextStyle: {
+        fields: string
+        range: { endIndex: number; startIndex: number }
+        textStyle: Record<string, unknown>
+      }
+    }
+  | {
+      updateParagraphStyle: {
+        fields: string
+        paragraphStyle: Record<string, unknown>
+        range: { endIndex: number; startIndex: number }
       }
     }
 
@@ -611,7 +686,7 @@ export async function editGoogleDocDocument({
   const resolvedOperation = resolveGoogleDocsEditOperation(
     extractIndexedGoogleDocBodyBlocks(current.rawDocument),
     normalizedOperation,
-    getBodyEndInsertionIndex(current.rawDocument)
+    normalizedOperation.type === 'append_text' ? getBodyEndInsertionIndex(current.rawDocument) : 0
   )
 
   const batchUpdateResponse = await fetchImpl(createDocsBatchUpdateUrl(resolvedDocumentId), {
@@ -1068,8 +1143,26 @@ function normalizeGoogleDocsEditOperation(
     }
   }
 
+  if (operation.type === 'format_text') {
+    return {
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      style: normalizeGoogleDocsTextStyle(operation.style),
+      type: 'format_text'
+    }
+  }
+
+  if (operation.type === 'format_paragraph') {
+    return {
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      style: normalizeGoogleDocsParagraphStyle(operation.style),
+      type: 'format_paragraph'
+    }
+  }
+
   throw new Error(
-    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, or delete_text.'
+    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, delete_text, format_text, or format_paragraph.'
   )
 }
 
@@ -1117,6 +1210,167 @@ function normalizeTextOccurrence(
   )
 }
 
+function normalizeGoogleDocsTextStyle(value: unknown): GoogleDocsTextStyle {
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    throw new Error('Google Docs format_text requires a non-empty style object.')
+  }
+  const allowed = [
+    'bold',
+    'italic',
+    'underline',
+    'strikethrough',
+    'fontFamily',
+    'fontSizePt',
+    'foregroundColor',
+    'backgroundColor',
+    'linkUrl'
+  ]
+  rejectGoogleDocsStyleProperties(value, allowed, 'format_text')
+  const style: GoogleDocsTextStyle = {}
+  for (const key of ['bold', 'italic', 'underline', 'strikethrough'] as const) {
+    if (value[key] !== undefined) {
+      if (value[key] !== null && typeof value[key] !== 'boolean') {
+        throw new Error(`Google Docs format_text style.${key} must be a boolean or null.`)
+      }
+      style[key] = value[key] as boolean | null
+    }
+  }
+  if (value.fontFamily !== undefined) {
+    if (value.fontFamily === null || typeof value.fontFamily === 'string') {
+      if (typeof value.fontFamily === 'string' && !value.fontFamily.trim()) {
+        throw new Error(
+          'Google Docs format_text style.fontFamily must be a non-empty string or null.'
+        )
+      }
+      style.fontFamily = value.fontFamily as string | null
+    } else throw new Error('Google Docs format_text style.fontFamily must be a string or null.')
+  }
+  if (value.fontSizePt !== undefined)
+    style.fontSizePt = normalizePositiveGoogleDocsStyleNumber(
+      value.fontSizePt,
+      'format_text',
+      'fontSizePt'
+    )
+  for (const key of ['foregroundColor', 'backgroundColor'] as const) {
+    if (value[key] !== undefined)
+      style[key] = normalizeGoogleDocsColor(value[key], 'format_text', key)
+  }
+  if (value.linkUrl !== undefined) style.linkUrl = normalizeGoogleDocsLinkUrl(value.linkUrl)
+  return style
+}
+
+function normalizeGoogleDocsParagraphStyle(value: unknown): GoogleDocsParagraphStyle {
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    throw new Error('Google Docs format_paragraph requires a non-empty style object.')
+  }
+  const allowed = ['namedStyle', 'alignment', 'lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt']
+  rejectGoogleDocsStyleProperties(value, allowed, 'format_paragraph')
+  const style: GoogleDocsParagraphStyle = {}
+  if (value.namedStyle !== undefined) {
+    const namedStyles = [
+      'NORMAL_TEXT',
+      'TITLE',
+      'SUBTITLE',
+      'HEADING_1',
+      'HEADING_2',
+      'HEADING_3',
+      'HEADING_4',
+      'HEADING_5',
+      'HEADING_6'
+    ]
+    if (
+      value.namedStyle !== null &&
+      (typeof value.namedStyle !== 'string' || !namedStyles.includes(value.namedStyle))
+    ) {
+      throw new Error(
+        'Google Docs format_paragraph style.namedStyle must be a valid named style or null.'
+      )
+    }
+    style.namedStyle = value.namedStyle as GoogleDocsParagraphStyle['namedStyle']
+  }
+  if (value.alignment !== undefined) {
+    const alignments = ['START', 'CENTER', 'END', 'JUSTIFIED']
+    if (
+      value.alignment !== null &&
+      (typeof value.alignment !== 'string' || !alignments.includes(value.alignment))
+    ) {
+      throw new Error(
+        'Google Docs format_paragraph style.alignment must be a valid alignment or null.'
+      )
+    }
+    style.alignment = value.alignment as GoogleDocsParagraphStyle['alignment']
+  }
+  for (const key of ['lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt'] as const) {
+    if (value[key] !== undefined)
+      style[key] = normalizePositiveGoogleDocsStyleNumber(value[key], 'format_paragraph', key)
+  }
+  return style
+}
+
+function rejectGoogleDocsStyleProperties(
+  value: Record<string, unknown>,
+  allowed: string[],
+  operation: string
+): void {
+  const additional = Object.keys(value).find((key) => !allowed.includes(key))
+  if (additional)
+    throw new Error(`Google Docs ${operation} style does not accept property ${additional}.`)
+}
+
+function normalizePositiveGoogleDocsStyleNumber(
+  value: unknown,
+  operation: string,
+  key: string
+): number | null {
+  if (value === null) return null
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+  throw new Error(`Google Docs ${operation} style.${key} must be a positive finite number or null.`)
+}
+
+function normalizeGoogleDocsColor(value: unknown, operation: string, key: string): string | null {
+  if (value === null) return null
+  if (typeof value === 'string' && /^#[0-9A-F]{6}$/.test(value)) return value
+  throw new Error(
+    `Google Docs ${operation} style.${key} must be a canonical #RRGGBB color or null.`
+  )
+}
+
+function normalizeGoogleDocsLinkUrl(value: unknown): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string')
+    throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
+  if (containsGoogleDocsUrlControlOrWhitespace(value))
+    throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
+  if (!GOOGLE_DOCS_HTTP_LINK_PATTERN.test(value))
+    throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
+  if (hasGoogleDocsForbiddenAuthoritySyntax(value))
+    throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
+  try {
+    const url = new URL(value)
+    if (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      url.hostname &&
+      !url.port &&
+      !url.username &&
+      !url.password
+    )
+      return url.href
+  } catch {}
+  throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
+}
+
+function containsGoogleDocsUrlControlOrWhitespace(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0
+    return code <= 0x1f || code === 0x7f || /\s/.test(character)
+  })
+}
+
+function hasGoogleDocsForbiddenAuthoritySyntax(value: string): boolean {
+  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/, 1)[0] ?? ''
+  return authority.includes(':') || authority.includes('@')
+}
+
 function createGoogleDocsBatchUpdateRequest(
   document: GoogleDocDocumentArtifact,
   operation: ResolvedGoogleDocsEditOperation
@@ -1154,6 +1408,36 @@ function createGoogleDocsBatchUpdateRequests(
     return [createDeleteContentRangeRequest(operation.matchStartIndex, operation.matchEndIndex)]
   }
 
+  if (operation.type === 'format_text') {
+    const compiled = compileGoogleDocsTextStyle(operation.style)
+    const fields = getGoogleDocsTextStyleFields(operation.style)
+    return [
+      {
+        updateTextStyle: {
+          fields: fields.join(','),
+          range: { endIndex: operation.matchEndIndex, startIndex: operation.matchStartIndex },
+          textStyle: compiled
+        }
+      }
+    ]
+  }
+
+  if (operation.type === 'format_paragraph') {
+    const paragraphStyle = compileGoogleDocsParagraphStyle(operation.style)
+    return [
+      {
+        updateParagraphStyle: {
+          fields: Object.keys(paragraphStyle.fields).join(','),
+          paragraphStyle: paragraphStyle.style,
+          range: {
+            endIndex: operation.paragraphEndIndex,
+            startIndex: operation.paragraphStartIndex
+          }
+        }
+      }
+    ]
+  }
+
   return [
     createDeleteContentRangeRequest(operation.matchStartIndex, operation.matchEndIndex),
     {
@@ -1163,6 +1447,85 @@ function createGoogleDocsBatchUpdateRequests(
       }
     }
   ]
+}
+
+function compileGoogleDocsTextStyle(style: GoogleDocsTextStyle): Record<string, unknown> {
+  const compiled: Record<string, unknown> = {}
+  if (style.bold !== undefined && style.bold !== null) compiled.bold = style.bold
+  if (style.italic !== undefined && style.italic !== null) compiled.italic = style.italic
+  if (style.underline !== undefined && style.underline !== null)
+    compiled.underline = style.underline
+  if (style.strikethrough !== undefined && style.strikethrough !== null)
+    compiled.strikethrough = style.strikethrough
+  if (style.fontFamily !== undefined && style.fontFamily !== null)
+    compiled.weightedFontFamily = { fontFamily: style.fontFamily }
+  if (style.fontSizePt !== undefined && style.fontSizePt !== null)
+    compiled.fontSize = { magnitude: style.fontSizePt, unit: 'PT' }
+  if (style.foregroundColor !== undefined && style.foregroundColor !== null)
+    compiled.foregroundColor = createGoogleDocsOptionalColor(style.foregroundColor)
+  if (style.backgroundColor !== undefined && style.backgroundColor !== null)
+    compiled.backgroundColor = createGoogleDocsOptionalColor(style.backgroundColor)
+  if (style.linkUrl !== undefined && style.linkUrl !== null) compiled.link = { url: style.linkUrl }
+  return compiled
+}
+
+function getGoogleDocsTextStyleFields(style: GoogleDocsTextStyle): string[] {
+  return [
+    style.bold !== undefined ? 'bold' : null,
+    style.italic !== undefined ? 'italic' : null,
+    style.underline !== undefined ? 'underline' : null,
+    style.strikethrough !== undefined ? 'strikethrough' : null,
+    style.fontFamily !== undefined ? 'weightedFontFamily' : null,
+    style.fontSizePt !== undefined ? 'fontSize' : null,
+    style.foregroundColor !== undefined ? 'foregroundColor' : null,
+    style.backgroundColor !== undefined ? 'backgroundColor' : null,
+    style.linkUrl !== undefined ? 'link' : null
+  ].filter((field): field is string => field !== null)
+}
+
+function compileGoogleDocsParagraphStyle(style: GoogleDocsParagraphStyle): {
+  fields: Record<string, true>
+  style: Record<string, unknown>
+} {
+  const fields: Record<string, true> = {}
+  const compiled: Record<string, unknown> = {}
+  if (style.namedStyle !== undefined) {
+    fields.namedStyleType = true
+    if (style.namedStyle !== null) compiled.namedStyleType = style.namedStyle
+  }
+  if (style.alignment !== undefined) {
+    fields.alignment = true
+    if (style.alignment !== null) compiled.alignment = style.alignment
+  }
+  if (style.lineSpacingPercent !== undefined) {
+    fields.lineSpacing = true
+    if (style.lineSpacingPercent !== null) compiled.lineSpacing = style.lineSpacingPercent
+  }
+  if (style.spaceAbovePt !== undefined) {
+    fields.spaceAbove = true
+    if (style.spaceAbovePt !== null)
+      compiled.spaceAbove = { magnitude: style.spaceAbovePt, unit: 'PT' }
+  }
+  if (style.spaceBelowPt !== undefined) {
+    fields.spaceBelow = true
+    if (style.spaceBelowPt !== null)
+      compiled.spaceBelow = { magnitude: style.spaceBelowPt, unit: 'PT' }
+  }
+  return { fields, style: compiled }
+}
+
+function createGoogleDocsOptionalColor(hex: string): {
+  color: { rgbColor: { blue: number; green: number; red: number } }
+} {
+  return {
+    color: {
+      rgbColor: {
+        red: parseInt(hex.slice(1, 3), 16) / 255,
+        green: parseInt(hex.slice(3, 5), 16) / 255,
+        blue: parseInt(hex.slice(5, 7), 16) / 255
+      }
+    }
+  }
 }
 
 function createDeleteContentRangeRequest(
@@ -1180,7 +1543,7 @@ function createDeleteContentRangeRequest(
 }
 
 function getResolvedInsertedTextLength(operation: ResolvedGoogleDocsEditOperation): number {
-  return 'text' in operation ? operation.text.length : 0
+  return 'text' in operation && typeof operation.text === 'string' ? operation.text.length : 0
 }
 
 function getResolvedDeletedTextLength(operation: ResolvedGoogleDocsEditOperation): number {
@@ -2090,11 +2453,41 @@ function resolveTextMatchOperation(
     )
   }
 
+  const matchStartIndex = match.matchStartIndex
+  const matchEndIndex = match.matchEndIndex
+
   const resolvedMatch = {
     match: operation.match,
-    matchEndIndex: match.matchEndIndex,
-    matchStartIndex: match.matchStartIndex,
+    matchEndIndex,
+    matchStartIndex,
     occurrence
+  }
+
+  if (operation.type === 'format_text') {
+    return { ...resolvedMatch, style: operation.style, type: 'format_text' }
+  }
+
+  if (operation.type === 'format_paragraph') {
+    const paragraph = indexedBlocks.find(
+      (block) =>
+        block.startIndex !== null &&
+        block.endIndex !== null &&
+        matchStartIndex >= block.startIndex &&
+        matchEndIndex <= block.endIndex
+    )
+    if (!paragraph?.startIndex || !paragraph.endIndex) {
+      throw new Error(
+        'Google Docs format_paragraph matched text in an unsupported paragraph structure.'
+      )
+    }
+    return {
+      match: operation.match,
+      occurrence,
+      paragraphEndIndex: paragraph.endIndex,
+      paragraphStartIndex: paragraph.startIndex,
+      style: operation.style,
+      type: 'format_paragraph'
+    }
   }
 
   if (operation.type === 'insert_after_text') {

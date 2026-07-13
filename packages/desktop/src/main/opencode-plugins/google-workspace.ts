@@ -9,6 +9,8 @@ import {
   editGoogleDocDocument,
   editGoogleSheetSpreadsheet,
   type GoogleDocsEditOperation,
+  type GoogleDocsParagraphStyle,
+  type GoogleDocsTextStyle,
   type GoogleDocsTextOccurrence,
   type GoogleSheetsEditOperation,
   type GoogleSheetsValueInputOption,
@@ -25,6 +27,9 @@ import {
   persistGoogleDocDocumentArtifact,
   persistGoogleSheetSpreadsheetArtifact
 } from '../integrations/project-artifacts'
+
+const GOOGLE_DOCS_HTTP_LINK_PATTERN =
+  '^[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?:[/?#][^\\s\\u0000-\\u0020\\u007F]*)?$'
 
 type GoogleWorkspaceListCommandsToolArgs = {
   query: string
@@ -206,6 +211,17 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
     operationType: 'delete_text',
     required: ['documentId', 'match']
   }),
+  createGoogleDocsFormatCommand({
+    description: 'Format a matching text occurrence in a Google Docs document.',
+    id: 'google.docs.format_text',
+    operationType: 'format_text'
+  }),
+  createGoogleDocsFormatCommand({
+    description:
+      'Format the paragraph containing a matching text occurrence in a Google Docs document.',
+    id: 'google.docs.format_paragraph',
+    operationType: 'format_paragraph'
+  }),
   createGoogleSheetsReadCommand(),
   createGoogleSheetsEditCommand({
     description: 'Set 2D values in a Google Sheets A1 range.',
@@ -279,6 +295,247 @@ function createGoogleDocsCommand(input: {
       }
     }
   }
+}
+
+function createGoogleDocsFormatCommand(input: {
+  description: string
+  id: string
+  operationType: 'format_text' | 'format_paragraph'
+}): GoogleWorkspaceCommand {
+  const styleSchema =
+    input.operationType === 'format_text'
+      ? googleDocsTextStyleSchema()
+      : googleDocsParagraphStyleSchema()
+  return {
+    ...input,
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        documentId: { description: 'The Google Docs document ID to edit.', type: 'string' },
+        match: { description: 'Text to find for match-based formatting.', type: 'string' },
+        occurrence: {
+          description:
+            'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+          type: ['number', 'string']
+        },
+        style: styleSchema
+      },
+      required: ['documentId', 'match', 'style'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${input.id} input`)
+      rejectAdditionalProperties(
+        record,
+        ['documentId', 'match', 'occurrence', 'style'],
+        input.id,
+        options?.rejectUndefinedProperties
+      )
+      const documentId = requiredStringArg(record.documentId, input.id, 'documentId')
+      const match = requiredStringArg(record.match, input.id, 'match')
+      const occurrence = occurrenceArg(record.occurrence)
+      const style =
+        input.operationType === 'format_text'
+          ? parseGoogleDocsTextStyle(record.style, input.id)
+          : parseGoogleDocsParagraphStyle(record.style, input.id)
+      return {
+        documentId,
+        operation: {
+          match,
+          occurrence,
+          style,
+          type: input.operationType
+        } as GoogleDocsEditOperation
+      }
+    }
+  }
+}
+
+function googleDocsTextStyleSchema(): Record<string, unknown> {
+  return {
+    additionalProperties: false,
+    minProperties: 1,
+    properties: {
+      bold: { type: ['boolean', 'null'] },
+      italic: { type: ['boolean', 'null'] },
+      underline: { type: ['boolean', 'null'] },
+      strikethrough: { type: ['boolean', 'null'] },
+      fontFamily: { type: ['string', 'null'] },
+      fontSizePt: { exclusiveMinimum: 0, type: ['number', 'null'] },
+      foregroundColor: { pattern: '^#[0-9A-F]{6}$', type: ['string', 'null'] },
+      backgroundColor: { pattern: '^#[0-9A-F]{6}$', type: ['string', 'null'] },
+      linkUrl: {
+        pattern: GOOGLE_DOCS_HTTP_LINK_PATTERN,
+        type: ['string', 'null']
+      }
+    },
+    type: 'object'
+  }
+}
+
+function googleDocsParagraphStyleSchema(): Record<string, unknown> {
+  return {
+    additionalProperties: false,
+    minProperties: 1,
+    properties: {
+      namedStyle: {
+        enum: [
+          'NORMAL_TEXT',
+          'TITLE',
+          'SUBTITLE',
+          'HEADING_1',
+          'HEADING_2',
+          'HEADING_3',
+          'HEADING_4',
+          'HEADING_5',
+          'HEADING_6',
+          null
+        ]
+      },
+      alignment: { enum: ['START', 'CENTER', 'END', 'JUSTIFIED', null] },
+      lineSpacingPercent: { exclusiveMinimum: 0, type: ['number', 'null'] },
+      spaceAbovePt: { exclusiveMinimum: 0, type: ['number', 'null'] },
+      spaceBelowPt: { exclusiveMinimum: 0, type: ['number', 'null'] }
+    },
+    type: 'object'
+  }
+}
+
+function parseGoogleDocsTextStyle(value: unknown, command: string): GoogleDocsTextStyle {
+  const record = objectArg(value, `Google Workspace command ${command} style`)
+  rejectAdditionalProperties(
+    record,
+    [
+      'bold',
+      'italic',
+      'underline',
+      'strikethrough',
+      'fontFamily',
+      'fontSizePt',
+      'foregroundColor',
+      'backgroundColor',
+      'linkUrl'
+    ],
+    command
+  )
+  if (!Object.keys(record).length)
+    throw new Error(`Google Workspace command ${command} requires a non-empty style.`)
+  for (const key of ['bold', 'italic', 'underline', 'strikethrough'])
+    if (record[key] !== undefined && record[key] !== null && typeof record[key] !== 'boolean')
+      throw new Error(`Google Workspace command ${command} requires ${key} to be boolean or null.`)
+  if (
+    record.fontFamily !== undefined &&
+    record.fontFamily !== null &&
+    (typeof record.fontFamily !== 'string' || !record.fontFamily.trim())
+  )
+    throw new Error(
+      `Google Workspace command ${command} requires fontFamily to be a non-empty string or null.`
+    )
+  for (const key of ['fontSizePt'] as const)
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'number' || !Number.isFinite(record[key]) || record[key] <= 0)
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be a positive number or null.`
+      )
+  for (const key of ['foregroundColor', 'backgroundColor'])
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'string' || !/^#[0-9A-F]{6}$/.test(record[key] as string))
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be canonical #RRGGBB or null.`
+      )
+  if (record.linkUrl !== undefined && record.linkUrl !== null && !isHttpUrl(record.linkUrl))
+    throw new Error(
+      `Google Workspace command ${command} requires linkUrl to be an HTTP/HTTPS URL or null.`
+    )
+  return record as GoogleDocsTextStyle
+}
+
+function parseGoogleDocsParagraphStyle(value: unknown, command: string): GoogleDocsParagraphStyle {
+  const record = objectArg(value, `Google Workspace command ${command} style`)
+  rejectAdditionalProperties(
+    record,
+    ['namedStyle', 'alignment', 'lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt'],
+    command
+  )
+  if (!Object.keys(record).length)
+    throw new Error(`Google Workspace command ${command} requires a non-empty style.`)
+  if (
+    record.namedStyle !== undefined &&
+    record.namedStyle !== null &&
+    ![
+      'NORMAL_TEXT',
+      'TITLE',
+      'SUBTITLE',
+      'HEADING_1',
+      'HEADING_2',
+      'HEADING_3',
+      'HEADING_4',
+      'HEADING_5',
+      'HEADING_6'
+    ].includes(record.namedStyle as string)
+  )
+    throw new Error(`Google Workspace command ${command} requires a valid namedStyle.`)
+  if (
+    record.alignment !== undefined &&
+    record.alignment !== null &&
+    !['START', 'CENTER', 'END', 'JUSTIFIED'].includes(record.alignment as string)
+  )
+    throw new Error(`Google Workspace command ${command} requires a valid alignment.`)
+  for (const key of ['lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt'])
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'number' || !Number.isFinite(record[key]) || record[key] <= 0)
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be a positive number or null.`
+      )
+  return record as GoogleDocsParagraphStyle
+}
+
+function isHttpUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  if (containsUrlControlOrWhitespace(value)) return false
+  if (!new RegExp(GOOGLE_DOCS_HTTP_LINK_PATTERN).test(value)) return false
+  if (hasForbiddenUrlAuthoritySyntax(value)) return false
+  try {
+    const url = new URL(value)
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      Boolean(url.hostname) &&
+      !url.port &&
+      !url.username &&
+      !url.password
+    )
+  } catch {
+    return false
+  }
+}
+
+function containsUrlControlOrWhitespace(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0
+    return code <= 0x1f || code === 0x7f || /\s/.test(character)
+  })
+}
+
+function hasForbiddenUrlAuthoritySyntax(value: string): boolean {
+  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/, 1)[0] ?? ''
+  return authority.includes(':') || authority.includes('@')
 }
 
 function createGoogleDriveSearchCommand(): GoogleWorkspaceCommand {

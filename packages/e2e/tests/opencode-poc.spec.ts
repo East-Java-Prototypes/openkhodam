@@ -46,6 +46,25 @@ const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 const googleSheetsSpreadsheetsScope = 'https://www.googleapis.com/auth/spreadsheets.readonly'
 const googleSheetsSpreadsheetsWriteScope = 'https://www.googleapis.com/auth/spreadsheets'
+const googleDocsLinkUrlCases = [
+  { accepted: true, url: 'https://example.com' },
+  { accepted: true, url: 'http://example.com/path?query=value#fragment' },
+  { accepted: true, url: 'HTTPS://example.com' },
+  { accepted: false, url: 'https:///path' },
+  { accepted: false, url: 'https://%' },
+  { accepted: false, url: 'https://example.com:80' },
+  { accepted: false, url: 'https://example.com:443' },
+  { accepted: false, url: 'https://example.com:8080' },
+  { accepted: false, url: 'https://example.com:99999' },
+  { accepted: false, url: 'https://user:pass@example.com' },
+  { accepted: false, url: 'https://exa\nmple.com' },
+  { accepted: false, url: 'https://exa\u0001mple.com' },
+  { accepted: false, url: 'https://example.com/path\u0001x' },
+  { accepted: false, url: 'https://example.com/?q=\u00A0' },
+  { accepted: false, url: 'https://example.com/path with-space' },
+  { accepted: false, url: 'not a url' },
+  { accepted: false, url: 'ftp://example.com' }
+] as const
 
 type OpenKhodamPocPlugin = {
   'experimental.chat.system.transform': (
@@ -1302,6 +1321,14 @@ test('loads the Google Workspace ESM plugin and searches Drive with safe metadat
 
   try {
     const plugin = await loadGoogleWorkspacePlugin()
+    const discovery = await listGoogleWorkspaceCommands(plugin)
+    const linkSchema = discovery.commands.find(
+      (command) => command.id === 'google.docs.format_text'
+    )?.inputSchema.properties?.style as { properties?: { linkUrl?: { pattern?: string } } }
+    const linkPattern = new RegExp(linkSchema.properties?.linkUrl?.pattern ?? '')
+    for (const linkCase of googleDocsLinkUrlCases) {
+      expect(linkPattern.test(linkCase.url)).toBe(linkCase.accepted)
+    }
     const output = JSON.parse(
       await executeGoogleWorkspaceCommand(
         plugin,
@@ -1540,7 +1567,7 @@ test('registers exactly generic Google Workspace tools and discovers strict Shee
     'google_workspace_execute_command'
   ])
   const commands = await listGoogleWorkspaceCommands(plugin)
-  expect(commands.commands).toHaveLength(11)
+  expect(commands.commands).toHaveLength(13)
   const byId = new Map(commands.commands.map((command) => [command.id, command.inputSchema]))
   expect(byId.get('google.sheets.read')).toMatchObject({
     additionalProperties: false,
@@ -3603,11 +3630,13 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
         inputSchema: { properties?: Record<string, unknown>; required: string[] }
       }>
     }
-    expect(discovery.commands).toHaveLength(11)
+    expect(discovery.commands).toHaveLength(13)
     expect(discovery.commands.map((command) => command.id)).toEqual([
       'google.drive.search_files',
       'google.docs.read',
       ...cases.map((item) => item.command),
+      'google.docs.format_text',
+      'google.docs.format_paragraph',
       'google.sheets.read',
       'google.sheets.set_values',
       'google.sheets.append_rows',
@@ -3621,6 +3650,8 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       ['documentId', 'match', 'text'],
       ['documentId', 'match', 'text'],
       ['documentId', 'match'],
+      ['documentId', 'match', 'style'],
+      ['documentId', 'match', 'style'],
       ['spreadsheetId'],
       ['spreadsheetId', 'range', 'values'],
       ['spreadsheetId', 'range', 'rows'],
@@ -3636,6 +3667,8 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       ['documentId', 'match', 'occurrence', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
       ['documentId', 'match', 'occurrence'],
+      ['documentId', 'match', 'occurrence', 'style'],
+      ['documentId', 'match', 'occurrence', 'style'],
       ['spreadsheetId', 'ranges', 'valueRenderOption'],
       ['spreadsheetId', 'range', 'values', 'valueInputOption'],
       ['spreadsheetId', 'range', 'rows', 'valueInputOption'],
@@ -3689,6 +3722,281 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
     expect(getCounts.has('invalid')).toBe(false)
     expect(getCounts.has('invalid-delete')).toBe(false)
     expect(getCounts.has('invalid-append')).toBe(false)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('Google Docs format commands compile strict native style requests', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-format-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const requests = new Map<string, unknown>()
+  const getCounts = new Map<string, number>()
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'format-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.includes(':batchUpdate')) {
+      const id = decodeURIComponent(
+        new URL(url).pathname.slice('/v1/documents/'.length, -':batchUpdate'.length)
+      )
+      requests.set(id, JSON.parse(init?.body as string))
+      return new Response(JSON.stringify({ documentId: id }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const id = readFetchedGoogleDocsDocumentId(url)
+    const count = (getCounts.get(id) ?? 0) + 1
+    getCounts.set(id, count)
+    return new Response(
+      JSON.stringify({
+        body: {
+          content: [
+            {
+              startIndex: 1,
+              endIndex: 22,
+              paragraph: {
+                elements: [
+                  { startIndex: 1, endIndex: 22, textRun: { content: 'Hello 😀target world\n' } }
+                ]
+              }
+            },
+            {
+              startIndex: 22,
+              endIndex: 46,
+              paragraph: {
+                elements: [
+                  {
+                    startIndex: 22,
+                    endIndex: 46,
+                    textRun: { content: 'Second target paragraph\n' }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        documentId: id,
+        revisionId: count === 1 ? 'format-before' : 'format-after',
+        title: 'Format target'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.format_text',
+      {
+        documentId: 'format-text',
+        match: 'target',
+        occurrence: 'first',
+        style: {
+          backgroundColor: null,
+          bold: false,
+          fontFamily: 'Arial',
+          fontSizePt: 12,
+          foregroundColor: '#FF0000',
+          italic: true,
+          linkUrl: 'https://example.com/',
+          strikethrough: false,
+          underline: true
+        }
+      },
+      {}
+    )
+    expect(requests.get('format-text')).toEqual({
+      requests: [
+        {
+          updateTextStyle: {
+            fields:
+              'bold,italic,underline,strikethrough,weightedFontFamily,fontSize,foregroundColor,backgroundColor,link',
+            range: { startIndex: 9, endIndex: 15 },
+            textStyle: {
+              bold: false,
+              italic: true,
+              underline: true,
+              strikethrough: false,
+              weightedFontFamily: { fontFamily: 'Arial' },
+              fontSize: { magnitude: 12, unit: 'PT' },
+              foregroundColor: { color: { rgbColor: { red: 1, green: 0, blue: 0 } } },
+              link: { url: 'https://example.com/' }
+            }
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'format-before' }
+    })
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.format_paragraph',
+      {
+        documentId: 'format-paragraph',
+        match: 'target',
+        occurrence: 'last',
+        style: {
+          alignment: 'CENTER',
+          lineSpacingPercent: 125,
+          namedStyle: 'HEADING_2',
+          spaceAbovePt: null,
+          spaceBelowPt: 8
+        }
+      },
+      {}
+    )
+    expect(requests.get('format-paragraph')).toEqual({
+      requests: [
+        {
+          updateParagraphStyle: {
+            fields: 'namedStyleType,alignment,lineSpacing,spaceAbove,spaceBelow',
+            range: { startIndex: 22, endIndex: 46 },
+            paragraphStyle: {
+              namedStyleType: 'HEADING_2',
+              alignment: 'CENTER',
+              lineSpacing: 125,
+              spaceBelow: { magnitude: 8, unit: 'PT' }
+            }
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'format-before' }
+    })
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.format_text',
+      {
+        documentId: 'format-reset',
+        match: 'target',
+        style: {
+          backgroundColor: null,
+          bold: null,
+          fontFamily: null,
+          fontSizePt: null,
+          foregroundColor: null,
+          italic: null,
+          linkUrl: null,
+          strikethrough: null,
+          underline: null
+        }
+      },
+      {}
+    )
+    expect(requests.get('format-reset')).toEqual({
+      requests: [
+        {
+          updateTextStyle: {
+            fields:
+              'bold,italic,underline,strikethrough,weightedFontFamily,fontSize,foregroundColor,backgroundColor,link',
+            range: { startIndex: 29, endIndex: 35 },
+            textStyle: {}
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'format-before' }
+    })
+    for (const [index, linkCase] of googleDocsLinkUrlCases.entries()) {
+      const documentId = `format-link-${index}`
+      const fetchCountBefore = getCounts.size
+      const execution = executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.format_text',
+        { documentId, match: 'target', style: { linkUrl: linkCase.url } },
+        {}
+      )
+
+      if (linkCase.accepted) {
+        await expect(execution).resolves.toBeDefined()
+        expect(requests.get(documentId)).toMatchObject({
+          requests: [
+            { updateTextStyle: { textStyle: { link: { url: new URL(linkCase.url).href } } } }
+          ]
+        })
+      } else {
+        await expect(execution).rejects.toThrow()
+        expect(getCounts.size).toBe(fetchCountBefore)
+      }
+    }
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.format_text',
+      { documentId: 'format-utf16', match: 'target', style: { bold: true } },
+      {}
+    )
+    expect(requests.get('format-utf16')).toMatchObject({
+      requests: [{ updateTextStyle: { range: { startIndex: 29, endIndex: 35 } } }]
+    })
+    const fetchCount = getCounts.size
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.format_text',
+        { documentId: 'invalid', match: 'target', style: {} },
+        {}
+      )
+    ).rejects.toThrow('non-empty style')
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.format_paragraph',
+        { documentId: 'invalid', match: 'target', style: { alignment: 'LEFT' } },
+        {}
+      )
+    ).rejects.toThrow('valid alignment')
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.format_text',
+        { documentId: 'invalid', match: 'target', style: { foregroundColor: '#ff0000' } },
+        {}
+      )
+    ).rejects.toThrow('canonical #RRGGBB')
+    for (const invalidStyle of [
+      { fontSizePt: 0 },
+      { fontSizePt: -1 },
+      { fontSizePt: Number.POSITIVE_INFINITY },
+      { extra: true }
+    ]) {
+      await expect(
+        executeGoogleWorkspaceCommand(
+          plugin,
+          'google.docs.format_text',
+          { documentId: 'invalid', match: 'target', style: invalidStyle },
+          {}
+        )
+      ).rejects.toThrow()
+    }
+    for (const invalidStyle of [
+      { lineSpacingPercent: 0 },
+      { spaceAbovePt: -1 },
+      { spaceBelowPt: Number.NaN }
+    ]) {
+      await expect(
+        executeGoogleWorkspaceCommand(
+          plugin,
+          'google.docs.format_paragraph',
+          { documentId: 'invalid', match: 'target', style: invalidStyle },
+          {}
+        )
+      ).rejects.toThrow('positive number')
+    }
+    expect(getCounts.size).toBe(fetchCount)
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
