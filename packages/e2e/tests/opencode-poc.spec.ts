@@ -46,26 +46,6 @@ const googleDriveMetadataReadonlyScope = 'https://www.googleapis.com/auth/drive.
 const googleDocsDocumentsScope = 'https://www.googleapis.com/auth/documents'
 const googleSheetsSpreadsheetsScope = 'https://www.googleapis.com/auth/spreadsheets.readonly'
 const googleSheetsSpreadsheetsWriteScope = 'https://www.googleapis.com/auth/spreadsheets'
-const googleDocsLinkUrlCases = [
-  { accepted: true, url: 'https://example.com' },
-  { accepted: true, url: 'http://example.com/path?query=value#fragment' },
-  { accepted: true, url: 'HTTPS://example.com' },
-  { accepted: false, url: 'https:///path' },
-  { accepted: false, url: 'https://%' },
-  { accepted: false, url: 'https://example.com:80' },
-  { accepted: false, url: 'https://example.com:443' },
-  { accepted: false, url: 'https://example.com:8080' },
-  { accepted: false, url: 'https://example.com:99999' },
-  { accepted: false, url: 'https://user:pass@example.com' },
-  { accepted: false, url: 'https://exa\nmple.com' },
-  { accepted: false, url: 'https://exa\u0001mple.com' },
-  { accepted: false, url: 'https://example.com/path\u0001x' },
-  { accepted: false, url: 'https://example.com/?q=\u00A0' },
-  { accepted: false, url: 'https://example.com/path with-space' },
-  { accepted: false, url: 'not a url' },
-  { accepted: false, url: 'ftp://example.com' }
-] as const
-
 type OpenKhodamPocPlugin = {
   'experimental.chat.system.transform': (
     input: { model: { providerID: string; modelID: string }; sessionID?: string },
@@ -1324,11 +1304,8 @@ test('loads the Google Workspace ESM plugin and searches Drive with safe metadat
     const discovery = await listGoogleWorkspaceCommands(plugin)
     const linkSchema = discovery.commands.find(
       (command) => command.id === 'google.docs.format_text'
-    )?.inputSchema.properties?.style as { properties?: { linkUrl?: { pattern?: string } } }
-    const linkPattern = new RegExp(linkSchema.properties?.linkUrl?.pattern ?? '')
-    for (const linkCase of googleDocsLinkUrlCases) {
-      expect(linkPattern.test(linkCase.url)).toBe(linkCase.accepted)
-    }
+    )?.inputSchema.properties?.style as { properties?: { linkUrl?: unknown } }
+    expect(linkSchema.properties?.linkUrl).toEqual({ type: ['string', 'null'] })
     const output = JSON.parse(
       await executeGoogleWorkspaceCommand(
         plugin,
@@ -3765,6 +3742,18 @@ test('Google Docs format commands compile strict native style requests', async (
         new URL(url).pathname.slice('/v1/documents/'.length, -':batchUpdate'.length)
       )
       requests.set(id, JSON.parse(init?.body as string))
+      if (id === 'format-provider-error') {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 400,
+              message: 'Google rejected the supplied link URL.',
+              status: 'INVALID_ARGUMENT'
+            }
+          }),
+          { status: 400, headers: { 'content-type': 'application/json' } }
+        )
+      }
       return new Response(JSON.stringify({ documentId: id }), {
         status: 200,
         headers: { 'content-type': 'application/json' }
@@ -3920,28 +3909,37 @@ test('Google Docs format commands compile strict native style requests', async (
       ],
       writeControl: { requiredRevisionId: 'format-before' }
     })
-    for (const [index, linkCase] of googleDocsLinkUrlCases.entries()) {
-      const documentId = `format-link-${index}`
-      const fetchCountBefore = getCounts.size
-      const execution = executeGoogleWorkspaceCommand(
+    const providerRejectedLink = 'not a provider-accepted link'
+    await expect(
+      executeGoogleWorkspaceCommand(
         plugin,
         'google.docs.format_text',
-        { documentId, match: 'target', style: { linkUrl: linkCase.url } },
+        {
+          documentId: 'format-provider-rejected-link',
+          match: 'target',
+          style: { linkUrl: providerRejectedLink }
+        },
         {}
       )
-
-      if (linkCase.accepted) {
-        await expect(execution).resolves.toBeDefined()
-        expect(requests.get(documentId)).toMatchObject({
-          requests: [
-            { updateTextStyle: { textStyle: { link: { url: new URL(linkCase.url).href } } } }
-          ]
-        })
-      } else {
-        await expect(execution).rejects.toThrow()
-        expect(getCounts.size).toBe(fetchCountBefore)
-      }
-    }
+    ).resolves.toBeDefined()
+    expect(requests.get('format-provider-rejected-link')).toMatchObject({
+      requests: [{ updateTextStyle: { textStyle: { link: { url: providerRejectedLink } } } }]
+    })
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.format_text',
+        {
+          documentId: 'format-provider-error',
+          match: 'target',
+          style: { linkUrl: providerRejectedLink }
+        },
+        {}
+      )
+    ).rejects.toThrow('Google rejected the supplied link URL.')
+    expect(requests.get('format-provider-error')).toMatchObject({
+      requests: [{ updateTextStyle: { textStyle: { link: { url: providerRejectedLink } } } }]
+    })
     await executeGoogleWorkspaceCommand(
       plugin,
       'google.docs.format_text',

@@ -30,9 +30,6 @@ import {
   persistGoogleSheetSpreadsheetArtifact
 } from '../integrations/project-artifacts'
 
-const GOOGLE_DOCS_HTTP_LINK_PATTERN =
-  '^[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?:[/?#][^\\s\\u0000-\\u0020\\u007F]*)?$'
-
 type GoogleWorkspaceListCommandsToolArgs = {
   query: string
 }
@@ -624,10 +621,7 @@ function googleDocsTextStyleSchema(): Record<string, unknown> {
       fontSizePt: { exclusiveMinimum: 0, type: ['number', 'null'] },
       foregroundColor: { pattern: '^#[0-9A-F]{6}$', type: ['string', 'null'] },
       backgroundColor: { pattern: '^#[0-9A-F]{6}$', type: ['string', 'null'] },
-      linkUrl: {
-        pattern: GOOGLE_DOCS_HTTP_LINK_PATTERN,
-        type: ['string', 'null']
-      }
+      linkUrl: { type: ['string', 'null'] }
     },
     type: 'object'
   }
@@ -709,10 +703,8 @@ function parseGoogleDocsTextStyle(value: unknown, command: string): GoogleDocsTe
       throw new Error(
         `Google Workspace command ${command} requires ${key} to be canonical #RRGGBB or null.`
       )
-  if (record.linkUrl !== undefined && record.linkUrl !== null && !isHttpUrl(record.linkUrl))
-    throw new Error(
-      `Google Workspace command ${command} requires linkUrl to be an HTTP/HTTPS URL or null.`
-    )
+  if (record.linkUrl !== undefined && record.linkUrl !== null && typeof record.linkUrl !== 'string')
+    throw new Error(`Google Workspace command ${command} requires linkUrl to be a string or null.`)
   return record as GoogleDocsTextStyle
 }
 
@@ -757,37 +749,6 @@ function parseGoogleDocsParagraphStyle(value: unknown, command: string): GoogleD
         `Google Workspace command ${command} requires ${key} to be a positive number or null.`
       )
   return record as GoogleDocsParagraphStyle
-}
-
-function isHttpUrl(value: unknown): boolean {
-  if (typeof value !== 'string') return false
-  if (containsUrlControlOrWhitespace(value)) return false
-  if (!new RegExp(GOOGLE_DOCS_HTTP_LINK_PATTERN).test(value)) return false
-  if (hasForbiddenUrlAuthoritySyntax(value)) return false
-  try {
-    const url = new URL(value)
-    return (
-      (url.protocol === 'http:' || url.protocol === 'https:') &&
-      Boolean(url.hostname) &&
-      !url.port &&
-      !url.username &&
-      !url.password
-    )
-  } catch {
-    return false
-  }
-}
-
-function containsUrlControlOrWhitespace(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.codePointAt(0) ?? 0
-    return code <= 0x1f || code === 0x7f || /\s/.test(character)
-  })
-}
-
-function hasForbiddenUrlAuthoritySyntax(value: string): boolean {
-  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/, 1)[0] ?? ''
-  return authority.includes(':') || authority.includes('@')
 }
 
 function createGoogleDriveSearchCommand(): GoogleWorkspaceCommand {

@@ -66,10 +66,6 @@ const GOOGLE_SHEETS_VALUE_RENDER_OPTIONS = [
   'FORMULA'
 ] as const
 const GOOGLE_SHEETS_VALUE_INPUT_OPTIONS = ['USER_ENTERED', 'RAW'] as const
-const GOOGLE_DOCS_HTTP_LINK_PATTERN = new RegExp(
-  '^[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?:[/?#].*)?$'
-)
-
 type Fetch = typeof fetch
 
 type GoogleTokenRefreshResponse = {
@@ -1472,7 +1468,12 @@ function normalizeGoogleDocsTextStyle(value: unknown): GoogleDocsTextStyle {
     if (value[key] !== undefined)
       style[key] = normalizeGoogleDocsColor(value[key], 'format_text', key)
   }
-  if (value.linkUrl !== undefined) style.linkUrl = normalizeGoogleDocsLinkUrl(value.linkUrl)
+  if (value.linkUrl !== undefined) {
+    if (value.linkUrl !== null && typeof value.linkUrl !== 'string') {
+      throw new Error('Google Docs format_text style.linkUrl must be a string or null.')
+    }
+    style.linkUrl = value.linkUrl
+  }
   return style
 }
 
@@ -1552,42 +1553,6 @@ function normalizeGoogleDocsColor(value: unknown, operation: string, key: string
   )
 }
 
-function normalizeGoogleDocsLinkUrl(value: unknown): string | null {
-  if (value === null) return null
-  if (typeof value !== 'string')
-    throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
-  if (containsGoogleDocsUrlControlOrWhitespace(value))
-    throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
-  if (!GOOGLE_DOCS_HTTP_LINK_PATTERN.test(value))
-    throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
-  if (hasGoogleDocsForbiddenAuthoritySyntax(value))
-    throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
-  try {
-    const url = new URL(value)
-    if (
-      (url.protocol === 'http:' || url.protocol === 'https:') &&
-      url.hostname &&
-      !url.port &&
-      !url.username &&
-      !url.password
-    )
-      return url.href
-  } catch {}
-  throw new Error('Google Docs format_text style.linkUrl must be an HTTP/HTTPS URL or null.')
-}
-
-function containsGoogleDocsUrlControlOrWhitespace(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.codePointAt(0) ?? 0
-    return code <= 0x1f || code === 0x7f || /\s/.test(character)
-  })
-}
-
-function hasGoogleDocsForbiddenAuthoritySyntax(value: string): boolean {
-  const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/, 1)[0] ?? ''
-  return authority.includes(':') || authority.includes('@')
-}
-
 function createGoogleDocsBatchUpdateRequest(
   document: GoogleDocDocumentArtifact,
   operation: ResolvedGoogleDocsEditOperation
@@ -1616,6 +1581,7 @@ async function editGoogleDocInsertTable({
   signal?: AbortSignal
   token: GoogleWorkspaceTokenConfig
 }): Promise<GoogleDocsEditDocumentResult> {
+  const columnCount = operation.rows[0]!.length
   const current = await fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
   const insertionIndex = resolveGoogleDocsTableInsertionIndex(current.rawDocument, operation)
   await writeGoogleDocsBatchUpdate({
@@ -1630,29 +1596,26 @@ async function editGoogleDocInsertTable({
     inserted.rawDocument,
     insertionIndex + 1,
     operation.rows.length,
-    operation.rows[0]!.length
+    columnCount
   )
   const populatedCells = cellIndexes
     .map((index, position) => ({
       index,
-      text: operation.rows[Math.floor(position / operation.rows[0]!.length)]![
-        position % operation.rows[0]!.length
-      ]!
+      text: operation.rows[Math.floor(position / columnCount)]![position % columnCount]!
     }))
     .filter((cell) => cell.text.length > 0)
     .sort((left, right) => right.index - left.index)
-  const updated = populatedCells.length
-    ? await (async () => {
-        await writeGoogleDocsBatchUpdate({
-          body: createGoogleDocsCellPopulateRequest(inserted.document, populatedCells),
-          documentId,
-          fetch: fetchImpl,
-          signal,
-          token
-        })
-        return fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
-      })()
-    : inserted
+  let updated = inserted
+  if (populatedCells.length) {
+    await writeGoogleDocsBatchUpdate({
+      body: createGoogleDocsCellPopulateRequest(inserted.document, populatedCells),
+      documentId,
+      fetch: fetchImpl,
+      signal,
+      token
+    })
+    updated = await fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
+  }
   const insertedTextLength = operation.rows.flat().reduce((length, text) => length + text.length, 0)
   return {
     document: updated.document,
@@ -2983,14 +2946,12 @@ function resolveTextMatchOperation(
   }
 
   if (operation.type === 'format_paragraph') {
-    const paragraph = indexedBlocks.find(
-      (block) =>
-        block.startIndex !== null &&
-        block.endIndex !== null &&
-        matchStartIndex >= block.startIndex &&
-        matchEndIndex <= block.endIndex
+    const paragraph = findContainingGoogleDocsParagraph(
+      indexedBlocks,
+      matchStartIndex,
+      matchEndIndex
     )
-    if (!paragraph?.startIndex || !paragraph.endIndex) {
+    if (!paragraph) {
       throw new Error(
         'Google Docs format_paragraph matched text in an unsupported paragraph structure.'
       )
