@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer'
+
 import type {
   GoogleDocDocumentArtifact,
   GoogleSheetCellValue,
@@ -23,7 +25,8 @@ import {
   getOrCreateLinkedGoogleArtifact,
   getOrCreateLinkedGoogleDoc,
   persistGoogleDocDocumentArtifact,
-  persistGoogleSheetSpreadsheetArtifact
+  persistGoogleSheetSpreadsheetArtifact,
+  readGoogleDocDocumentArtifact
 } from '../integrations/project-artifacts'
 
 type GoogleWorkspaceListCommandsToolArgs = {
@@ -176,6 +179,7 @@ type GoogleWorkspaceCommand = {
 const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
   createGoogleDriveSearchCommand(),
   createGoogleDocsReadCommand(),
+  createGoogleArtifactsReadCommand(),
   createGoogleDocsCommand({
     description: 'Append literal text to the end of a Google Docs document.',
     id: 'google.docs.append_text',
@@ -352,13 +356,129 @@ function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
         documentId: input.documentId,
         signal: context.abort
       })
-      await recordReadGoogleDocArtifact(context, result.document)
-      return JSON.stringify({ document: createGoogleDocDocumentPreview(result.document) })
+      const artifactRef = await recordReadGoogleDocArtifact(context, result.document)
+      return JSON.stringify({
+        artifactRef,
+        document: createGoogleDocDocumentPreview(result.document)
+      })
     },
     parseInput(value) {
       const record = objectArg(value, 'Google Workspace command google.docs.read input')
       rejectAdditionalProperties(record, ['documentId'], 'google.docs.read')
       return { documentId: requiredStringArg(record.documentId, 'google.docs.read', 'documentId') }
+    }
+  }
+}
+
+function createGoogleArtifactsReadCommand(): GoogleWorkspaceCommand {
+  return {
+    description:
+      'Read a cached Google Docs artifact offline. Supports first-tab paragraphs only; tables are unsupported.',
+    id: 'google.artifacts.read',
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        artifactRef: {
+          description: 'Opaque artifact reference returned by a Google Docs command.',
+          type: 'string'
+        },
+        cursor: {
+          description: 'Opaque cursor returned by a previous artifact read.',
+          type: 'string'
+        },
+        maxBlocks: {
+          default: 20,
+          description: 'Maximum paragraph blocks to return, from 1 to 100.',
+          maximum: 100,
+          minimum: 1,
+          type: 'number'
+        },
+        maxCharacters: {
+          default: 12000,
+          description: 'Maximum text characters to return, from 1 to 12000.',
+          maximum: 12000,
+          minimum: 1,
+          type: 'number'
+        }
+      },
+      required: ['artifactRef'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const input = parsedInput as {
+        artifactRef: string
+        cursor?: string
+        maxBlocks?: number
+        maxCharacters?: number
+      }
+      const projectDirectory = nonEmptyString(context.directory)
+      if (!projectDirectory) throw new Error('google.artifacts.read requires project context.')
+      const cached = await readGoogleDocDocumentArtifact({
+        artifactRef: input.artifactRef,
+        projectDirectory
+      })
+      const cursor = parseGoogleDocArtifactCursor(
+        input.cursor,
+        cached.artifactRef,
+        cached.snapshotId
+      )
+      const page = createGoogleDocArtifactPage(
+        cached.document,
+        cached.artifactRef,
+        cached.snapshotId,
+        input.maxBlocks ?? 20,
+        input.maxCharacters ?? 12_000,
+        cursor
+      )
+      return JSON.stringify({
+        artifactRef: cached.artifactRef,
+        cachedAt: cached.document.cachedAt,
+        coverage: { firstTabOnly: true, paragraphsOnly: true, tablesUnsupported: true },
+        nextCursor: page.nextCursor,
+        providerRevision: cached.document.revision,
+        returnedBlocks: page.blocks,
+        totalBlockCount: cached.document.body.blocks.length,
+        totalTextLength: cached.document.body.blocks.reduce(
+          (length, block) => length + block.text.length,
+          0
+        ),
+        truncated: page.nextCursor !== null
+      })
+    },
+    parseInput(value) {
+      const record = objectArg(value, 'Google Workspace command google.artifacts.read input')
+      rejectAdditionalProperties(
+        record,
+        ['artifactRef', 'cursor', 'maxBlocks', 'maxCharacters'],
+        'google.artifacts.read'
+      )
+      const artifactRef = requiredStringArg(
+        record.artifactRef,
+        'google.artifacts.read',
+        'artifactRef'
+      )
+      const cursor =
+        record.cursor === undefined
+          ? undefined
+          : requiredStringArg(record.cursor, 'google.artifacts.read', 'cursor')
+      return {
+        artifactRef,
+        cursor,
+        maxBlocks: boundedIntegerArg(
+          record.maxBlocks,
+          'google.artifacts.read',
+          'maxBlocks',
+          1,
+          100
+        ),
+        maxCharacters: boundedIntegerArg(
+          record.maxCharacters,
+          'google.artifacts.read',
+          'maxCharacters',
+          1,
+          12_000
+        )
+      }
     }
   }
 }
@@ -589,10 +709,11 @@ async function executeGoogleDocsEdit(input: {
     operation: input.operation,
     signal: input.context.abort
   })
-  await recordReadGoogleDocArtifact(input.context, result.document)
+  const artifactRef = await recordReadGoogleDocArtifact(input.context, result.document)
 
   return JSON.stringify({
     edit: result.edit,
+    artifactRef,
     document: createGoogleDocDocumentPreview(result.document)
   })
 }
@@ -642,7 +763,7 @@ function occurrenceArg(value: unknown): GoogleDocsTextOccurrence | undefined {
 async function recordReadGoogleDocArtifact(
   context: GoogleWorkspaceToolContext,
   document: GoogleDocDocumentArtifact
-): Promise<void> {
+): Promise<string | null> {
   const persisted = await persistReadGoogleWorkspaceArtifact({
     context,
     failureDetails: {
@@ -656,7 +777,7 @@ async function recordReadGoogleDocArtifact(
         projectDirectory
       })
   })
-  if (!persisted) return
+  if (!persisted) return null
 
   try {
     await getOrCreateLinkedGoogleDoc({
@@ -670,6 +791,7 @@ async function recordReadGoogleDocArtifact(
       messageId: persisted.messageId,
       sessionId: persisted.sessionId
     })
+    return createGoogleDocArtifactRef(document.id)
   } catch {
     const artifactCleanedUp = await cleanupCreatedGoogleWorkspaceArtifact({
       artifactPath: persisted.artifactPath,
@@ -689,6 +811,7 @@ async function recordReadGoogleDocArtifact(
       reason: 'artifact_record_failed',
       sessionId: persisted.sessionId
     })
+    return null
   }
 }
 
@@ -812,4 +935,113 @@ function nonEmptyString(value: unknown): string | null {
 
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+function boundedIntegerArg(
+  value: unknown,
+  command: string,
+  field: string,
+  minimum: number,
+  maximum: number
+): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(
+      `Google Workspace command ${command} requires ${field} to be an integer from ${minimum} to ${maximum}.`
+    )
+  }
+  return value
+}
+
+type GoogleDocArtifactCursor = { block: number; character: number }
+
+function parseGoogleDocArtifactCursor(
+  value: string | undefined,
+  artifactRef: string,
+  snapshotId: string
+): GoogleDocArtifactCursor {
+  if (!value) return { block: 0, character: 0 }
+  try {
+    const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >
+    if (decoded.artifactRef !== artifactRef || decoded.snapshotId !== snapshotId) {
+      throw new Error('stale')
+    }
+    const block = decoded.block
+    const character = decoded.character
+    if (
+      !Number.isInteger(block) ||
+      !Number.isInteger(character) ||
+      typeof block !== 'number' ||
+      typeof character !== 'number' ||
+      block < 0 ||
+      character < 0
+    ) {
+      throw new Error('invalid')
+    }
+    return { block, character }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'stale') {
+      throw new Error(
+        'Google Docs artifact cursor is stale. Restart with google.docs.read, then google.artifacts.read without a cursor.'
+      )
+    }
+    throw new Error(
+      'Google Docs artifact cursor is invalid. Restart google.artifacts.read without a cursor.'
+    )
+  }
+}
+
+function createGoogleDocArtifactPage(
+  document: GoogleDocDocumentArtifact & { cachedAt: number },
+  artifactRef: string,
+  snapshotId: string,
+  maxBlocks: number,
+  maxCharacters: number,
+  cursor: GoogleDocArtifactCursor
+): {
+  blocks: Array<{ id: string; ordinal: number; text: string; type: 'paragraph' }>
+  nextCursor: string | null
+} {
+  const blocks: Array<{ id: string; ordinal: number; text: string; type: 'paragraph' }> = []
+  let blockIndex = cursor.block
+  let character = cursor.character
+  let remaining = maxCharacters
+  if (document.body.blocks.length === 0 && blockIndex === 0 && character === 0) {
+    return { blocks, nextCursor: null }
+  }
+  if (blockIndex >= document.body.blocks.length) {
+    throw new Error(
+      'Google Docs artifact cursor is invalid. Restart google.artifacts.read without a cursor.'
+    )
+  }
+  while (blockIndex < document.body.blocks.length && blocks.length < maxBlocks && remaining > 0) {
+    const block = document.body.blocks[blockIndex]
+    const codePoints = Array.from(block.text)
+    if (character > codePoints.length || (codePoints.length > 0 && character >= codePoints.length))
+      throw new Error(
+        'Google Docs artifact cursor is invalid. Restart google.artifacts.read without a cursor.'
+      )
+    const text = codePoints.slice(character, character + remaining).join('')
+    blocks.push({ ...block, text })
+    remaining -= Array.from(text).length
+    character += Array.from(text).length
+    if (character < codePoints.length) break
+    blockIndex += 1
+    character = 0
+  }
+  const nextCursor =
+    blockIndex >= document.body.blocks.length
+      ? null
+      : Buffer.from(
+          JSON.stringify({ artifactRef, snapshotId, block: blockIndex, character }),
+          'utf8'
+        ).toString('base64url')
+  return { blocks, nextCursor }
+}
+
+function createGoogleDocArtifactRef(id: string): string {
+  return `google-docs:v1:${Buffer.from(id, 'utf8').toString('base64url')}`
 }

@@ -1,10 +1,12 @@
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
-import { unlink } from 'node:fs/promises'
+import { readFile, unlink } from 'node:fs/promises'
 import { isAbsolute, join, posix } from 'node:path'
 
 import type {
   GoogleDocDocumentArtifact,
+  PersistedGoogleDocDocumentArtifact,
   GoogleSheetSpreadsheetArtifact,
   LinkedGoogleArtifact,
   LinkedGoogleArtifactRecord,
@@ -137,6 +139,16 @@ export type DeleteGoogleDocDocumentArtifactInput = {
 
 export type DeleteGoogleDocDocumentArtifactResult = {
   deleted: boolean
+}
+
+export type ReadGoogleDocDocumentArtifactInput = {
+  artifactRef: string
+}
+
+export type ReadGoogleDocDocumentArtifactResult = {
+  artifactRef: string
+  document: PersistedGoogleDocDocumentArtifact
+  snapshotId: string
 }
 
 export type DeleteGoogleSheetSpreadsheetArtifactInput = {
@@ -292,6 +304,53 @@ export class ProjectArtifactsFileStore {
       GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG,
       'Google Docs'
     )
+  }
+
+  async readGoogleDocDocumentArtifact(
+    artifactRef: string
+  ): Promise<ReadGoogleDocDocumentArtifactResult> {
+    const parsedArtifactRef = parseGoogleDocArtifactRef(artifactRef)
+    const normalizedArtifactRef = getGoogleWorkspaceArtifactRelativePath(
+      GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG,
+      encodeGoogleWorkspaceArtifactFileName(
+        parsedArtifactRef.id,
+        GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG
+      )
+    )
+    const filePath = getGoogleWorkspaceArtifactFilePathFromRelativePath(
+      this.projectDirectory,
+      normalizedArtifactRef,
+      GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG
+    )
+    this.validateProjectDirectory()
+    validateGoogleWorkspaceArtifactPath(
+      this.projectDirectory,
+      filePath,
+      GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG
+    )
+
+    let value: unknown
+    try {
+      value = JSON.parse(await readFile(filePath, 'utf8'))
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') {
+        throw new Error('Google Docs artifact cache is missing. Refresh it with google.docs.read.')
+      }
+      if (error instanceof SyntaxError) {
+        throw new Error('Google Docs artifact cache is corrupt. Refresh it with google.docs.read.')
+      }
+      throw error
+    }
+
+    const document = parsePersistedGoogleDocDocumentArtifact(value)
+    if (document.id !== parsedArtifactRef.id) {
+      throw new Error('Google Docs artifact reference does not match the cached document.')
+    }
+    return {
+      artifactRef: createGoogleDocArtifactRef(document.id),
+      document,
+      snapshotId: createHash('sha256').update(JSON.stringify(value)).digest('base64url')
+    }
   }
 
   async deleteGoogleSheetSpreadsheetArtifact(
@@ -539,6 +598,12 @@ export async function deleteGoogleDocDocumentArtifact(
   input: DeleteGoogleDocDocumentArtifactInput
 ): Promise<DeleteGoogleDocDocumentArtifactResult> {
   return createProjectArtifactsStore(input).deleteGoogleDocDocumentArtifact(input.artifactPath)
+}
+
+export async function readGoogleDocDocumentArtifact(
+  input: ReadGoogleDocDocumentArtifactInput & { projectDirectory: string }
+): Promise<ReadGoogleDocDocumentArtifactResult> {
+  return createProjectArtifactsStore(input).readGoogleDocDocumentArtifact(input.artifactRef)
 }
 
 export async function deleteGoogleSheetSpreadsheetArtifact(
@@ -912,6 +977,79 @@ function createPersistedGoogleWorkspaceArtifact<
     schemaVersion,
     cachedAt
   }
+}
+
+function parsePersistedGoogleDocDocumentArtifact(
+  value: unknown
+): PersistedGoogleDocDocumentArtifact {
+  if (!isRecord(value)) throw new Error('Google Docs artifact cache has an invalid payload.')
+  if (value.schemaVersion !== GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION) {
+    throw new Error(
+      'Google Docs artifact cache has an unsupported schema version. Refresh it with google.docs.read.'
+    )
+  }
+  if (value.type !== 'google.doc.document')
+    throw new Error('Google Docs artifact cache has the wrong payload type.')
+  const id = normalizeStoredString(value.id)
+  const text = typeof value.text === 'string' ? value.text : null
+  const cachedAt = normalizeStoredTimestamp(value.cachedAt)
+  if (
+    !id ||
+    text === null ||
+    cachedAt === null ||
+    !isRecord(value.body) ||
+    !Array.isArray(value.body.blocks)
+  ) {
+    throw new Error('Google Docs artifact cache has an invalid document ID or body.')
+  }
+  const blocks = value.body.blocks.map((block, index) => {
+    if (!isRecord(block) || block.type !== 'paragraph' || typeof block.text !== 'string')
+      throw new Error('Google Docs artifact cache has an invalid paragraph block.')
+    const blockId = normalizeStoredString(block.id)
+    const blockOrdinal =
+      typeof block.ordinal === 'number' && Number.isInteger(block.ordinal) ? block.ordinal : null
+    if (!blockId || (blockOrdinal !== index && blockOrdinal !== index + 1)) {
+      throw new Error('Google Docs artifact cache has invalid paragraph block ordering.')
+    }
+    return { id: blockId, ordinal: blockOrdinal, text: block.text, type: 'paragraph' as const }
+  })
+  const normalizedBlocks = blocks as GoogleDocDocumentArtifact['body']['blocks']
+  if (
+    normalizedBlocks
+      .map((block) => block.text)
+      .join('')
+      .trimEnd() !== text
+  ) {
+    throw new Error(
+      'Google Docs artifact cache text is inconsistent. Refresh it with google.docs.read.'
+    )
+  }
+  return {
+    body: { blocks: normalizedBlocks },
+    cachedAt,
+    id,
+    link: normalizeStoredString(value.link),
+    revision: normalizeStoredString(value.revision),
+    schemaVersion: GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION,
+    text,
+    title: normalizeStoredString(value.title),
+    type: 'google.doc.document'
+  }
+}
+
+function createGoogleDocArtifactRef(id: string): string {
+  return `google-docs:v1:${Buffer.from(id, 'utf8').toString('base64url')}`
+}
+
+function parseGoogleDocArtifactRef(value: unknown): { id: string } {
+  const ref = normalizeRequiredString(value, 'artifactRef')
+  const match = /^google-docs:v1:([A-Za-z0-9_-]+)$/.exec(ref)
+  if (!match) throw new Error('Google Docs artifact reference is malformed.')
+  const id = Buffer.from(match[1], 'base64url').toString('utf8')
+  if (!id || createGoogleDocArtifactRef(id) !== ref) {
+    throw new Error('Google Docs artifact reference is malformed.')
+  }
+  return { id }
 }
 
 function encodeGoogleWorkspaceArtifactFileName<TArtifact extends object>(
