@@ -1491,7 +1491,7 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     expect(docsAuthorization).toBe('Bearer new-docs-access-token')
     expect(docsUrl?.pathname).toBe('/v1/documents/doc-1')
     expect(docsUrl?.searchParams.get('fields')).toBe(
-      'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
+      'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content))),table(tableRows(tableCells(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))))))'
     )
     expect(output).toEqual({
       document: {
@@ -1567,7 +1567,7 @@ test('registers exactly generic Google Workspace tools and discovers strict Shee
     'google_workspace_execute_command'
   ])
   const commands = await listGoogleWorkspaceCommands(plugin)
-  expect(commands.commands).toHaveLength(15)
+  expect(commands.commands).toHaveLength(16)
   const byId = new Map(commands.commands.map((command) => [command.id, command.inputSchema]))
   expect(byId.get('google.sheets.read')).toMatchObject({
     additionalProperties: false,
@@ -3630,7 +3630,7 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
         inputSchema: { properties?: Record<string, unknown>; required: string[] }
       }>
     }
-    expect(discovery.commands).toHaveLength(15)
+    expect(discovery.commands).toHaveLength(16)
     expect(discovery.commands.map((command) => command.id)).toEqual([
       'google.drive.search_files',
       'google.docs.read',
@@ -3638,6 +3638,7 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       'google.docs.format_text',
       'google.docs.format_paragraph',
       'google.docs.insert_list',
+      'google.docs.insert_table',
       'google.docs.format_list',
       'google.sheets.read',
       'google.sheets.set_values',
@@ -3655,6 +3656,7 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       ['documentId', 'match', 'style'],
       ['documentId', 'match', 'style'],
       ['documentId', 'items', 'listType', 'placement'],
+      ['documentId', 'placement', 'rows'],
       ['documentId', 'match', 'listType'],
       ['spreadsheetId'],
       ['spreadsheetId', 'range', 'values'],
@@ -3674,6 +3676,7 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       ['documentId', 'match', 'occurrence', 'style'],
       ['documentId', 'match', 'occurrence', 'style'],
       ['documentId', 'listType', 'match', 'occurrence', 'items', 'placement'],
+      ['documentId', 'match', 'occurrence', 'placement', 'rows'],
       ['documentId', 'listType', 'match', 'occurrence'],
       ['spreadsheetId', 'ranges', 'valueRenderOption'],
       ['spreadsheetId', 'range', 'values', 'valueInputOption'],
@@ -4244,6 +4247,512 @@ test('Google Docs list commands isolate inserted paragraphs and use native prese
       )
     ).rejects.toThrow('could not find')
     expect(events.slice(-1)).toEqual(['unresolved:get:1'])
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('Google Docs insert_table stages native table creation and cell population', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-table-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const events: string[] = []
+  const writes: unknown[] = []
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'table-token',
+      expiresAt: Date.now() + 3600000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  let getCount = 0
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.includes(':batchUpdate')) {
+      events.push('write')
+      writes.push(JSON.parse(init?.body as string))
+      return new Response(JSON.stringify({ documentId: 'table-doc' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    getCount += 1
+    events.push(`get:${getCount}`)
+    const table =
+      getCount >= 2
+        ? [
+            {
+              startIndex: 9,
+              endIndex: 20,
+              table: {
+                tableRows: [
+                  {
+                    tableCells: [
+                      {
+                        content: [
+                          {
+                            startIndex: 10,
+                            endIndex: 12,
+                            paragraph: {
+                              elements: [
+                                { startIndex: 10, endIndex: 11, textRun: { content: '\n' } }
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        content: [
+                          {
+                            startIndex: 12,
+                            endIndex: 14,
+                            paragraph: {
+                              elements: [
+                                { startIndex: 12, endIndex: 13, textRun: { content: '\n' } }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    tableCells: [
+                      {
+                        content: [
+                          {
+                            startIndex: 14,
+                            endIndex: 16,
+                            paragraph: {
+                              elements: [
+                                { startIndex: 14, endIndex: 15, textRun: { content: '\n' } }
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        content: [
+                          {
+                            startIndex: 16,
+                            endIndex: 18,
+                            paragraph: {
+                              elements: [
+                                { startIndex: 16, endIndex: 17, textRun: { content: '\n' } }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        : []
+    return new Response(
+      JSON.stringify({
+        body: {
+          content: [
+            {
+              startIndex: 1,
+              endIndex: 9,
+              paragraph: {
+                elements: [{ startIndex: 1, endIndex: 8, textRun: { content: 'target\n' } }]
+              }
+            },
+            ...table
+          ]
+        },
+        documentId: 'table-doc',
+        revisionId: getCount === 1 ? 'before' : getCount === 2 ? 'after-table' : 'after-cells',
+        title: 'Table'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.insert_table',
+        {
+          documentId: 'table-doc',
+          match: 'target',
+          occurrence: 'first',
+          placement: 'after',
+          rows: [
+            ['a', ''],
+            ['ccc', 'bb']
+          ]
+        },
+        {}
+      )
+    )
+    expect(events).toEqual(['get:1', 'write', 'get:2', 'write', 'get:3'])
+    expect(writes).toEqual([
+      {
+        requests: [{ insertTable: { rows: 2, columns: 2, location: { index: 8 } } }],
+        writeControl: { requiredRevisionId: 'before' }
+      },
+      {
+        requests: [
+          { insertText: { location: { index: 16 }, text: 'bb' } },
+          { insertText: { location: { index: 14 }, text: 'ccc' } },
+          { insertText: { location: { index: 10 }, text: 'a' } }
+        ],
+        writeControl: { requiredRevisionId: 'after-table' }
+      }
+    ])
+    expect(output.edit).toMatchObject({
+      operation: 'insert_table',
+      insertedTextLength: 6,
+      textLengthDelta: 6
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('Google Docs insert_table resolves before, after, and document_end table locations', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-table-placement-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const reads = new Map<string, number>()
+  const writes: Array<{
+    body: { requests: Array<{ insertTable?: { location: { index: number } } }> }
+    id: string
+  }> = []
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'table-token',
+      expiresAt: Date.now() + 3600000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const id = url.includes(':batchUpdate')
+      ? decodeURIComponent(
+          new URL(url).pathname.slice('/v1/documents/'.length, -':batchUpdate'.length)
+        )
+      : readFetchedGoogleDocsDocumentId(url)
+    if (url.includes(':batchUpdate')) {
+      writes.push({ body: JSON.parse(init?.body as string), id })
+      return new Response(JSON.stringify({ documentId: id }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const readCount = (reads.get(id) ?? 0) + 1
+    reads.set(id, readCount)
+    const expectedTableIndex = id === 'before' ? 2 : 8
+    return new Response(
+      JSON.stringify({
+        body: {
+          content: [
+            {
+              startIndex: 1,
+              endIndex: 8,
+              paragraph: {
+                elements: [{ startIndex: 1, endIndex: 8, textRun: { content: 'target\n' } }]
+              }
+            },
+            ...(readCount >= 2
+              ? [
+                  {
+                    startIndex: expectedTableIndex,
+                    endIndex: expectedTableIndex + 3,
+                    table: {
+                      tableRows: [
+                        {
+                          tableCells: [
+                            {
+                              content: [
+                                {
+                                  startIndex: expectedTableIndex + 1,
+                                  endIndex: expectedTableIndex + 2,
+                                  paragraph: {
+                                    elements: [
+                                      {
+                                        startIndex: expectedTableIndex + 1,
+                                        endIndex: expectedTableIndex + 2,
+                                        textRun: { content: '\n' }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              : [])
+          ]
+        },
+        documentId: id,
+        revisionId: 'placement',
+        title: 'Placement'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    for (const [, input] of [
+      ['before', { documentId: 'before', match: 'target', placement: 'before', rows: [['']] }],
+      ['after', { documentId: 'after', match: 'target', placement: 'after', rows: [['']] }],
+      ['end', { documentId: 'end', placement: 'document_end', rows: [['']] }]
+    ] as const)
+      await executeGoogleWorkspaceCommand(plugin, 'google.docs.insert_table', input, {})
+    expect(writes).toEqual([
+      {
+        id: 'before',
+        body: {
+          requests: [{ insertTable: { rows: 1, columns: 1, location: { index: 1 } } }],
+          writeControl: { requiredRevisionId: 'placement' }
+        }
+      },
+      {
+        id: 'after',
+        body: {
+          requests: [{ insertTable: { rows: 1, columns: 1, location: { index: 7 } } }],
+          writeControl: { requiredRevisionId: 'placement' }
+        }
+      },
+      {
+        id: 'end',
+        body: {
+          requests: [{ insertTable: { rows: 1, columns: 1, location: { index: 7 } } }],
+          writeControl: { requiredRevisionId: 'placement' }
+        }
+      }
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('Google Docs insert_table skips population for all-empty tables and rejects unsafe inputs before fetch', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-table-empty-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const events: string[] = []
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'table-token',
+      expiresAt: Date.now() + 3600000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes(':batchUpdate')) {
+      events.push('write')
+      return new Response(JSON.stringify({}), { status: 200 })
+    }
+    events.push('get')
+    const table =
+      events.filter((event) => event === 'get').length === 2
+        ? [
+            {
+              startIndex: 8,
+              endIndex: 11,
+              table: {
+                tableRows: [
+                  {
+                    tableCells: [
+                      {
+                        content: [
+                          {
+                            startIndex: 9,
+                            endIndex: 10,
+                            paragraph: {
+                              elements: [
+                                { startIndex: 9, endIndex: 10, textRun: { content: '\n' } }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        : []
+    return new Response(
+      JSON.stringify({
+        body: {
+          content: [
+            {
+              startIndex: 1,
+              endIndex: 8,
+              paragraph: {
+                elements: [{ startIndex: 1, endIndex: 8, textRun: { content: 'target\n' } }]
+              }
+            },
+            ...table
+          ]
+        },
+        documentId: 'empty',
+        revisionId: events.length === 1 ? 'before' : 'after',
+        title: 'Empty'
+      }),
+      { status: 200 }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.insert_table',
+      { documentId: 'empty', placement: 'document_end', rows: [['']] },
+      {}
+    )
+    expect(events).toEqual(['get', 'write', 'get'])
+    const baseline = events.length
+    const oversizedRows = Array.from({ length: 101 }, () => [''])
+    const oversizedColumns = [Array.from({ length: 101 }, () => '')]
+    for (const input of [
+      { documentId: 'bad', placement: 'document_end', rows: [] },
+      { documentId: 'bad', placement: 'document_end', rows: [[]] },
+      { documentId: 'bad', placement: 'document_end', rows: [['a'], ['a', 'b']] },
+      { documentId: 'bad', placement: 'document_end', rows: [[1]] },
+      { documentId: 'bad', placement: 'document_end', rows: [['a\nb']] },
+      { documentId: 'bad', placement: 'document_end', rows: oversizedRows },
+      { documentId: 'bad', placement: 'document_end', rows: oversizedColumns },
+      { documentId: 'bad', placement: 'document_end', rows: [['a'.repeat(2001)]] },
+      {
+        documentId: 'bad',
+        placement: 'document_end',
+        rows: [Array.from({ length: 11 }, () => 'a'.repeat(2000))]
+      },
+      { documentId: 'bad', placement: 'document_end', match: 'target', rows: [['']] },
+      { documentId: 'bad', placement: 'before', rows: [['']] },
+      { documentId: 'bad', placement: 'invalid', rows: [['']] }
+    ])
+      await expect(
+        executeGoogleWorkspaceCommand(plugin, 'google.docs.insert_table', input, {})
+      ).rejects.toThrow()
+    expect(events).toHaveLength(baseline)
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.insert_table',
+        { documentId: 'missing', match: 'missing', placement: 'before', rows: [['']] },
+        {}
+      )
+    ).rejects.toThrow('could not find')
+    expect(events).toEqual(['get', 'write', 'get', 'get'])
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('Google Docs insert_table fails after structural reread without population on mismatch', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-table-mismatch-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const events: string[] = []
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'token',
+      expiresAt: Date.now() + 3600000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes(':batchUpdate')) {
+      events.push('write')
+      return new Response(JSON.stringify({}), { status: 200 })
+    }
+    events.push('get')
+    const content =
+      events.length === 2
+        ? [
+            {
+              startIndex: 1,
+              endIndex: 8,
+              paragraph: {
+                elements: [{ startIndex: 1, endIndex: 8, textRun: { content: 'target\n' } }]
+              }
+            },
+            { startIndex: 99, table: { tableRows: [] } }
+          ]
+        : [
+            {
+              startIndex: 1,
+              endIndex: 8,
+              paragraph: {
+                elements: [{ startIndex: 1, endIndex: 8, textRun: { content: 'target\n' } }]
+              }
+            }
+          ]
+    return new Response(
+      JSON.stringify({
+        body: { content },
+        documentId: 'mismatch',
+        revisionId: 'revision',
+        title: 'Mismatch'
+      }),
+      { status: 200 }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.insert_table',
+        { documentId: 'mismatch', placement: 'document_end', rows: [['text']] },
+        {}
+      )
+    ).rejects.toThrow('could not locate')
+    expect(events).toEqual(['get', 'write', 'get'])
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)

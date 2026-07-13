@@ -48,6 +48,10 @@ const GOOGLE_DOCS_READ_PREVIEW_TEXT_LIMIT = 12_000
 const GOOGLE_DOCS_MAX_LIST_ITEMS = 100
 const GOOGLE_DOCS_MAX_LIST_ITEM_TEXT_LENGTH = 2_000
 const GOOGLE_DOCS_MAX_LIST_TEXT_LENGTH = 20_000
+const GOOGLE_DOCS_MAX_TABLE_ROWS = 100
+const GOOGLE_DOCS_MAX_TABLE_COLUMNS = 100
+const GOOGLE_DOCS_MAX_TABLE_CELL_TEXT_LENGTH = 2_000
+const GOOGLE_DOCS_MAX_TABLE_TEXT_LENGTH = 20_000
 const GOOGLE_SHEETS_DEFAULT_RANGE_A1 = 'A1:Z200'
 const GOOGLE_SHEETS_MAX_READ_RANGES = 5
 const GOOGLE_SHEETS_MAX_RANGE_ROWS = 200
@@ -313,6 +317,13 @@ export type GoogleDocsEditOperation =
       type: 'insert_list'
     }
   | {
+      match?: string
+      occurrence?: GoogleDocsTextOccurrence
+      placement: GoogleDocsListPlacement
+      rows: string[][]
+      type: 'insert_table'
+    }
+  | {
       listType: GoogleDocsListType
       match: string
       occurrence?: GoogleDocsTextOccurrence
@@ -458,6 +469,13 @@ type GoogleDocsBatchUpdateRequestBody = {
 
 type GoogleDocsBatchUpdateRequest =
   | {
+      insertTable: {
+        columns: number
+        location: { index: number }
+        rows: number
+      }
+    }
+  | {
       insertText: {
         location: { index: number }
         text: string
@@ -497,7 +515,7 @@ type GoogleDocsBatchUpdateRequest =
 
 type GoogleDocsTextMatchOperation = Exclude<
   GoogleDocsEditOperation,
-  { type: 'append_text' } | { type: 'insert_list' }
+  { type: 'append_text' } | { type: 'insert_list' } | { type: 'insert_table' }
 >
 
 type GoogleDocsTextMatchCandidate = {
@@ -726,6 +744,16 @@ export async function editGoogleDocDocument({
     signal
   })
 
+  if (normalizedOperation.type === 'insert_table') {
+    return editGoogleDocInsertTable({
+      documentId: resolvedDocumentId,
+      fetch: fetchImpl,
+      operation: normalizedOperation,
+      signal,
+      token
+    })
+  }
+
   const current = await fetchGoogleDocDocument({
     documentId: resolvedDocumentId,
     fetch: fetchImpl,
@@ -809,7 +837,7 @@ export function createDocsDocumentUrl(documentId: string): URL {
   const url = new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}`)
   url.searchParams.set(
     'fields',
-    'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
+    'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content))),table(tableRows(tableCells(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))))))'
   )
   return url
 }
@@ -1218,6 +1246,10 @@ function normalizeGoogleDocsEditOperation(
     return normalizeGoogleDocsInsertListOperation(operation)
   }
 
+  if (operation.type === 'insert_table') {
+    return normalizeGoogleDocsInsertTableOperation(operation)
+  }
+
   if (operation.type === 'format_list') {
     return {
       listType: normalizeGoogleDocsListType(operation.listType, operation.type),
@@ -1228,7 +1260,7 @@ function normalizeGoogleDocsEditOperation(
   }
 
   throw new Error(
-    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, delete_text, format_text, format_paragraph, insert_list, or format_list.'
+    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, delete_text, format_text, format_paragraph, insert_list, insert_table, or format_list.'
   )
 }
 
@@ -1260,6 +1292,63 @@ function normalizeGoogleDocsInsertListOperation(
     placement,
     type: 'insert_list'
   }
+}
+
+function normalizeGoogleDocsInsertTableOperation(
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_table' }>
+): GoogleDocsEditOperation {
+  const placement = normalizeGoogleDocsListPlacement(operation.placement)
+  const rows = normalizeGoogleDocsTableRows(operation.rows)
+  if (placement === 'document_end') {
+    if (operation.match !== undefined || operation.occurrence !== undefined) {
+      throw new Error('Google Docs insert_table document_end does not accept match or occurrence.')
+    }
+    return { placement, rows, type: 'insert_table' }
+  }
+  return {
+    match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+    occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+    placement,
+    rows,
+    type: 'insert_table'
+  }
+}
+
+function normalizeGoogleDocsTableRows(value: unknown): string[][] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > GOOGLE_DOCS_MAX_TABLE_ROWS) {
+    throw new Error(
+      `Google Docs insert_table requires rows as a non-empty array of at most ${GOOGLE_DOCS_MAX_TABLE_ROWS} rows.`
+    )
+  }
+  let columnCount: number | null = null
+  let totalTextLength = 0
+  return value.map((row, rowIndex) => {
+    if (!Array.isArray(row) || row.length === 0 || row.length > GOOGLE_DOCS_MAX_TABLE_COLUMNS) {
+      throw new Error(
+        `Google Docs insert_table row ${rowIndex + 1} must be a non-empty array of at most ${GOOGLE_DOCS_MAX_TABLE_COLUMNS} strings.`
+      )
+    }
+    if (columnCount === null) columnCount = row.length
+    if (row.length !== columnCount)
+      throw new Error('Google Docs insert_table rows must be rectangular.')
+    return row.map((cell, columnIndex) => {
+      if (typeof cell !== 'string' || cell.length > GOOGLE_DOCS_MAX_TABLE_CELL_TEXT_LENGTH) {
+        throw new Error(
+          `Google Docs insert_table cell ${rowIndex + 1}:${columnIndex + 1} must be a string of at most ${GOOGLE_DOCS_MAX_TABLE_CELL_TEXT_LENGTH} characters.`
+        )
+      }
+      if (/[\r\n]/.test(cell)) {
+        throw new Error('Google Docs insert_table cells cannot contain CR/LF.')
+      }
+      totalTextLength += cell.length
+      if (totalTextLength > GOOGLE_DOCS_MAX_TABLE_TEXT_LENGTH) {
+        throw new Error(
+          `Google Docs insert_table total cell text must be at most ${GOOGLE_DOCS_MAX_TABLE_TEXT_LENGTH} characters.`
+        )
+      }
+      return cell
+    })
+  })
 }
 
 function normalizeGoogleDocsListItems(value: unknown): string[] {
@@ -1512,6 +1601,206 @@ function createGoogleDocsBatchUpdateRequest(
   }
 
   return request
+}
+
+async function editGoogleDocInsertTable({
+  documentId,
+  fetch: fetchImpl,
+  operation,
+  signal,
+  token
+}: {
+  documentId: string
+  fetch: Fetch
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_table' }>
+  signal?: AbortSignal
+  token: GoogleWorkspaceTokenConfig
+}): Promise<GoogleDocsEditDocumentResult> {
+  const current = await fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
+  const insertionIndex = resolveGoogleDocsTableInsertionIndex(current.rawDocument, operation)
+  await writeGoogleDocsBatchUpdate({
+    body: createGoogleDocsTableInsertRequest(current.document, operation.rows, insertionIndex),
+    documentId,
+    fetch: fetchImpl,
+    signal,
+    token
+  })
+  const inserted = await fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
+  const cellIndexes = findInsertedGoogleDocsTableCellIndexes(
+    inserted.rawDocument,
+    insertionIndex + 1,
+    operation.rows.length,
+    operation.rows[0]!.length
+  )
+  const populatedCells = cellIndexes
+    .map((index, position) => ({
+      index,
+      text: operation.rows[Math.floor(position / operation.rows[0]!.length)]![
+        position % operation.rows[0]!.length
+      ]!
+    }))
+    .filter((cell) => cell.text.length > 0)
+    .sort((left, right) => right.index - left.index)
+  const updated = populatedCells.length
+    ? await (async () => {
+        await writeGoogleDocsBatchUpdate({
+          body: createGoogleDocsCellPopulateRequest(inserted.document, populatedCells),
+          documentId,
+          fetch: fetchImpl,
+          signal,
+          token
+        })
+        return fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
+      })()
+    : inserted
+  const insertedTextLength = operation.rows.flat().reduce((length, text) => length + text.length, 0)
+  return {
+    document: updated.document,
+    edit: {
+      deletedTextLength: 0,
+      documentId: updated.document.id || documentId,
+      insertedTextLength,
+      link: updated.document.link,
+      ok: true,
+      operation: 'insert_table',
+      revision:
+        updated.document.revision ?? inserted.document.revision ?? current.document.revision,
+      textLengthDelta: insertedTextLength,
+      title: updated.document.title
+    }
+  }
+}
+
+function resolveGoogleDocsTableInsertionIndex(
+  document: GoogleDocsDocumentResponse,
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_table' }>
+): number {
+  if (operation.placement === 'document_end') return getBodyEndInsertionIndex(document)
+  const indexedBlocks = extractIndexedGoogleDocBodyBlocks(document)
+  const matches = indexedBlocks.flatMap((block) =>
+    findBlockMatchCandidates(block, operation.match!)
+  )
+  if (!matches.length)
+    throw new Error('Google Docs insert_table could not find the requested match text.')
+  const match = selectTextMatch(matches, operation.occurrence ?? 'last', operation.type)
+  if (match.matchStartIndex === null || match.matchEndIndex === null) {
+    throw new Error('Google Docs insert_table matched text in an unsupported paragraph structure.')
+  }
+  const paragraph = findContainingGoogleDocsParagraph(
+    indexedBlocks,
+    match.matchStartIndex,
+    match.matchEndIndex
+  )
+  if (!paragraph)
+    throw new Error('Google Docs insert_table matched text in an unsupported paragraph structure.')
+  return operation.placement === 'before' ? paragraph.startIndex : paragraph.endIndex - 1
+}
+
+function createGoogleDocsTableInsertRequest(
+  document: GoogleDocDocumentArtifact,
+  rows: string[][],
+  insertionIndex: number
+): GoogleDocsBatchUpdateRequestBody {
+  const request: GoogleDocsBatchUpdateRequestBody = {
+    requests: [
+      {
+        insertTable: {
+          columns: rows[0]!.length,
+          location: { index: insertionIndex },
+          rows: rows.length
+        }
+      }
+    ]
+  }
+  if (document.revision) request.writeControl = { requiredRevisionId: document.revision }
+  return request
+}
+
+function createGoogleDocsCellPopulateRequest(
+  document: GoogleDocDocumentArtifact,
+  cells: Array<{ index: number; text: string }>
+): GoogleDocsBatchUpdateRequestBody {
+  const request: GoogleDocsBatchUpdateRequestBody = {
+    requests: cells.map((cell) => ({
+      insertText: { location: { index: cell.index }, text: cell.text }
+    }))
+  }
+  if (document.revision) request.writeControl = { requiredRevisionId: document.revision }
+  return request
+}
+
+async function writeGoogleDocsBatchUpdate({
+  body,
+  documentId,
+  fetch: fetchImpl,
+  signal,
+  token
+}: {
+  body: GoogleDocsBatchUpdateRequestBody
+  documentId: string
+  fetch: Fetch
+  signal?: AbortSignal
+  token: GoogleWorkspaceTokenConfig
+}): Promise<GoogleDocsBatchUpdateResponse> {
+  const response = await fetchImpl(createDocsBatchUpdateUrl(documentId), {
+    body: JSON.stringify(body),
+    headers: { authorization: `Bearer ${token.accessToken}`, 'content-type': 'application/json' },
+    method: 'POST',
+    signal
+  })
+  const payload = (await response.json().catch(() => ({}))) as GoogleDocsBatchUpdateResponse
+  if (!response.ok)
+    throwGoogleApiFailure('Google Docs documents.batchUpdate', response.status, payload)
+  return payload
+}
+
+function findInsertedGoogleDocsTableCellIndexes(
+  document: GoogleDocsDocumentResponse,
+  expectedStartIndex: number,
+  expectedRows: number,
+  expectedColumns: number
+): number[] {
+  const content = Array.isArray(document.body?.content) ? document.body.content : []
+  const table = content.find((block) => {
+    const entry = isRecord(block) ? block : null
+    return entry?.table && finiteNumberOrNull(entry.startIndex) === expectedStartIndex
+  })
+  if (!table || !isRecord(table)) {
+    throw new Error(
+      'Google Docs insert_table could not locate the inserted table at the expected structure index.'
+    )
+  }
+  const tableValue = table.table
+  if (
+    !isRecord(tableValue) ||
+    !Array.isArray(tableValue.tableRows) ||
+    tableValue.tableRows.length !== expectedRows
+  ) {
+    throw new Error('Google Docs insert_table returned a table with unexpected dimensions.')
+  }
+  const indexes: number[] = []
+  for (const row of tableValue.tableRows) {
+    if (
+      !isRecord(row) ||
+      !Array.isArray(row.tableCells) ||
+      row.tableCells.length !== expectedColumns
+    ) {
+      throw new Error('Google Docs insert_table returned a table with unexpected dimensions.')
+    }
+    for (const cell of row.tableCells) {
+      const cellContent = isRecord(cell) && Array.isArray(cell.content) ? cell.content : []
+      const paragraph = cellContent.find((entry) => isRecord(entry) && isRecord(entry.paragraph))
+      const index =
+        paragraph && isRecord(paragraph) ? finiteNumberOrNull(paragraph.startIndex) : null
+      if (index === null) {
+        throw new Error(
+          'Google Docs insert_table could not locate a first paragraph index for every table cell.'
+        )
+      }
+      indexes.push(index)
+    }
+  }
+  return indexes
 }
 
 function createGoogleDocsBatchUpdateRequests(
@@ -2606,6 +2895,9 @@ function resolveGoogleDocsEditOperation(
 
   if (operation.type === 'insert_list') {
     return resolveGoogleDocsInsertListMatchOperation(indexedBlocks, operation)
+  }
+  if (operation.type === 'insert_table') {
+    throw new Error('Google Docs insert_table must be resolved through its staged write flow.')
   }
   return resolveTextMatchOperation(indexedBlocks, operation)
 }

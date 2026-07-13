@@ -230,6 +230,7 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
     id: 'google.docs.insert_list',
     operationType: 'insert_list'
   }),
+  createGoogleDocsTableCommand(),
   createGoogleDocsListCommand({
     description:
       'Format only the paragraph containing a matching text occurrence as a native Google Docs list.',
@@ -255,6 +256,114 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
     operationType: 'clear_range'
   })
 ]
+
+function createGoogleDocsTableCommand(): GoogleWorkspaceCommand {
+  const id = 'google.docs.insert_table'
+  return {
+    description:
+      'Insert a simple native Google Docs table before, after, or at the end of a Google Docs document.',
+    id,
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        documentId: { description: 'The Google Docs document ID to edit.', type: 'string' },
+        match: { description: 'Text in the paragraph to target.', type: 'string' },
+        occurrence: {
+          description:
+            'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+          type: ['number', 'string']
+        },
+        placement: { enum: ['before', 'after', 'document_end'], type: 'string' },
+        rows: {
+          items: {
+            items: { maxLength: 2000, type: 'string' },
+            maxItems: 100,
+            minItems: 1,
+            type: 'array'
+          },
+          maxItems: 100,
+          minItems: 1,
+          type: 'array'
+        }
+      },
+      required: ['documentId', 'placement', 'rows'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${id} input`)
+      rejectAdditionalProperties(
+        record,
+        ['documentId', 'match', 'occurrence', 'placement', 'rows'],
+        id,
+        options?.rejectUndefinedProperties
+      )
+      const documentId = requiredStringArg(record.documentId, id, 'documentId')
+      const placement = listPlacementArg(record.placement, id)
+      const hasMatch = record.match !== undefined
+      const hasOccurrence = record.occurrence !== undefined
+      if (placement === 'document_end' && (hasMatch || hasOccurrence)) {
+        throw new Error(
+          `Google Workspace command ${id} does not accept match or occurrence for document_end.`
+        )
+      }
+      if (placement !== 'document_end' && !hasMatch) {
+        throw new Error(`Google Workspace command ${id} requires match for ${placement}.`)
+      }
+      if (!Array.isArray(record.rows) || record.rows.length === 0 || record.rows.length > 100) {
+        throw new Error(
+          `Google Workspace command ${id} requires rows as a non-empty array of at most 100 rows.`
+        )
+      }
+      const rows = record.rows as unknown[]
+      let columnCount: number | null = null
+      let totalLength = 0
+      for (const row of rows) {
+        if (!Array.isArray(row) || row.length === 0 || row.length > 100) {
+          throw new Error(
+            `Google Workspace command ${id} requires non-empty rows of at most 100 strings.`
+          )
+        }
+        if (columnCount === null) columnCount = row.length
+        if (row.length !== columnCount)
+          throw new Error(`Google Workspace command ${id} requires rectangular rows.`)
+        for (const cell of row) {
+          if (typeof cell !== 'string' || cell.length > 2000 || /[\r\n]/.test(cell)) {
+            throw new Error(
+              `Google Workspace command ${id} requires single-line string cells of at most 2000 characters.`
+            )
+          }
+          totalLength += cell.length
+        }
+      }
+      if (totalLength > 20_000)
+        throw new Error(
+          `Google Workspace command ${id} cell text must be at most 20000 characters.`
+        )
+      return {
+        documentId,
+        operation: {
+          ...(placement === 'document_end'
+            ? {}
+            : {
+                match: requiredStringArg(record.match, id, 'match'),
+                occurrence: occurrenceArg(record.occurrence)
+              }),
+          placement,
+          rows: rows as string[][],
+          type: 'insert_table'
+        }
+      }
+    }
+  }
+}
 
 function createGoogleDocsListCommand(input: {
   description: string
