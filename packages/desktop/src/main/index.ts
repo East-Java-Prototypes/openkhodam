@@ -7,7 +7,6 @@ import { createOpenKhodamSidecar } from './openkhodam-sidecar'
 import { createQuitCleanup, startSidecars } from './sidecar-orchestration'
 import { OpenKhodamConfigStore } from './integrations/openkhodam-config'
 import { createGoogleWorkspaceIntegration } from './integrations/google-workspace'
-import { createProjectArtifactsIntegration } from './integrations/project-artifacts'
 import { isThemeMode, type ThemeMode } from '../theme'
 
 const openkhodamSidecar = createOpenKhodamSidecar()
@@ -81,7 +80,6 @@ function createWindow(): void {
 app.whenReady().then(() => {
   const openKhodamConfig = new OpenKhodamConfigStore(app.getPath('userData'))
   const googleWorkspace = createGoogleWorkspaceIntegration(openKhodamConfig)
-  const projectArtifacts = createProjectArtifactsIntegration()
 
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
@@ -131,33 +129,6 @@ app.whenReady().then(() => {
   )
   ipcMain.handle('projects:remove-opened-folder', (_event, input) =>
     openKhodamConfig.removeOpenedProjectFolder(input)
-  )
-  ipcMain.handle('project-artifacts:list-project', (_event, input) =>
-    projectArtifacts.listProjectArtifacts(input)
-  )
-  ipcMain.handle('project-artifacts:list-session-docs', (_event, input) =>
-    projectArtifacts.listSessionLinkedDocs(input)
-  )
-  ipcMain.handle('project-artifacts:list-session-google-artifacts', (_event, input) =>
-    projectArtifacts.listSessionLinkedGoogleArtifacts(input)
-  )
-  ipcMain.handle('project-artifacts:record-linked-doc', (_event, input) =>
-    projectArtifacts.recordLinkedGoogleDoc(input)
-  )
-  ipcMain.handle('project-artifacts:record-linked-google-artifact', (_event, input) =>
-    projectArtifacts.recordLinkedGoogleArtifact(input)
-  )
-  ipcMain.handle('project-artifacts:delist-linked-doc', (_event, input) =>
-    projectArtifacts.delistLinkedGoogleDoc(input)
-  )
-  ipcMain.handle('project-artifacts:delist-linked-google-artifact', (_event, input) =>
-    projectArtifacts.delistLinkedGoogleArtifact(input)
-  )
-  ipcMain.handle('project-artifacts:relist-linked-doc', (_event, input) =>
-    projectArtifacts.relistLinkedGoogleDoc(input)
-  )
-  ipcMain.handle('project-artifacts:relist-linked-google-artifact', (_event, input) =>
-    projectArtifacts.relistLinkedGoogleArtifact(input)
   )
 
   opencodeSidecar.onStatusChange((status) => {

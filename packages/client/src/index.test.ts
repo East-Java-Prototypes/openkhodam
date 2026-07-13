@@ -102,4 +102,48 @@ describe('createOpenKhodamClient', () => {
 
     await expect(health).rejects.toMatchObject({ name: 'AbortError' })
   })
+
+  it('sends artifact requests and normalizes artifact response validation errors', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ version: 1, sessions: {} }))
+      .mockResolvedValueOnce(Response.json({ id: 'missing-fields' }))
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { code: 'validation_error', message: 'Invalid artifact' } },
+          { status: 400 }
+        )
+      )
+    const client = createOpenKhodamClient({ baseUrl: 'http://127.0.0.1', token: 'secret', fetch })
+    await expect(client.listProjectArtifacts({ projectDirectory: '/project' })).resolves.toEqual({
+      version: 1,
+      sessions: {}
+    })
+    expect(fetch.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      body: '{"projectDirectory":"/project"}'
+    })
+    await expect(
+      client.recordLinkedGoogleArtifact({
+        projectDirectory: '/project',
+        sessionId: 'session',
+        artifact: { id: 'doc' }
+      })
+    ).rejects.toMatchObject({ code: 'invalid_response', status: 200 })
+    await expect(
+      client.snapshotGoogleDocDocument({
+        projectDirectory: '/project',
+        sessionId: 'session',
+        document: {
+          type: 'google.doc.document',
+          id: 'doc',
+          title: null,
+          revision: null,
+          text: '',
+          link: null,
+          body: { blocks: [] }
+        }
+      })
+    ).rejects.toEqual(new OpenKhodamClientError('Invalid artifact', 'validation_error', 400))
+  })
 })

@@ -1,19 +1,9 @@
 import { spawn } from 'node:child_process'
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readFile,
-  realpath,
-  rm,
-  stat,
-  symlink,
-  writeFile
-} from 'node:fs/promises'
-import { createRequire } from 'node:module'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join, relative } from 'node:path'
+import { createRequire } from 'node:module'
 
 import { expect, test } from '@playwright/test'
 import { startOpenKhodamServer, type OpenKhodamListener } from '@openkhodam/server'
@@ -152,7 +142,47 @@ function googleDocsOperationCommandInput(operation: {
 
 type JsonConfigFileModule = typeof import('../../desktop/src/main/config/json-config-file')
 type OpenKhodamConfigModule = typeof import('../../desktop/src/main/integrations/openkhodam-config')
-type ProjectArtifactsModule = typeof import('../../desktop/src/main/integrations/project-artifacts')
+
+type OpenKhodamPluginFixture = {
+  listener: OpenKhodamListener
+  restore(): Promise<void>
+}
+
+function loadDesktopModule<TModule>(path: string): TModule {
+  return requireDesktopModule(path) as TModule
+}
+
+async function startOpenKhodamPluginFixture(): Promise<OpenKhodamPluginFixture> {
+  const originalUrl = process.env.OPENKHODAM_PLUGIN_URL
+  const originalToken = process.env.OPENKHODAM_PLUGIN_TOKEN
+  const listener = await startOpenKhodamServer({
+    pluginTokens: ['plugin-token'],
+    version: 'test',
+    corsOrigins: []
+  })
+  process.env.OPENKHODAM_PLUGIN_URL = `http://127.0.0.1:${listener.port}`
+  process.env.OPENKHODAM_PLUGIN_TOKEN = 'plugin-token'
+  return {
+    listener,
+    async restore() {
+      if (originalUrl === undefined) delete process.env.OPENKHODAM_PLUGIN_URL
+      else process.env.OPENKHODAM_PLUGIN_URL = originalUrl
+      if (originalToken === undefined) delete process.env.OPENKHODAM_PLUGIN_TOKEN
+      else process.env.OPENKHODAM_PLUGIN_TOKEN = originalToken
+      await listener.close()
+    }
+  }
+}
+
+function forwardOpenKhodamListenerRequest(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  fixture: OpenKhodamPluginFixture,
+  originalFetch: typeof fetch
+): Promise<Response> | undefined {
+  const listenerUrl = `http://127.0.0.1:${fixture.listener.port}/`
+  return String(input).startsWith(listenerUrl) ? originalFetch(input, init) : undefined
+}
 type RuntimeConfigModule = typeof import('../../desktop/src/main/opencode-runtime-config')
 
 test('reads defaults and writes normalized JSON config files atomically', async () => {
@@ -424,9 +454,7 @@ test('serializes same-process OpenKhodam config mutations across store instances
 
 test('stores project session linked Google Docs with stable path and dedupe timestamps', async () => {
   const { PROJECT_ARTIFACTS_CONFIG_VERSION, ProjectArtifactsFileStore } =
-    loadDesktopModule<ProjectArtifactsModule>(
-      '../../desktop/src/main/integrations/project-artifacts'
-    )
+    await import('@openkhodam/server')
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-'))
   await mkdir(join(tempRoot, 'workspace'), { recursive: true })
   const projectPath = join(tempRoot, 'workspace', '..', 'workspace')
@@ -517,7 +545,7 @@ test('stores project session linked Google Docs with stable path and dedupe time
       type: 'google.sheet.spreadsheet',
       url: 'https://docs.google.com/spreadsheets/d/doc-1/edit'
     })
-    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([
+    await expect(store.listSessionLinkedGoogleArtifacts('session-1')).resolves.toEqual([
       rerecorded,
       linkedSheet
     ])
@@ -537,50 +565,53 @@ test('stores project session linked Google Docs with stable path and dedupe time
 })
 
 test('gets or creates linked Google Docs while updating message provenance when present', async () => {
-  const { getOrCreateLinkedGoogleDoc, ProjectArtifactsFileStore } =
-    loadDesktopModule<ProjectArtifactsModule>(
-      '../../desktop/src/main/integrations/project-artifacts'
-    )
+  const { ProjectArtifactsFileStore } = await import('@openkhodam/server')
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-get-or-create-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
   const store = new ProjectArtifactsFileStore(projectPath)
 
   try {
-    const created = await getOrCreateLinkedGoogleDoc({
+    const created = await store.recordLinkedGoogleDoc({
       doc: {
         id: 'doc-1',
         title: 'Launch Plan',
         url: 'https://docs.google.com/document/d/doc-1/edit'
       },
       messageId: 'message-1',
-      projectDirectory: projectPath,
       sessionId: 'session-1'
     })
-    const firstFileContents = await readFile(store.filePath, 'utf8')
 
-    const existingWithoutMessage = await getOrCreateLinkedGoogleDoc({
+    const existingWithoutMessage = await store.recordLinkedGoogleDoc({
       doc: {
         id: 'doc-1',
         title: 'Updated Launch Plan',
         url: 'https://docs.google.com/document/d/doc-1/edit'
       },
-      projectDirectory: projectPath,
       sessionId: 'session-1'
     })
 
-    expect(existingWithoutMessage).toEqual(created)
-    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([created])
-    expect(await readFile(store.filePath, 'utf8')).toBe(firstFileContents)
+    expect(existingWithoutMessage).toMatchObject({
+      artifactPath: null,
+      firstMessageId: 'message-1',
+      firstSeenAt: created.firstSeenAt,
+      id: 'doc-1',
+      lastMessageId: 'message-1',
+      title: 'Updated Launch Plan',
+      type: 'google.doc.document'
+    })
+    await expect(store.listSessionLinkedGoogleArtifacts('session-1')).resolves.toEqual([
+      existingWithoutMessage
+    ])
+    expect(await readFile(store.filePath, 'utf8')).toContain('Updated Launch Plan')
 
-    const rerecorded = await getOrCreateLinkedGoogleDoc({
+    const rerecorded = await store.recordLinkedGoogleDoc({
       doc: {
         id: 'doc-1',
         title: 'Updated Launch Plan',
         url: 'https://docs.google.com/document/d/doc-1/edit'
       },
       messageId: 'message-2',
-      projectDirectory: projectPath,
       sessionId: 'session-1'
     })
 
@@ -594,7 +625,7 @@ test('gets or creates linked Google Docs while updating message provenance when 
       type: 'google.doc.document'
     })
 
-    const withArtifactPath = await getOrCreateLinkedGoogleDoc({
+    const withArtifactPath = await store.recordLinkedGoogleDoc({
       doc: {
         artifactPath: expectedGoogleDocArtifactPath('doc-1'),
         id: 'doc-1',
@@ -602,7 +633,6 @@ test('gets or creates linked Google Docs while updating message provenance when 
         url: 'https://docs.google.com/document/d/doc-1/edit'
       },
       messageId: 'message-3',
-      projectDirectory: projectPath,
       sessionId: 'session-1'
     })
     expect(withArtifactPath).toMatchObject({
@@ -620,12 +650,9 @@ test('gets or creates linked Google Docs while updating message provenance when 
 })
 
 test('rejects untrusted project artifact paths before creating project memory', async () => {
-  const { ProjectArtifactsFileStore, createProjectArtifactsIntegration } =
-    loadDesktopModule<ProjectArtifactsModule>(
-      '../../desktop/src/main/integrations/project-artifacts'
-    )
+  const { ProjectArtifactsFileStore, ProjectArtifactsModule } = await import('@openkhodam/server')
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-paths-'))
-  const integration = createProjectArtifactsIntegration()
+  const integration = new ProjectArtifactsModule()
   const relativeProjectPath = relative(process.cwd(), join(tempRoot, 'relative-project'))
   const missingProjectPath = join(tempRoot, 'missing-project')
   const fileProjectPath = join(tempRoot, 'project-file')
@@ -644,35 +671,40 @@ test('rejects untrusted project artifact paths before creating project memory', 
     expect(() => new ProjectArtifactsFileStore(`${tempRoot}\0bad`)).toThrow(/non-empty string/)
 
     await expect(
-      integration.listProjectArtifacts({ projectDirectory: relativeProjectPath })
+      Promise.resolve().then(() => integration.listProjectArtifacts(relativeProjectPath))
     ).rejects.toThrow(/absolute path/)
     await expect(
-      integration.listSessionLinkedDocs({
-        projectDirectory: missingProjectPath,
-        sessionId: 'session-1'
-      })
+      Promise.resolve().then(() =>
+        integration.listSessionLinkedGoogleArtifacts(missingProjectPath, 'session-1')
+      )
     ).rejects.toThrow(/existing directory/)
     await expect(
-      integration.recordLinkedGoogleDoc({
-        doc,
-        messageId: 'message-1',
-        projectDirectory: fileProjectPath,
-        sessionId: 'session-1'
-      })
+      Promise.resolve().then(() =>
+        integration.recordLinkedGoogleArtifact({
+          artifact: doc,
+          messageId: 'message-1',
+          projectDirectory: fileProjectPath,
+          sessionId: 'session-1'
+        })
+      )
     ).rejects.toThrow(/existing directory/)
     await expect(
-      integration.delistLinkedGoogleDoc({
-        id: 'doc-1',
-        projectDirectory: relativeProjectPath,
-        sessionId: 'session-1'
-      })
+      Promise.resolve().then(() =>
+        integration.delistLinkedGoogleArtifact({
+          id: 'doc-1',
+          projectDirectory: relativeProjectPath,
+          sessionId: 'session-1'
+        })
+      )
     ).rejects.toThrow(/absolute path/)
     await expect(
-      integration.relistLinkedGoogleDoc({
-        id: 'doc-1',
-        projectDirectory: missingProjectPath,
-        sessionId: 'session-1'
-      })
+      Promise.resolve().then(() =>
+        integration.relistLinkedGoogleArtifact({
+          id: 'doc-1',
+          projectDirectory: missingProjectPath,
+          sessionId: 'session-1'
+        })
+      )
     ).rejects.toThrow(/existing directory/)
 
     await rm(removedProjectPath, { recursive: true, force: true })
@@ -690,9 +722,7 @@ test('rejects untrusted project artifact paths before creating project memory', 
 })
 
 test('rejects project artifact symlinks before reading or writing', async () => {
-  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
-    '../../desktop/src/main/integrations/project-artifacts'
-  )
+  const { ProjectArtifactsFileStore } = await import('@openkhodam/server')
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-symlink-'))
   const projectPath = join(tempRoot, 'project')
   const outsideParentTarget = join(tempRoot, 'outside-parent-target')
@@ -801,9 +831,7 @@ test('rejects project artifact symlinks before reading or writing', async () => 
 })
 
 test('persists Google Workspace artifact files with stable product paths', async () => {
-  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
-    '../../desktop/src/main/integrations/project-artifacts'
-  )
+  const { ProjectArtifactsFileStore } = await import('@openkhodam/server')
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-workspace-artifact-files-'))
   const projectPath = join(tempRoot, 'project')
   const documentId = 'doc/path?:unsafe'
@@ -904,9 +932,7 @@ test('persists Google Workspace artifact files with stable product paths', async
 })
 
 test('preserves linked-doc delist intent until explicitly relisted', async () => {
-  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
-    '../../desktop/src/main/integrations/project-artifacts'
-  )
+  const { ProjectArtifactsFileStore } = await import('@openkhodam/server')
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-listing-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
@@ -942,7 +968,7 @@ test('preserves linked-doc delist intent until explicitly relisted', async () =>
 
     const relisted = await store.relistLinkedGoogleDoc({ id: 'doc-1', sessionId: 'session-1' })
     expect(relisted?.listed).toBe(true)
-    await expect(store.listSessionLinkedDocs('session-1')).resolves.toEqual([relisted])
+    await expect(store.listSessionLinkedGoogleArtifacts('session-1')).resolves.toEqual([relisted])
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
@@ -950,9 +976,7 @@ test('preserves linked-doc delist intent until explicitly relisted', async () =>
 
 test('normalizes invalid linked-doc artifact records defensively', async () => {
   const { PROJECT_ARTIFACTS_CONFIG_VERSION, ProjectArtifactsFileStore } =
-    loadDesktopModule<ProjectArtifactsModule>(
-      '../../desktop/src/main/integrations/project-artifacts'
-    )
+    await import('@openkhodam/server')
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-normalize-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
@@ -1075,9 +1099,7 @@ test('normalizes invalid linked-doc artifact records defensively', async () => {
 })
 
 test('rejects secret-bearing linked-doc URLs without persisting them', async () => {
-  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
-    '../../desktop/src/main/integrations/project-artifacts'
-  )
+  const { ProjectArtifactsFileStore } = await import('@openkhodam/server')
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-secrets-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
@@ -1115,10 +1137,6 @@ test('rejects secret-bearing linked-doc URLs without persisting them', async () 
   }
 })
 
-function loadDesktopModule<TModule>(path: string): TModule {
-  return requireDesktopModule(path) as TModule
-}
-
 test('resolves the bundled and packaged OpenKhodam plugin paths', () => {
   expect(sourcePluginPath).toBe(
     join(desktopDirectory, 'src', 'main', 'opencode-plugins', 'openkhodam-poc.ts')
@@ -1151,10 +1169,28 @@ test('resolves the bundled and packaged OpenKhodam plugin paths', () => {
 test('keeps the packaged plugin copy target aligned with the runtime path', async () => {
   const builderConfig = await readFile(join(desktopDirectory, 'electron-builder.yml'), 'utf8')
 
-  expect(builderConfig).toContain('from: out/opencode-plugins/openkhodam-poc.mjs')
-  expect(builderConfig).toContain('to: opencode-plugins/openkhodam-poc.mjs')
-  expect(builderConfig).toContain('from: out/opencode-plugins/google-workspace.mjs')
-  expect(builderConfig).toContain('to: opencode-plugins/google-workspace.mjs')
+  expect(builderConfig).toContain('from: out/opencode-plugins')
+  expect(builderConfig).toContain('to: opencode-plugins')
+})
+
+test('keeps artifact persistence out of desktop IPC, preload, and plugin implementation', async () => {
+  const desktopMainPath = join(desktopDirectory, 'src', 'main', 'index.ts')
+  const preloadPath = join(desktopDirectory, 'src', 'preload', 'index.ts')
+  const googleWorkspacePluginSource = await readFile(sourceGoogleWorkspacePluginPath, 'utf8')
+  const [desktopMainSource, preloadSource] = await Promise.all([
+    readFile(desktopMainPath, 'utf8'),
+    readFile(preloadPath, 'utf8')
+  ])
+
+  expect(desktopMainSource).not.toContain('project-artifacts')
+  expect(desktopMainSource).not.toMatch(/openkhodam:.*artifact/)
+  expect(preloadSource).not.toMatch(/openkhodam.*artifact/i)
+  expect(googleWorkspacePluginSource).not.toContain('node:fs')
+  expect(googleWorkspacePluginSource).not.toContain('ProjectArtifactsFileStore')
+  expect(googleWorkspacePluginSource).toContain('createOpenKhodamClient')
+  await expect(
+    readFile(join(desktopDirectory, 'src', 'main', 'integrations', 'project-artifacts.ts'), 'utf8')
+  ).rejects.toThrow()
 })
 
 test('requests the Google Sheets OAuth scope in the Workspace connect flow', async () => {
@@ -1242,7 +1278,8 @@ test('the built plugin authenticates to the real OpenKhodam listener with only i
 
   try {
     listener = await startOpenKhodamServer({
-      tokens: [rendererToken, pluginToken],
+      rendererTokens: [rendererToken],
+      pluginTokens: [pluginToken],
       version: 'test'
     })
     process.env.OPENKHODAM_PLUGIN_URL = `http://127.0.0.1:${listener.port}`
@@ -1659,6 +1696,7 @@ test('registers exactly generic Google Workspace tools and discovers strict Shee
 })
 
 test('reads explicit Google Sheets ranges through Sheets API and persists a spreadsheet artifact', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-read-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project')
@@ -1688,6 +1726,13 @@ test('reads explicit Google Sheets ranges through Sheets API and persists a spre
   })
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
     const url = String(input)
 
     if (url.startsWith(encodedSpreadsheetUrl) && !url.includes('/values:batchGet')) {
@@ -1918,6 +1963,7 @@ test('reads explicit Google Sheets ranges through Sheets API and persists a spre
     expect(outputText).not.toContain('should-not-leak')
     expect(outputText).not.toContain('owner@example.com')
   } finally {
+    await pluginFixture.restore()
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(tempRoot, { recursive: true, force: true })
@@ -2148,6 +2194,7 @@ test('logs sanitized Google Sheets API failures without request bodies or cell c
 })
 
 test('writes Google Sheets edits directly and persists refreshed spreadsheet artifacts', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-edit-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project')
@@ -2178,6 +2225,15 @@ test('writes Google Sheets edits directly and persists refreshed spreadsheet art
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
+
     const parsed = new URL(url)
 
     if (url.startsWith(`${encodedSpreadsheetUrl}/values:batchGet`)) {
@@ -2504,6 +2560,7 @@ test('writes Google Sheets edits directly and persists refreshed spreadsheet art
     expect(JSON.stringify(artifacts)).not.toContain('Amount')
     expect(JSON.stringify(artifacts)).not.toContain('Launch')
   } finally {
+    await pluginFixture.restore()
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(tempRoot, { recursive: true, force: true })
@@ -3135,6 +3192,7 @@ test('supports semantic Google Docs insert-before, replace, and delete edits', a
 })
 
 test('refreshes full Google Docs artifacts after successful append_text edits', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-edit-artifact-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project')
@@ -3165,6 +3223,14 @@ test('refreshes full Google Docs artifacts after successful append_text edits', 
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
 
     if (url.startsWith(`${encodedDocumentUrl}:batchUpdate`)) {
       events.push('batchUpdate')
@@ -3310,6 +3376,7 @@ test('refreshes full Google Docs artifacts after successful append_text edits', 
     expect(String(artifacts.sessions['session-edit']?.[0]?.artifactPath)).not.toContain(documentId)
     expect(JSON.stringify(fullArtifact)).not.toContain('markdown')
   } finally {
+    await pluginFixture.restore()
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(tempRoot, { recursive: true, force: true })
@@ -3781,6 +3848,7 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
 })
 
 test('executes newly registered Google Workspace commands with strict pre-network validation', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-workspace-registry-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project')
@@ -3811,6 +3879,14 @@ test('executes newly registered Google Workspace commands with strict pre-networ
   })
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
+
     const url = new URL(String(input))
     requests.push({ body: init?.body, method: init?.method ?? 'GET', url })
     if (url.hostname === 'www.googleapis.com' && url.pathname === '/drive/v3/files') {
@@ -3950,6 +4026,7 @@ test('executes newly registered Google Workspace commands with strict pre-networ
     ).rejects.toThrow('requires rows')
     expect(requests).toHaveLength(fetchCount)
   } finally {
+    await pluginFixture.restore()
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(tempRoot, { recursive: true, force: true })
@@ -4176,6 +4253,7 @@ test('logs sanitized Google Docs batchUpdate failures after direct append_text e
 })
 
 test('bounds Google Docs read previews while persisting the full normalized artifact', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-preview-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project')
@@ -4208,6 +4286,15 @@ test('bounds Google Docs read previews while persisting the full normalized arti
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
+
     const docsDocumentId = readFetchedGoogleDocsDocumentId(url)
 
     if (docsDocumentId === textCapDocumentId) {
@@ -4377,6 +4464,7 @@ test('bounds Google Docs read previews while persisting the full normalized arti
     expect(JSON.stringify(artifacts)).not.toContain(textCapBlock)
     await expect(stat(join(fallbackWorktreePath, '.openkhodam'))).rejects.toThrow()
   } finally {
+    await pluginFixture.restore()
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(tempRoot, { recursive: true, force: true })
@@ -4384,6 +4472,7 @@ test('bounds Google Docs read previews while persisting the full normalized arti
 })
 
 test('records linked Google Docs from directory context when worktree is root-like', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-artifacts-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project')
@@ -4408,6 +4497,14 @@ test('records linked Google Docs from directory context when worktree is root-li
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
 
     if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-1')) {
       docsCalls += 1
@@ -4509,7 +4606,19 @@ test('records linked Google Docs from directory context when worktree is root-li
       title: 'Updated Docs Plan',
       type: 'google.doc.document'
     })
-    expect(await readFile(artifactsPath, 'utf8')).toBe(artifactContents)
+    expect(JSON.parse(await readFile(artifactsPath, 'utf8'))).toMatchObject({
+      sessions: {
+        'session-1': [
+          {
+            artifactPath: expectedGoogleDocArtifactPath('doc-1'),
+            id: 'doc-1',
+            listed: true,
+            title: 'Updated Docs Plan',
+            url: 'https://docs.google.com/document/d/doc-1/edit'
+          }
+        ]
+      }
+    })
     expect(JSON.parse(await readFile(fullArtifactPath, 'utf8'))).toMatchObject({
       id: 'doc-1',
       revision: 'rev-2',
@@ -4519,6 +4628,7 @@ test('records linked Google Docs from directory context when worktree is root-li
     })
     expect(docsCalls).toBe(2)
   } finally {
+    await pluginFixture.restore()
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(tempRoot, { recursive: true, force: true })
@@ -4526,6 +4636,7 @@ test('records linked Google Docs from directory context when worktree is root-li
 })
 
 test('records tool-call message provenance for linked Google Docs and Sheets artifacts', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-workspace-provenance-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project')
@@ -4555,6 +4666,14 @@ test('records tool-call message provenance for linked Google Docs and Sheets art
   process.env.OPENKHODAM_CONFIG_PATH = configPath
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
 
     if (url.startsWith(`https://docs.googleapis.com/v1/documents/${documentId}`)) {
       docsCalls += 1
@@ -4682,6 +4801,7 @@ test('records tool-call message provenance for linked Google Docs and Sheets art
       url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`
     })
   } finally {
+    await pluginFixture.restore()
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(tempRoot, { recursive: true, force: true })
@@ -4689,6 +4809,7 @@ test('records tool-call message provenance for linked Google Docs and Sheets art
 })
 
 test('cleans up full Google Doc artifacts when session index recording fails', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-index-failure-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project-path-should-not-log')
@@ -4703,7 +4824,8 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
 
   await mkdir(googleDocsArtifactDirectory, { recursive: true })
   await writeFile(artifactsPath, '{\n  "version": 1,\n  "sessions": {}\n}\n', 'utf8')
-  await chmod(openKhodamPath, 0o555)
+  await rm(artifactsPath)
+  await mkdir(artifactsPath)
   await writeOpenKhodamConfig(configPath, {
     account: { email: 'fake@example.com', name: 'Fake User' },
     scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
@@ -4722,6 +4844,14 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
   }
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
 
     if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-index-failure')) {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
@@ -4768,11 +4898,13 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
     })
     expect(warnings).toEqual([
       [
-        'Failed to record linked Google Doc artifact',
+        'Failed to snapshot Google Workspace artifact',
         {
-          artifactCleanedUp: true,
-          docId: 'doc-index-failure',
-          reason: 'artifact_record_failed',
+          artifactType: 'doc',
+          errorCode: 'validation_error',
+          errorStatus: 400,
+          id: 'doc-index-failure',
+          reason: 'artifact_snapshot_failed',
           sessionId: 'session-1'
         }
       ]
@@ -4788,19 +4920,18 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
     await expect(
       stat(expectedGoogleDocArtifactAbsolutePath(projectPath, 'doc-index-failure'))
     ).rejects.toThrow()
-    await expect(readFile(artifactsPath, 'utf8')).resolves.toBe(
-      '{\n  "version": 1,\n  "sessions": {}\n}\n'
-    )
+    expect((await stat(artifactsPath)).isDirectory()).toBe(true)
   } finally {
+    await pluginFixture.restore()
     console.warn = originalWarn
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
-    await chmod(openKhodamPath, 0o755).catch(() => undefined)
     await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
 test('cleans up only newly created Google Sheet artifacts when session index recording fails', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-index-failure-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project-path-should-not-log')
@@ -4843,7 +4974,8 @@ test('cleans up only newly created Google Sheet artifacts when session index rec
     )}\n`,
     'utf8'
   )
-  await chmod(openKhodamPath, 0o555)
+  await rm(artifactsPath)
+  await mkdir(artifactsPath)
   await writeOpenKhodamConfig(configPath, {
     account: { email: 'fake@example.com', name: 'Fake User' },
     scopes: ['email', googleSheetsSpreadsheetsScope, 'openid', 'profile'],
@@ -4862,6 +4994,15 @@ test('cleans up only newly created Google Sheet artifacts when session index rec
   }
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
+
     const fetchedSheet = readFetchedGoogleSheetsSpreadsheet(url)
     if (!fetchedSheet) throw new Error(`Unexpected fetch URL: ${url}`)
 
@@ -4948,21 +5089,25 @@ test('cleans up only newly created Google Sheet artifacts when session index rec
 
     expect(warnings).toEqual([
       [
-        'Failed to record linked Google Sheet artifact',
+        'Failed to snapshot Google Workspace artifact',
         {
-          artifactCleanedUp: null,
-          reason: 'artifact_record_failed',
-          sessionId: 'session-1',
-          spreadsheetId: existingSpreadsheetId
+          artifactType: 'sheet',
+          errorCode: 'validation_error',
+          errorStatus: 400,
+          id: existingSpreadsheetId,
+          reason: 'artifact_snapshot_failed',
+          sessionId: 'session-1'
         }
       ],
       [
-        'Failed to record linked Google Sheet artifact',
+        'Failed to snapshot Google Workspace artifact',
         {
-          artifactCleanedUp: true,
-          reason: 'artifact_record_failed',
-          sessionId: 'session-1',
-          spreadsheetId: createdSpreadsheetId
+          artifactType: 'sheet',
+          errorCode: 'validation_error',
+          errorStatus: 400,
+          id: createdSpreadsheetId,
+          reason: 'artifact_snapshot_failed',
+          sessionId: 'session-1'
         }
       ]
     ])
@@ -4976,19 +5121,18 @@ test('cleans up only newly created Google Sheet artifacts when session index rec
     expect(warningText).not.toContain(projectPath)
     await expect(stat(existingArtifactPath)).resolves.toMatchObject({})
     await expect(stat(createdArtifactPath)).rejects.toThrow()
-    await expect(readFile(artifactsPath, 'utf8')).resolves.toBe(
-      '{\n  "version": 1,\n  "sessions": {}\n}\n'
-    )
+    expect((await stat(artifactsPath)).isDirectory()).toBe(true)
   } finally {
+    await pluginFixture.restore()
     console.warn = originalWarn
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
-    await chmod(openKhodamPath, 0o755).catch(() => undefined)
     await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
 test('keeps Google Docs read output when linked-doc artifact recording fails', async () => {
+  const pluginFixture = await startOpenKhodamPluginFixture()
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-record-failure-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project-path-should-not-log')
@@ -5020,6 +5164,14 @@ test('keeps Google Docs read output when linked-doc artifact recording fails', a
   }
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+
+    const listenerResponse = forwardOpenKhodamListenerRequest(
+      input,
+      init,
+      pluginFixture,
+      originalFetch
+    )
+    if (listenerResponse) return listenerResponse
 
     if (url.startsWith('https://docs.googleapis.com/v1/documents/doc-1')) {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer valid-docs-access-token')
@@ -5067,10 +5219,14 @@ test('keeps Google Docs read output when linked-doc artifact recording fails', a
     })
     expect(warnings).toEqual([
       [
-        'Failed to persist Google Doc artifact',
+        'Failed to snapshot Google Workspace artifact',
         {
-          docId: 'doc-1',
-          reason: 'artifact_persist_failed'
+          artifactType: 'doc',
+          errorCode: 'validation_error',
+          errorStatus: 400,
+          id: 'doc-1',
+          reason: 'artifact_snapshot_failed',
+          sessionId: 'session-1'
         }
       ]
     ])
@@ -5085,6 +5241,7 @@ test('keeps Google Docs read output when linked-doc artifact recording fails', a
     expect(warningText).not.toContain(outsideParentTarget)
     await expect(readFile(join(outsideParentTarget, 'artifacts.json'), 'utf8')).rejects.toThrow()
   } finally {
+    await pluginFixture.restore()
     console.warn = originalWarn
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)

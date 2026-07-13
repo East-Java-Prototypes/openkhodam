@@ -1,6 +1,7 @@
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
+import { createOpenKhodamClient } from '@openkhodam/client'
 import type { ElectronApplication } from '@playwright/test'
 import { expect, test, type Locator, type Page } from '../fixtures/electron'
 import {
@@ -707,6 +708,65 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
       .or(projectChatLink(appWindow))
       .first()
   ).toBeVisible()
+})
+
+test('recovers linked artifacts after a real OpenKhodam list failure and restart', async ({
+  appWindow
+}) => {
+  const sessionId = 'structured-session'
+  const restoreProjectArtifacts = await seedSessionLinkedDocs(sessionId)
+
+  try {
+    await seedOpenedFakeProject(appWindow)
+    await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+    await expectOpenedProjectRouteResolved(appWindow)
+    await sessionChatLink(appWindow).filter({ hasText: 'Structured fixture chat' }).click()
+
+    const connection = await appWindow.evaluate(() => window.api.getOpenKhodamConnection())
+    const client = createOpenKhodamClient(connection)
+    await expect(
+      client.listSessionLinkedGoogleArtifacts({ projectDirectory: fakeProjectDirectory, sessionId })
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'fixture-linked-doc', listed: true }),
+        expect.objectContaining({ id: 'fixture-linked-sheet', listed: true })
+      ])
+    )
+    let listRequests = 0
+    await appWindow.route('**/artifacts/session/list', async (route) => {
+      listRequests += 1
+      if (listRequests === 1) await route.abort('failed')
+      else await route.continue()
+    })
+    await appWindow.reload()
+    await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
+    await expect(
+      chatActionPane(appWindow).getByText('No linked Google Workspace artifacts yet.')
+    ).toBeVisible()
+    expect(listRequests).toBeGreaterThan(0)
+    await expect(appWindow.evaluate(() => window.api.restartOpenKhodam())).resolves.toMatchObject({
+      state: 'connected'
+    })
+    await expect
+      .poll(() =>
+        appWindow.evaluate(async () => {
+          const connection = await window.api.getOpenKhodamConnection()
+          return fetch(`${connection.baseUrl}/health`, {
+            headers: { authorization: `Bearer ${connection.token}` }
+          }).then((response) => response.status)
+        })
+      )
+      .toBe(200)
+    await expect.poll(() => listRequests, { timeout: 10_000 }).toBeGreaterThan(1)
+    await expect(
+      chatActionPane(appWindow).getByRole('button', {
+        name: 'Toggle linked Google Sheet Fixture linked Google Sheet',
+        exact: true
+      })
+    ).toBeVisible()
+  } finally {
+    await restoreProjectArtifacts()
+  }
 })
 
 test('renders basename project labels and opens the project new-conversation shell from the plus affordance', async ({

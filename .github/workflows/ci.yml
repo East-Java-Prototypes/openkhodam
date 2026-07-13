@@ -29,6 +29,9 @@ jobs:
       - name: Unit tests
         run: nix develop -c pnpm test
 
+      - name: Packaged plugin smoke test
+        run: nix develop -c pnpm --filter @openkhodam/desktop test:packaged-plugins
+
       - name: Lint
         run: nix develop -c pnpm lint
 

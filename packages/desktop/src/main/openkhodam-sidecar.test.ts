@@ -102,7 +102,8 @@ describe('OpenKhodam sidecar lifecycle', () => {
     await expect(sidecar.getPluginConnection()).resolves.toEqual(plugin)
     expect(processes[1].messages[0]).toMatchObject({
       type: 'start',
-      tokens: expect.arrayContaining([renderer.token, plugin.token])
+      rendererTokens: [renderer.token],
+      pluginTokens: [plugin.token]
     })
   })
 

@@ -140,7 +140,8 @@ export function createOpenKhodamSidecar(
     try {
       current.postMessage({
         type: 'start',
-        tokens: [connections.renderer.token, connections.plugin.token],
+        rendererTokens: [connections.renderer.token],
+        pluginTokens: [connections.plugin.token],
         version: adapter.version(),
         port: Number(new URL(connections.renderer.url).port),
         corsOrigins: adapter.corsOrigins()

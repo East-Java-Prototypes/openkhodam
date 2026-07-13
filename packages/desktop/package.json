@@ -18,6 +18,7 @@
     "build": "pnpm run typecheck && electron-vite build && pnpm run build:opencode-plugins",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm run build && electron-builder --dir",
+    "test:packaged-plugins": "pnpm run build:unpack && node scripts/package-plugin-smoke.mjs",
     "build:win": "pnpm run build && electron-builder --win",
     "build:mac": "pnpm run build && electron-builder --mac",
     "build:linux": "pnpm run build && electron-builder --linux"

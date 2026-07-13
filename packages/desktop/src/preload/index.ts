@@ -3,23 +3,13 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type {
   GetOpenCodeModelSelectionInput,
   GoogleWorkspaceIntegrationStatus,
-  LinkedGoogleArtifact,
-  LinkedGoogleDoc,
   OpenProjectFolderInput,
   OpenCodeConnection,
   OpenCodeModelSelection,
   OpenCodeSidecarStatus,
   OpenedProjectFolder,
-  ProjectArtifactsConfig,
-  ProjectArtifactsListInput,
-  ProjectSessionLinkedGoogleArtifactsListInput,
-  ProjectSessionLinkedDocsListInput,
-  RecordLinkedGoogleArtifactInput,
-  RecordLinkedGoogleDocInput,
   RemoveProjectFolderInput,
-  UpdateLinkedGoogleArtifactListingInput,
-  SetOpenCodeModelSelectionInput,
-  UpdateLinkedGoogleDocListingInput
+  SetOpenCodeModelSelectionInput
 } from '@openkhodam/ui/types'
 import type { OpenKhodamSidecarStatus } from '../main/openkhodam-sidecar'
 import type { ConnectionInfo } from '@openkhodam/protocol'
@@ -80,36 +70,6 @@ const api = {
     input: RemoveProjectFolderInput
   ): Promise<OpenedProjectFolder | null> =>
     ipcRenderer.invoke('projects:remove-opened-folder', input),
-  listProjectArtifacts: (input: ProjectArtifactsListInput): Promise<ProjectArtifactsConfig> =>
-    ipcRenderer.invoke('project-artifacts:list-project', input),
-  listSessionLinkedGoogleArtifacts: (
-    input: ProjectSessionLinkedGoogleArtifactsListInput
-  ): Promise<LinkedGoogleArtifact[]> =>
-    ipcRenderer.invoke('project-artifacts:list-session-google-artifacts', input),
-  listSessionLinkedDocs: (input: ProjectSessionLinkedDocsListInput): Promise<LinkedGoogleDoc[]> =>
-    ipcRenderer.invoke('project-artifacts:list-session-docs', input),
-  recordLinkedGoogleArtifact: (
-    input: RecordLinkedGoogleArtifactInput
-  ): Promise<LinkedGoogleArtifact> =>
-    ipcRenderer.invoke('project-artifacts:record-linked-google-artifact', input),
-  recordLinkedGoogleDoc: (input: RecordLinkedGoogleDocInput): Promise<LinkedGoogleDoc> =>
-    ipcRenderer.invoke('project-artifacts:record-linked-doc', input),
-  delistLinkedGoogleArtifact: (
-    input: UpdateLinkedGoogleArtifactListingInput
-  ): Promise<LinkedGoogleArtifact | null> =>
-    ipcRenderer.invoke('project-artifacts:delist-linked-google-artifact', input),
-  delistLinkedGoogleDoc: (
-    input: UpdateLinkedGoogleDocListingInput
-  ): Promise<LinkedGoogleDoc | null> =>
-    ipcRenderer.invoke('project-artifacts:delist-linked-doc', input),
-  relistLinkedGoogleArtifact: (
-    input: UpdateLinkedGoogleArtifactListingInput
-  ): Promise<LinkedGoogleArtifact | null> =>
-    ipcRenderer.invoke('project-artifacts:relist-linked-google-artifact', input),
-  relistLinkedGoogleDoc: (
-    input: UpdateLinkedGoogleDocListingInput
-  ): Promise<LinkedGoogleDoc | null> =>
-    ipcRenderer.invoke('project-artifacts:relist-linked-doc', input),
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, status: OpenCodeSidecarStatus): void =>
       callback(status)

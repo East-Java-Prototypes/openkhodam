@@ -17,14 +17,7 @@ import {
   readGoogleSheetSpreadsheet,
   searchGoogleDriveFiles
 } from '../integrations/google-workspace-runtime'
-import {
-  deleteGoogleDocDocumentArtifact,
-  deleteGoogleSheetSpreadsheetArtifact,
-  getOrCreateLinkedGoogleArtifact,
-  getOrCreateLinkedGoogleDoc,
-  persistGoogleDocDocumentArtifact,
-  persistGoogleSheetSpreadsheetArtifact
-} from '../integrations/project-artifacts'
+import { createOpenKhodamClient, getOpenKhodamPluginConnection } from '@openkhodam/client'
 
 type GoogleWorkspaceListCommandsToolArgs = {
   query: string
@@ -48,16 +41,6 @@ type GoogleWorkspaceArtifactSessionContext = {
   projectDirectory: string
   sessionId: string
 }
-
-type PersistedReadGoogleWorkspaceArtifact = GoogleWorkspaceArtifactSessionContext & {
-  artifactPath: string
-  created: boolean
-}
-
-type DeletePersistedGoogleWorkspaceArtifact = (input: {
-  artifactPath: string
-  projectDirectory: string
-}) => Promise<{ deleted: boolean }>
 
 type GoogleWorkspaceListCommandsToolDefinition = {
   args: {
@@ -643,127 +626,52 @@ async function recordReadGoogleDocArtifact(
   context: GoogleWorkspaceToolContext,
   document: GoogleDocDocumentArtifact
 ): Promise<void> {
-  const persisted = await persistReadGoogleWorkspaceArtifact({
-    context,
-    failureDetails: {
-      docId: document.id,
-      reason: 'artifact_persist_failed'
-    },
-    failureMessage: 'Failed to persist Google Doc artifact',
-    persist: (projectDirectory) =>
-      persistGoogleDocDocumentArtifact({
-        document,
-        projectDirectory
-      })
-  })
-  if (!persisted) return
-
-  try {
-    await getOrCreateLinkedGoogleDoc({
-      doc: {
-        artifactPath: persisted.artifactPath,
-        id: document.id,
-        title: document.title,
-        url: document.link
-      },
-      projectDirectory: persisted.projectDirectory,
-      messageId: persisted.messageId,
-      sessionId: persisted.sessionId
-    })
-  } catch {
-    const artifactCleanedUp = await cleanupCreatedGoogleWorkspaceArtifact({
-      artifactPath: persisted.artifactPath,
-      createdArtifact: persisted.created,
-      deleteArtifact: deleteGoogleDocDocumentArtifact,
-      failureDetails: {
-        docId: document.id,
-        reason: 'artifact_cleanup_failed',
-        sessionId: persisted.sessionId
-      },
-      failureMessage: 'Failed to clean up Google Doc artifact after record failure',
-      projectDirectory: persisted.projectDirectory
-    })
-    console.warn('Failed to record linked Google Doc artifact', {
-      artifactCleanedUp,
-      docId: document.id,
-      reason: 'artifact_record_failed',
-      sessionId: persisted.sessionId
-    })
-  }
+  await snapshotGoogleWorkspaceArtifact({ context, document, type: 'doc' })
 }
 
 async function recordReadGoogleSheetArtifact(
   context: GoogleWorkspaceToolContext,
   spreadsheet: GoogleSheetSpreadsheetArtifact
 ): Promise<void> {
-  const persisted = await persistReadGoogleWorkspaceArtifact({
-    context,
-    failureDetails: {
-      reason: 'artifact_persist_failed',
-      spreadsheetId: spreadsheet.id
-    },
-    failureMessage: 'Failed to persist Google Sheet artifact',
-    persist: (projectDirectory) =>
-      persistGoogleSheetSpreadsheetArtifact({
-        projectDirectory,
-        spreadsheet
-      })
-  })
-  if (!persisted) return
-
-  try {
-    await getOrCreateLinkedGoogleArtifact({
-      artifact: {
-        artifactPath: persisted.artifactPath,
-        id: spreadsheet.id,
-        title: spreadsheet.title,
-        type: 'google.sheet.spreadsheet',
-        url: spreadsheet.link
-      },
-      projectDirectory: persisted.projectDirectory,
-      messageId: persisted.messageId,
-      sessionId: persisted.sessionId
-    })
-  } catch {
-    const artifactCleanedUp = await cleanupCreatedGoogleWorkspaceArtifact({
-      artifactPath: persisted.artifactPath,
-      createdArtifact: persisted.created,
-      deleteArtifact: deleteGoogleSheetSpreadsheetArtifact,
-      failureDetails: {
-        reason: 'artifact_cleanup_failed',
-        sessionId: persisted.sessionId,
-        spreadsheetId: spreadsheet.id
-      },
-      failureMessage: 'Failed to clean up Google Sheet artifact after record failure',
-      projectDirectory: persisted.projectDirectory
-    })
-    console.warn('Failed to record linked Google Sheet artifact', {
-      artifactCleanedUp,
-      reason: 'artifact_record_failed',
-      sessionId: persisted.sessionId,
-      spreadsheetId: spreadsheet.id
-    })
-  }
+  await snapshotGoogleWorkspaceArtifact({ context, spreadsheet, type: 'sheet' })
 }
 
-async function persistReadGoogleWorkspaceArtifact(input: {
-  context: GoogleWorkspaceToolContext
-  failureDetails: Record<string, string>
-  failureMessage: string
-  persist: (projectDirectory: string) => Promise<{ artifactPath: string; created: boolean }>
-}): Promise<PersistedReadGoogleWorkspaceArtifact | null> {
+async function snapshotGoogleWorkspaceArtifact(
+  input:
+    | {
+        context: GoogleWorkspaceToolContext
+        document: GoogleDocDocumentArtifact
+        type: 'doc'
+      }
+    | {
+        context: GoogleWorkspaceToolContext
+        spreadsheet: GoogleSheetSpreadsheetArtifact
+        type: 'sheet'
+      }
+) {
   const artifactContext = getGoogleWorkspaceArtifactSessionContext(input.context)
-  if (!artifactContext) return null
+  const connection = getOpenKhodamPluginConnection(process.env)
+  if (!artifactContext || !connection) return
 
   try {
-    const persisted = await input.persist(artifactContext.projectDirectory)
-    return {
-      ...artifactContext,
-      ...persisted
+    const client = createOpenKhodamClient(connection)
+    if (input.type === 'doc') {
+      await client.snapshotGoogleDocDocument({ ...artifactContext, document: input.document })
+    } else {
+      await client.snapshotGoogleSheetSpreadsheet({
+        ...artifactContext,
+        spreadsheet: input.spreadsheet
+      })
     }
-  } catch {
-    console.warn(input.failureMessage, input.failureDetails)
-    return null
+  } catch (error) {
+    console.warn('Failed to snapshot Google Workspace artifact', {
+      artifactType: input.type,
+      id: input.type === 'doc' ? input.document.id : input.spreadsheet.id,
+      reason: 'artifact_snapshot_failed',
+      errorCode: error instanceof Error && 'code' in error ? String(error.code) : undefined,
+      errorStatus: error instanceof Error && 'status' in error ? Number(error.status) : undefined,
+      sessionId: artifactContext.sessionId
+    })
   }
 }
 
@@ -776,35 +684,6 @@ function getGoogleWorkspaceArtifactSessionContext(
   if (!projectDirectory || !sessionId) return null
 
   return { messageId, projectDirectory, sessionId }
-}
-
-async function cleanupCreatedGoogleWorkspaceArtifact({
-  artifactPath,
-  createdArtifact,
-  deleteArtifact,
-  failureDetails,
-  failureMessage,
-  projectDirectory
-}: {
-  artifactPath: string
-  createdArtifact: boolean
-  deleteArtifact: DeletePersistedGoogleWorkspaceArtifact
-  failureDetails: Record<string, string>
-  failureMessage: string
-  projectDirectory: string
-}): Promise<boolean | null> {
-  if (!createdArtifact) return null
-
-  try {
-    const result = await deleteArtifact({
-      artifactPath,
-      projectDirectory
-    })
-    return result.deleted
-  } catch {
-    console.warn(failureMessage, failureDetails)
-    return false
-  }
 }
 
 function nonEmptyString(value: unknown): string | null {

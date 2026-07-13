@@ -1,21 +1,19 @@
 # OpenKhodam configuration ownership
 
-OpenKhodam owns a small number of JSON files in the Electron main process. Keep new config stores explicit and app-owned; do not add a broad config framework unless there is a concrete caller for it.
+OpenKhodam owns project artifacts through its loopback HTTP server. Keep new stores explicit and app-owned; do not add a broad config framework unless there is a concrete caller for it.
 
 ## Current files
 
 - `userData/openkhodam-config.json` is the app/user config. It is owned by `OpenKhodamConfigFileStore` and currently stores opened project folders plus the Google Workspace connection status, granted scopes, account metadata, and OAuth tokens.
 - `userData/opencode-sidecar/runtime-opencode-config.json` is generated runtime config. It is written before the OpenCode sidecar starts and passed to OpenCode through `OPENCODE_CONFIG`. It should contain only the managed runtime payload OpenCode needs, such as bundled plugin paths.
-- `<project>/.openkhodam/artifacts.json` is the project-local session artifact index. It is owned by `ProjectArtifactsFileStore` and currently stores `sessionId -> LinkedGoogleArtifact[]` records for Google Docs and Google Sheets that OpenKhodam tools or UI explicitly record through the OpenKhodam IPC/integration APIs. It is not user-authored setup.
+- `<project>/.openkhodam/artifacts.json` is the project-local session artifact index. It is owned by the server `ProjectArtifactsFileStore` and currently stores `sessionId -> LinkedGoogleArtifact[]` records for Google Docs and Google Sheets. Renderer reads and plugin mutations use the authenticated server HTTP API; it is not user-authored setup.
 - `<project>/.openkhodam/artifacts/{google-docs,google-sheets}/*.json` contains managed snapshots of Google Workspace content persisted by OpenKhodam tools. These files are project-local artifacts, not user-authored setup or configuration.
 
-App-owned JSON config and artifact files use `packages/desktop/src/main/config/json-config-file.ts`, which centralizes default-on-missing reads and normalization for config stores plus JSON formatting, atomic writes, temporary-file cleanup, and file mode handling.
+Project artifact files use `packages/server/src/json-config-file.ts`; desktop-only user config uses its desktop helper. The server helper centralizes JSON formatting, atomic writes, and temporary-file cleanup.
 
 ## Concurrency limitation
 
-`ProjectArtifactsFileStore` replaces `.openkhodam/artifacts.json` atomically, so an interrupted write does not leave a partial file. It does not currently serialize read-modify-write mutations across store instances for the same canonical artifact-file path. For example, parallel Google Docs or Sheets tool calls can both read the same snapshot, then the later write can discard the other call's logical update.
-
-Future work must serialize mutations per artifact-file path and add parallel mutation coverage. Until then, treat this as a possible lost-update condition, not file corruption.
+`ProjectArtifactsModule` serializes all reads and mutations per canonical project directory and `ProjectArtifactsFileStore` replaces `.openkhodam/artifacts.json` atomically. An interrupted write does not leave a partial file and managed callers cannot lose updates through concurrent in-process requests.
 
 ## Secrets and non-secrets
 
@@ -32,6 +30,6 @@ Future work must serialize mutations per artifact-file path and add parallel mut
 4. Provide a default value for missing app-owned config files and a normalizer that accepts older or partial payloads.
 5. Preserve atomic writes and restrictive modes for files that may contain user or auth data.
 6. Add focused tests around path, payload shape, missing-file defaults, normalization, and mode-sensitive behavior when feasible.
-7. Mutate the project artifact index only through the generic OpenKhodam APIs (`listProjectArtifacts`, `listSessionLinkedGoogleArtifacts`, `recordLinkedGoogleArtifact`, `delistLinkedGoogleArtifact`, and `relistLinkedGoogleArtifact`) so delist/relist intent and secret filtering stay centralized. Keep the Google Docs compatibility APIs limited to callers that still require them, and persist or delete managed content snapshots through the artifact-store helpers rather than writing paths directly.
+7. Use the OpenKhodam server HTTP client: renderer credentials may only read artifact lists, while plugin credentials may perform semantic mutations and snapshots. Do not expose either role or token to unrelated callers. Keep Google Docs compatibility APIs limited to callers that still require them, and persist or delete managed content snapshots through server routes rather than writing paths directly.
 
 Google Workspace tool integration, prompt context injection, preview panes, manual attach forms, and durable workspace/session aggregation are separate features and should not be added to these files without a new ownership decision.

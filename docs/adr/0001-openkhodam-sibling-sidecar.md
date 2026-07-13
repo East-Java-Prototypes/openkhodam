@@ -1,19 +1,19 @@
-# ADR 0001: Prepare OpenKhodam for a sibling sidecar
+# ADR 0001: OpenKhodam sibling sidecar and artifact ownership
 
 ## Status
 
-Accepted — Phase 1 foundation.
+Accepted — Phase 4 cutover.
 
 ## Decision
 
-Electron will eventually supervise OpenCode and OpenKhodam as sibling sidecars. Phase 1 introduces three modules without changing Electron, renderer, plugin, artifact, or configuration behavior:
+Electron supervises OpenCode and OpenKhodam as sibling sidecars. Artifact persistence is owned exclusively by the OpenKhodam server worker:
 
 - `@openkhodam/protocol`: stable connection and endpoint contracts, error shape, and runtime validators.
 - `@openkhodam/client`: small authenticated HTTP client with cancellation and typed normalized failures.
-- `@openkhodam/server`: Hono application plus a loopback-only Node listener with lifecycle control.
+- `@openkhodam/server`: Hono application, loopback-only Node listener, artifact routes, and project-local artifact persistence.
 
-Hono and `@hono/node-server` are confined to the server implementation. Protocol and client remain framework-independent so future renderer and plugin adapters can use the same client contract.
+Hono and `@hono/node-server` are confined to the server implementation. Protocol and client remain framework-independent so renderer and plugin adapters use the same client contract. Desktop retains only sidecar lifecycle and connection IPC; it has no artifact IPC or artifact filesystem implementation.
 
 ## Consequences
 
-The local API currently exposes only authenticated health, version, and capabilities endpoints. Artifact operations, Electron supervision, migration work, and OpenCode proxying remain future phases.
+Artifact operations use authenticated routes. The server serializes mutations for each canonical project directory, preventing concurrent in-process route writers from losing updates. Cross-process writers are outside the current ownership model: only the one managed server worker may write artifacts.

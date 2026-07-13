@@ -9,6 +9,7 @@ import {
   type OpenCodeAdmittedPrompt
 } from '../hooks/useOpenCodeChatInterface'
 import { useOpenCodeProjectRouteContext } from '../hooks/useOpenCodeProjectRouteContext'
+import { useOpenKhodamClient } from '../hooks/openkhodam/client'
 
 export const Route = createFileRoute('/projects/$projectId/sessions/$sessionId')({
   component: SessionRoute
@@ -17,6 +18,7 @@ export const Route = createFileRoute('/projects/$projectId/sessions/$sessionId')
 function SessionRoute(): JSX.Element {
   const { sessionId } = Route.useParams()
   const project = useOpenCodeProjectRouteContext()
+  const { client: openKhodamClient, connectionRevision } = useOpenKhodamClient()
   const [admittedPrompt, setAdmittedPrompt] = useState<OpenCodeAdmittedPrompt | null>(() =>
     readAdmittedPromptHandoff(sessionId)
   )
@@ -69,7 +71,8 @@ function SessionRoute(): JSX.Element {
 
     let cancelled = false
 
-    void window.api
+    if (!openKhodamClient) return
+    void openKhodamClient
       .listSessionLinkedGoogleArtifacts({ projectDirectory, sessionId })
       .then((artifacts) => {
         if (cancelled) return
@@ -98,8 +101,10 @@ function SessionRoute(): JSX.Element {
     }
   }, [
     linkedGoogleArtifactsMessageVersion,
+    connectionRevision,
     linkedGoogleArtifactsScopeKey,
     project.selectedDirectory,
+    openKhodamClient,
     sessionId
   ])
 
