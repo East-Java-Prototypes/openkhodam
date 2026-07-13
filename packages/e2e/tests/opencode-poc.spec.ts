@@ -3630,7 +3630,7 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       discovery.commands.map((command) => Object.keys(command.inputSchema.properties ?? {}))
     ).toEqual([
       ['query', 'limit'],
-      ['documentId'],
+      ['documentId', 'limit'],
       ['documentId', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
@@ -3686,9 +3686,16 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
         {}
       )
     ).rejects.toThrow('does not accept input property match')
+    await expect(
+      plugin.tool.google_workspace_execute_command.execute(
+        { command: 'google.docs.read', input: { documentId: 'invalid-limit', limit: 1.5 } },
+        {}
+      )
+    ).rejects.toThrow('requires limit to be a positive integer')
     expect(getCounts.has('invalid')).toBe(false)
     expect(getCounts.has('invalid-delete')).toBe(false)
     expect(getCounts.has('invalid-append')).toBe(false)
+    expect(getCounts.has('invalid-limit')).toBe(false)
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
@@ -4208,6 +4215,31 @@ test('bounds Google Docs read previews while persisting the full normalized arti
     })
     expect(JSON.stringify(textCapDocument)).not.toContain('markdown')
 
+    const customTextCapOutput = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId: textCapDocumentId, limit: 25 },
+        context
+      )
+    ) as {
+      document: Record<string, unknown>
+    }
+    const customTextCapDocument = customTextCapOutput.document as {
+      body: { blocks: Array<{ text: string }> }
+      preview: Record<string, unknown>
+      text: string
+    }
+    expect(customTextCapDocument.text).toHaveLength(12_000)
+    expect(customTextCapDocument.body.blocks).toHaveLength(18)
+    expect(customTextCapDocument.body.blocks[17]?.text).toHaveLength(100)
+    expect(customTextCapDocument.preview).toEqual({
+      truncated: true,
+      totalTextLength: 17_500,
+      totalBlockCount: 25,
+      includedBlockCount: 18
+    })
+
     const blockCapOutput = JSON.parse(
       await executeGoogleWorkspaceCommand(
         plugin,
@@ -4230,6 +4262,30 @@ test('bounds Google Docs read previews while persisting the full normalized arti
       totalTextLength: 250,
       totalBlockCount: 25,
       includedBlockCount: 20
+    })
+
+    const customBlockCapOutput = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId: blockCapDocumentId, limit: 25 },
+        context
+      )
+    ) as {
+      document: Record<string, unknown>
+    }
+    const customBlockCapDocument = customBlockCapOutput.document as {
+      body: { blocks: Array<{ text: string }> }
+      preview: Record<string, unknown>
+      text: string
+    }
+    expect(customBlockCapDocument.text).toHaveLength(250)
+    expect(customBlockCapDocument.body.blocks).toHaveLength(25)
+    expect(customBlockCapDocument.preview).toEqual({
+      truncated: false,
+      totalTextLength: 250,
+      totalBlockCount: 25,
+      includedBlockCount: 25
     })
 
     const noSessionProjectPath = join(tempRoot, 'no-session-project')

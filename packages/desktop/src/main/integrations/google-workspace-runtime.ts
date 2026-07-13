@@ -775,9 +775,10 @@ export function createSheetsValuesClearUrl({
 }
 
 export function createGoogleDocDocumentPreview(
-  document: GoogleDocDocumentArtifact
+  document: GoogleDocDocumentArtifact,
+  options?: { blockLimit?: number }
 ): GoogleDocDocumentPreviewArtifact {
-  const blocks = limitGoogleDocBodyBlocksForPreview(document.body.blocks)
+  const blocks = limitGoogleDocBodyBlocksForPreview(document.body.blocks, options?.blockLimit)
   const text = blocks
     .map((block) => block.text)
     .join('')
@@ -2004,11 +2005,14 @@ function extractIndexedGoogleDocBodyBlocks(
   })
 }
 
-function limitGoogleDocBodyBlocksForPreview(blocks: GoogleDocBodyBlock[]): GoogleDocBodyBlock[] {
+function limitGoogleDocBodyBlocksForPreview(
+  blocks: GoogleDocBodyBlock[],
+  blockLimit = GOOGLE_DOCS_READ_PREVIEW_BLOCK_LIMIT
+): GoogleDocBodyBlock[] {
   const previewBlocks: GoogleDocBodyBlock[] = []
   let remainingTextLength = GOOGLE_DOCS_READ_PREVIEW_TEXT_LIMIT
 
-  for (const block of blocks.slice(0, GOOGLE_DOCS_READ_PREVIEW_BLOCK_LIMIT)) {
+  for (const block of blocks.slice(0, blockLimit)) {
     if (remainingTextLength <= 0) break
 
     if (block.text.length <= remainingTextLength) {

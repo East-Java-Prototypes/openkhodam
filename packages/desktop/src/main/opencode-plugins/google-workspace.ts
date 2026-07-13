@@ -341,24 +341,46 @@ function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
     inputSchema: {
       additionalProperties: false,
       properties: {
-        documentId: { description: 'The Google Docs document ID to read.', type: 'string' }
+        documentId: { description: 'The Google Docs document ID to read.', type: 'string' },
+        limit: {
+          default: 20,
+          description: 'Maximum document body blocks to return in the preview, at least 1.',
+          minimum: 1,
+          type: 'number'
+        }
       },
       required: ['documentId'],
       type: 'object'
     },
     async execute(parsedInput, context) {
-      const input = parsedInput as { documentId: string }
+      const input = parsedInput as { documentId: string; limit?: number }
       const result = await readGoogleDocDocument({
         documentId: input.documentId,
         signal: context.abort
       })
       await recordReadGoogleDocArtifact(context, result.document)
-      return JSON.stringify({ document: createGoogleDocDocumentPreview(result.document) })
+      return JSON.stringify({
+        document: createGoogleDocDocumentPreview(result.document, { blockLimit: input.limit })
+      })
     },
     parseInput(value) {
       const record = objectArg(value, 'Google Workspace command google.docs.read input')
-      rejectAdditionalProperties(record, ['documentId'], 'google.docs.read')
-      return { documentId: requiredStringArg(record.documentId, 'google.docs.read', 'documentId') }
+      rejectAdditionalProperties(record, ['documentId', 'limit'], 'google.docs.read')
+      if (
+        record.limit !== undefined &&
+        (typeof record.limit !== 'number' ||
+          !Number.isFinite(record.limit) ||
+          !Number.isInteger(record.limit) ||
+          record.limit < 1)
+      ) {
+        throw new Error(
+          'Google Workspace command google.docs.read requires limit to be a positive integer.'
+        )
+      }
+      return {
+        documentId: requiredStringArg(record.documentId, 'google.docs.read', 'documentId'),
+        limit: record.limit as number | undefined
+      }
     }
   }
 }
