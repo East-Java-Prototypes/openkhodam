@@ -15,6 +15,35 @@ export interface OpenKhodamClientOptions extends ConnectionInfo {
   fetch?: typeof globalThis.fetch
 }
 
+export const openKhodamPluginUrlEnv = 'OPENKHODAM_PLUGIN_URL'
+export const openKhodamPluginTokenEnv = 'OPENKHODAM_PLUGIN_TOKEN'
+
+export type OpenKhodamPluginEnv = Record<string, string | undefined>
+
+export function getOpenKhodamPluginConnection(
+  env: OpenKhodamPluginEnv
+): ConnectionInfo | undefined {
+  const baseUrl = sanitizeBaseUrl(env[openKhodamPluginUrlEnv])
+  const token = sanitizeToken(env[openKhodamPluginTokenEnv])
+  return baseUrl && token ? { baseUrl, token } : undefined
+}
+
+function sanitizeBaseUrl(value: string | undefined): string | undefined {
+  if (!value) return
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return
+    if (url.username || url.password || url.search || url.hash) return
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return
+  }
+}
+
+function sanitizeToken(value: string | undefined): string | undefined {
+  return value && value.trim() === value && value.length > 0 ? value : undefined
+}
+
 export class OpenKhodamClientError extends Error {
   constructor(
     message: string,

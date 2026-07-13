@@ -29,6 +29,7 @@
     "@fontsource-variable/inter": "^5.2.8",
     "@opencode-ai/sdk": "1.17.5",
     "@openkhodam/ui": "workspace:*",
+    "@openkhodam/client": "workspace:*",
     "@openkhodam/server": "workspace:*",
     "@shadcn/react": "^0.1.0",
     "@tanstack/react-query": "^5.100.14",

@@ -8,7 +8,13 @@ export default defineConfig({
   main: {
     build: {
       externalizeDeps: {
-        exclude: ['@openkhodam/server', '@openkhodam/protocol', 'hono', '@hono/node-server']
+        exclude: [
+          '@openkhodam/client',
+          '@openkhodam/server',
+          '@openkhodam/protocol',
+          'hono',
+          '@hono/node-server'
+        ]
       },
       rollupOptions: {
         external: ['electron', /^node:/],

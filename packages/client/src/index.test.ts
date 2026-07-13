@@ -1,5 +1,34 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createOpenKhodamClient, OpenKhodamClientError } from './index.js'
+import {
+  createOpenKhodamClient,
+  getOpenKhodamPluginConnection,
+  OpenKhodamClientError
+} from './index.js'
+
+describe('getOpenKhodamPluginConnection', () => {
+  it('returns only a validated plugin connection', () => {
+    expect(
+      getOpenKhodamPluginConnection({
+        OPENKHODAM_PLUGIN_URL: 'http://127.0.0.1:4567/',
+        OPENKHODAM_PLUGIN_TOKEN: 'plugin-token'
+      })
+    ).toEqual({ baseUrl: 'http://127.0.0.1:4567', token: 'plugin-token' })
+  })
+
+  it('rejects malformed, credential-bearing, and incomplete bootstrap values', () => {
+    for (const env of [
+      {},
+      { OPENKHODAM_PLUGIN_URL: 'not-a-url', OPENKHODAM_PLUGIN_TOKEN: 'plugin-token' },
+      {
+        OPENKHODAM_PLUGIN_URL: 'http://user:pass@127.0.0.1',
+        OPENKHODAM_PLUGIN_TOKEN: 'plugin-token'
+      },
+      { OPENKHODAM_PLUGIN_URL: 'http://127.0.0.1', OPENKHODAM_PLUGIN_TOKEN: ' plugin-token ' }
+    ]) {
+      expect(getOpenKhodamPluginConnection(env)).toBeUndefined()
+    }
+  })
+})
 
 describe('createOpenKhodamClient', () => {
   it('sends authenticated headers and validates responses', async () => {

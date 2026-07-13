@@ -4,9 +4,10 @@ import { Hono } from 'hono'
 import type { Server } from 'node:http'
 
 export interface OpenKhodamServerOptions {
-  token: string
+  tokens: readonly string[]
   version: string
   capabilities?: string[]
+  corsOrigins?: readonly string[]
 }
 
 function errorResponse(code: ApiError['error']['code'], message: string) {
@@ -17,7 +18,19 @@ export function createOpenKhodamApp(options: OpenKhodamServerOptions) {
   const app = new Hono()
 
   app.use('*', async (context, next) => {
-    if (context.req.header('authorization') !== `Bearer ${options.token}`) {
+    const origin = context.req.header('origin')
+    if (origin && options.corsOrigins?.includes(origin)) {
+      context.header('access-control-allow-origin', origin)
+      context.header('access-control-allow-headers', 'authorization, accept')
+      if (context.req.method === 'OPTIONS') return context.body(null, 204)
+    }
+    return next()
+  })
+
+  app.use('*', async (context, next) => {
+    if (
+      !options.tokens.some((token) => context.req.header('authorization') === `Bearer ${token}`)
+    ) {
       return context.json(errorResponse('unauthorized', 'Unauthorized'), 401)
     }
     return next()

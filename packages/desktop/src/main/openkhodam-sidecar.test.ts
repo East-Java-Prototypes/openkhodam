@@ -57,6 +57,7 @@ function fixture(options: { autoReady?: boolean; timeoutMs?: number } = {}): {
       workerExists: () => true,
       reservePort: async () => 4567,
       version: () => '1.0.0',
+      corsOrigins: () => ['file://'],
       startupTimeoutMs: options.timeoutMs,
       shutdownTimeoutMs: options.timeoutMs,
       fork: () => {
@@ -72,14 +73,37 @@ describe('OpenKhodam sidecar lifecycle', () => {
   it('serializes concurrent starts and preserves the descriptor through a live restart', async () => {
     const { adapter, processes } = fixture()
     const sidecar = createOpenKhodamSidecar(adapter)
-    const [first, second] = await Promise.all([sidecar.getConnection(), sidecar.getConnection()])
+    const [first, second] = await Promise.all([
+      sidecar.getRendererConnection(),
+      sidecar.getRendererConnection()
+    ])
     const restart = sidecar.restart()
     await Promise.resolve()
     processes[0].stopped()
     await expect(restart).resolves.toMatchObject({ state: 'connected' })
-    expect(await sidecar.getConnection()).toEqual(first)
+    expect(await sidecar.getRendererConnection()).toEqual(first)
     expect(second).toEqual(first)
     expect(processes).toHaveLength(2)
+  })
+
+  it('keeps separate renderer and plugin credentials stable across restart', async () => {
+    const { adapter, processes } = fixture()
+    const sidecar = createOpenKhodamSidecar(adapter)
+    const renderer = await sidecar.getRendererConnection()
+    const plugin = await sidecar.getPluginConnection()
+    expect(renderer.url).toBe(plugin.url)
+    expect(renderer.token).not.toBe(plugin.token)
+
+    const restart = sidecar.restart()
+    await Promise.resolve()
+    processes[0].stopped()
+    await restart
+    await expect(sidecar.getRendererConnection()).resolves.toEqual(renderer)
+    await expect(sidecar.getPluginConnection()).resolves.toEqual(plugin)
+    expect(processes[1].messages[0]).toMatchObject({
+      type: 'start',
+      tokens: expect.arrayContaining([renderer.token, plugin.token])
+    })
   })
 
   it('forces a hung startup worker to terminate after its timeout', async () => {
