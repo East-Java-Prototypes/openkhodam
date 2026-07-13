@@ -4,6 +4,8 @@ import {
   parseApiError,
   parseCapabilitiesResponse,
   parseHealthResponse,
+  parseSnapshotGoogleDocDocumentInput,
+  parseSnapshotGoogleSheetSpreadsheetInput,
   parseVersionResponse
 } from './index.js'
 
@@ -25,5 +27,57 @@ describe('protocol validators', () => {
     expect(parseApiError({ error: { code: 'unauthorized', message: 'Missing token' } })).toEqual({
       error: { code: 'unauthorized', message: 'Missing token' }
     })
+  })
+
+  it('rejects malformed nested Google Doc and Sheet snapshots', () => {
+    expect(() =>
+      parseSnapshotGoogleDocDocumentInput({
+        projectDirectory: '/tmp',
+        sessionId: 's',
+        document: {
+          type: 'google.doc.document',
+          id: 'd',
+          title: null,
+          revision: null,
+          text: '',
+          link: null,
+          body: { blocks: [{ id: 'x', ordinal: 0, type: 'table', text: '' }] }
+        }
+      })
+    ).toThrow(ProtocolValidationError)
+    expect(() =>
+      parseSnapshotGoogleSheetSpreadsheetInput({
+        projectDirectory: '/tmp',
+        sessionId: 's',
+        spreadsheet: {
+          type: 'google.sheet.spreadsheet',
+          id: 's',
+          title: null,
+          link: null,
+          sheets: [
+            {
+              id: null,
+              title: 'A',
+              index: null,
+              hidden: false,
+              sheetType: null,
+              rowCount: null,
+              columnCount: null
+            }
+          ],
+          ranges: [
+            {
+              range: 'A1',
+              majorDimension: null,
+              values: [[{}]],
+              rowCount: 1,
+              columnCount: 1,
+              cellCount: 1,
+              truncated: false
+            }
+          ]
+        }
+      })
+    ).toThrow(ProtocolValidationError)
   })
 })

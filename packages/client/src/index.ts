@@ -4,10 +4,20 @@ import {
   type ConnectionInfo,
   type HealthResponse,
   type VersionResponse,
+  type ProjectArtifactsConfig,
+  type LinkedGoogleArtifact,
+  type RecordLinkedGoogleArtifactInput,
+  type UpdateLinkedGoogleArtifactListingInput,
+  type SnapshotGoogleDocDocumentInput,
+  type SnapshotGoogleSheetSpreadsheetInput,
   ProtocolValidationError,
   parseApiError,
   parseCapabilitiesResponse,
   parseHealthResponse,
+  parseLinkedGoogleArtifact,
+  parseProjectArtifactsConfig,
+  parseSnapshotGoogleDocDocumentResult,
+  parseSnapshotGoogleSheetSpreadsheetResult,
   parseVersionResponse
 } from '@openkhodam/protocol'
 
@@ -59,18 +69,53 @@ export interface OpenKhodamClient {
   health(options?: { signal?: AbortSignal }): Promise<HealthResponse>
   version(options?: { signal?: AbortSignal }): Promise<VersionResponse>
   capabilities(options?: { signal?: AbortSignal }): Promise<CapabilitiesResponse>
+  listProjectArtifacts(
+    input: { projectDirectory: string },
+    options?: { signal?: AbortSignal }
+  ): Promise<ProjectArtifactsConfig>
+  listSessionLinkedGoogleArtifacts(
+    input: { projectDirectory: string; sessionId: string },
+    options?: { signal?: AbortSignal }
+  ): Promise<LinkedGoogleArtifact[]>
+  recordLinkedGoogleArtifact(
+    input: RecordLinkedGoogleArtifactInput,
+    options?: { signal?: AbortSignal }
+  ): Promise<LinkedGoogleArtifact>
+  delistLinkedGoogleArtifact(
+    input: UpdateLinkedGoogleArtifactListingInput,
+    options?: { signal?: AbortSignal }
+  ): Promise<LinkedGoogleArtifact | null>
+  relistLinkedGoogleArtifact(
+    input: UpdateLinkedGoogleArtifactListingInput,
+    options?: { signal?: AbortSignal }
+  ): Promise<LinkedGoogleArtifact | null>
+  snapshotGoogleDocDocument(
+    input: SnapshotGoogleDocDocumentInput,
+    options?: { signal?: AbortSignal }
+  ): Promise<LinkedGoogleArtifact>
+  snapshotGoogleSheetSpreadsheet(
+    input: SnapshotGoogleSheetSpreadsheetInput,
+    options?: { signal?: AbortSignal }
+  ): Promise<LinkedGoogleArtifact>
 }
 
 export function createOpenKhodamClient(options: OpenKhodamClientOptions): OpenKhodamClient {
   const request = async <T>(
     path: string,
     parse: (value: unknown) => T,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    body?: unknown
   ): Promise<T> => {
     let response: Response
     try {
       response = await (options.fetch ?? globalThis.fetch)(new URL(path, options.baseUrl), {
-        headers: { authorization: `Bearer ${options.token}`, accept: 'application/json' },
+        ...(body === undefined ? {} : { method: 'POST' }),
+        headers: {
+          authorization: `Bearer ${options.token}`,
+          accept: 'application/json',
+          ...(body === undefined ? {} : { 'content-type': 'application/json' })
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal
       })
     } catch (error) {
@@ -117,8 +162,45 @@ export function createOpenKhodamClient(options: OpenKhodamClientOptions): OpenKh
   return {
     health: ({ signal } = {}) => request('/health', parseHealthResponse, signal),
     version: ({ signal } = {}) => request('/version', parseVersionResponse, signal),
-    capabilities: ({ signal } = {}) => request('/capabilities', parseCapabilitiesResponse, signal)
+    capabilities: ({ signal } = {}) => request('/capabilities', parseCapabilitiesResponse, signal),
+    listProjectArtifacts: (input, { signal } = {}) =>
+      request('/artifacts/list', parseProjectArtifactsConfig, signal, input),
+    listSessionLinkedGoogleArtifacts: (input, { signal } = {}) =>
+      request(
+        '/artifacts/session/list',
+        (value) => {
+          if (!Array.isArray(value))
+            throw new ProtocolValidationError('artifact list must be an array')
+          return value.map(parseLinkedGoogleArtifact)
+        },
+        signal,
+        input
+      ),
+    recordLinkedGoogleArtifact: (input, { signal } = {}) =>
+      request('/artifacts/record', parseLinkedGoogleArtifact, signal, input),
+    delistLinkedGoogleArtifact: (input, { signal } = {}) =>
+      request('/artifacts/delist', parseNullableArtifact, signal, input),
+    relistLinkedGoogleArtifact: (input, { signal } = {}) =>
+      request('/artifacts/relist', parseNullableArtifact, signal, input),
+    snapshotGoogleDocDocument: (input, { signal } = {}) =>
+      request(
+        '/artifacts/google-docs/snapshot-link',
+        parseSnapshotGoogleDocDocumentResult,
+        signal,
+        input
+      ),
+    snapshotGoogleSheetSpreadsheet: (input, { signal } = {}) =>
+      request(
+        '/artifacts/google-sheets/snapshot-link',
+        parseSnapshotGoogleSheetSpreadsheetResult,
+        signal,
+        input
+      )
   }
+}
+
+function parseNullableArtifact(value: unknown): LinkedGoogleArtifact | null {
+  return value === null ? null : parseLinkedGoogleArtifact(value)
 }
 
 function isAbortError(error: unknown): error is DOMException {

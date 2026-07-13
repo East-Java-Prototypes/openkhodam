@@ -2,23 +2,13 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   GetOpenCodeModelSelectionInput,
   GoogleWorkspaceIntegrationStatus,
-  LinkedGoogleArtifact,
-  LinkedGoogleDoc,
   OpenProjectFolderInput,
   OpenCodeConnection,
   OpenCodeModelSelection,
   OpenCodeSidecarStatus,
   OpenedProjectFolder,
-  ProjectArtifactsConfig,
-  ProjectArtifactsListInput,
-  ProjectSessionLinkedGoogleArtifactsListInput,
-  ProjectSessionLinkedDocsListInput,
-  RecordLinkedGoogleArtifactInput,
-  RecordLinkedGoogleDocInput,
   RemoveProjectFolderInput,
-  UpdateLinkedGoogleArtifactListingInput,
-  SetOpenCodeModelSelectionInput,
-  UpdateLinkedGoogleDocListingInput
+  SetOpenCodeModelSelectionInput
 } from '@openkhodam/ui/types'
 import type { ThemeMode } from '../theme'
 import type { OpenKhodamSidecarStatus } from '../main/openkhodam-sidecar'
@@ -27,8 +17,6 @@ import type { ConnectionInfo } from '@openkhodam/protocol'
 export type {
   GetOpenCodeModelSelectionInput,
   GoogleWorkspaceIntegrationStatus,
-  LinkedGoogleArtifact,
-  LinkedGoogleDoc,
   OpenCodeConnection,
   OpenCodeModelSelection,
   OpenCodeSidecarStatus
@@ -61,27 +49,6 @@ export type OpenKhodamAPI = {
   removeOpenedProjectFolder: (
     input: RemoveProjectFolderInput
   ) => Promise<OpenedProjectFolder | null>
-  listProjectArtifacts: (input: ProjectArtifactsListInput) => Promise<ProjectArtifactsConfig>
-  listSessionLinkedGoogleArtifacts: (
-    input: ProjectSessionLinkedGoogleArtifactsListInput
-  ) => Promise<LinkedGoogleArtifact[]>
-  listSessionLinkedDocs: (input: ProjectSessionLinkedDocsListInput) => Promise<LinkedGoogleDoc[]>
-  recordLinkedGoogleArtifact: (
-    input: RecordLinkedGoogleArtifactInput
-  ) => Promise<LinkedGoogleArtifact>
-  recordLinkedGoogleDoc: (input: RecordLinkedGoogleDocInput) => Promise<LinkedGoogleDoc>
-  delistLinkedGoogleArtifact: (
-    input: UpdateLinkedGoogleArtifactListingInput
-  ) => Promise<LinkedGoogleArtifact | null>
-  delistLinkedGoogleDoc: (
-    input: UpdateLinkedGoogleDocListingInput
-  ) => Promise<LinkedGoogleDoc | null>
-  relistLinkedGoogleArtifact: (
-    input: UpdateLinkedGoogleArtifactListingInput
-  ) => Promise<LinkedGoogleArtifact | null>
-  relistLinkedGoogleDoc: (
-    input: UpdateLinkedGoogleDocListingInput
-  ) => Promise<LinkedGoogleDoc | null>
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void) => () => void
   onOpenKhodamStatus: (callback: (status: OpenKhodamSidecarStatus) => void) => () => void
 }

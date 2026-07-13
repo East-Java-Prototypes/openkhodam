@@ -1,13 +1,13 @@
 # OpenKhodam context
 
-## Sidecar architecture (Phase 1)
+## Sidecar architecture and artifact ownership (Phase 4)
 
-OpenKhodam is moving toward an Electron host that supervises OpenCode and OpenKhodam as sibling sidecars. Renderer prompting continues to go directly to OpenCode. This phase only introduces reusable modules for OpenKhodam's future local API; it does not start a sidecar from Electron or migrate any desktop behavior.
+Electron supervises OpenCode and OpenKhodam as sibling sidecars. Renderer prompting continues to go directly to OpenCode; renderer artifact reads use the authenticated OpenKhodam HTTP client.
 
-Composition path for the new foundation:
+Composition paths:
 
-`future Electron supervisor -> @openkhodam/server listener -> Hono app -> protocol responses`
+`Electron supervisor -> OpenKhodam worker -> @openkhodam/server listener -> Hono routes -> project artifact manager -> project-local files`
 
-`future renderer/plugin adapter -> @openkhodam/client -> HTTP boundary -> @openkhodam/server`
+`renderer/plugin adapter -> @openkhodam/client -> authenticated HTTP boundary -> @openkhodam/server`
 
-`@openkhodam/protocol` owns framework-neutral request/response types and runtime validators. `@openkhodam/client` owns authenticated, cancellable HTTP calls and normalized errors. `@openkhodam/server` is the Hono implementation adapter and is the only module that imports Hono or its Node adapter.
+`@openkhodam/protocol` owns framework-neutral request/response types and runtime validators. `@openkhodam/client` owns authenticated, cancellable HTTP calls and normalized errors. `@openkhodam/server` owns Hono, persistence, and the only artifact writer. Desktop has no artifact persistence or artifact IPC surface.
