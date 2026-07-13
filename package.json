@@ -9,7 +9,7 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint .",
-    "typecheck": "pnpm --filter @openkhodam/ui typecheck && pnpm --filter @openkhodam/desktop typecheck",
+    "typecheck": "pnpm --filter @openkhodam/protocol typecheck && pnpm --filter @openkhodam/client typecheck && pnpm --filter @openkhodam/server typecheck && pnpm --filter @openkhodam/ui typecheck && pnpm --filter @openkhodam/desktop typecheck",
     "typecheck:desktop": "pnpm --filter @openkhodam/desktop typecheck",
     "typecheck:ui": "pnpm --filter @openkhodam/ui typecheck",
     "start": "pnpm --filter @openkhodam/desktop start",
@@ -19,12 +19,15 @@
     "build:win": "pnpm --filter @openkhodam/desktop build:win",
     "build:mac": "pnpm --filter @openkhodam/desktop build:mac",
     "build:linux": "pnpm --filter @openkhodam/desktop build:linux",
+    "test": "pnpm --filter @openkhodam/protocol test && pnpm --filter @openkhodam/client test && pnpm --filter @openkhodam/server test",
     "test:e2e": "pnpm --filter @openkhodam/e2e test"
   },
   "devDependencies": {
+    "@types/node": "^22.19.19",
     "oxfmt": "^0.51.0",
     "oxlint": "^1.66.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

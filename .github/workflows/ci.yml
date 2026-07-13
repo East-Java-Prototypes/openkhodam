@@ -26,6 +26,9 @@ jobs:
       - name: Typecheck
         run: nix develop -c pnpm typecheck
 
+      - name: Unit tests
+        run: nix develop -c pnpm test
+
       - name: Lint
         run: nix develop -c pnpm lint
 
