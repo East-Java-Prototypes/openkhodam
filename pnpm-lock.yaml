@@ -54,6 +54,9 @@ importers:
       '@opencode-ai/sdk':
         specifier: 1.17.5
         version: 1.17.5
+      '@openkhodam/server':
+        specifier: workspace:*
+        version: link:../server
       '@openkhodam/ui':
         specifier: workspace:*
         version: link:../ui

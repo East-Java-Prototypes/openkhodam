@@ -3,13 +3,17 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { createOpenCodeSidecar } from './opencode-sidecar'
+import { createOpenKhodamSidecar } from './openkhodam-sidecar'
+import { createQuitCleanup, startSidecars } from './sidecar-orchestration'
 import { OpenKhodamConfigStore } from './integrations/openkhodam-config'
 import { createGoogleWorkspaceIntegration } from './integrations/google-workspace'
 import { createProjectArtifactsIntegration } from './integrations/project-artifacts'
 import { isThemeMode, type ThemeMode } from '../theme'
 
 const opencodeSidecar = createOpenCodeSidecar()
+const openkhodamSidecar = createOpenKhodamSidecar()
 const isE2e = process.env['OPENKHODAM_E2E'] === '1'
+const finishQuit = createQuitCleanup(opencodeSidecar, openkhodamSidecar, () => app.exit())
 
 app.setName('OpenKhodam')
 
@@ -90,6 +94,8 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('opencode:get-status', () => opencodeSidecar.getStatus())
+  ipcMain.handle('openkhodam:get-status', () => openkhodamSidecar.getStatus())
+  ipcMain.handle('openkhodam:restart', () => openkhodamSidecar.restart())
   ipcMain.handle('opencode:get-connection', () => opencodeSidecar.getConnection())
   ipcMain.handle('opencode:restart', () => opencodeSidecar.restart())
   ipcMain.handle('appearance:set-native-theme', (_event, mode: unknown) => {
@@ -158,9 +164,14 @@ app.whenReady().then(() => {
       window.webContents.send('opencode:status', status)
     })
   })
+  openkhodamSidecar.onStatusChange((status) => {
+    BrowserWindow.getAllWindows().forEach((window) =>
+      window.webContents.send('openkhodam:status', status)
+    )
+  })
 
   if (!isE2e) {
-    void opencodeSidecar.start()
+    void startSidecars(openkhodamSidecar, opencodeSidecar)
   }
 
   createWindow()
@@ -181,8 +192,9 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
-  void opencodeSidecar.stop()
+app.on('before-quit', (event) => {
+  event.preventDefault()
+  finishQuit()
 })
 
 // In this file you can include the rest of your app's specific main process
