@@ -22,6 +22,7 @@ import type {
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 import type { OpenKhodamSidecarStatus } from '../main/openkhodam-sidecar'
+import type { ConnectionInfo } from '@openkhodam/protocol'
 import type { ThemeMode } from '../theme'
 
 type SupportedDesktopPlatform = 'darwin' | 'linux' | 'win32'
@@ -40,6 +41,13 @@ const api = {
   getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>
     ipcRenderer.invoke('opencode:get-status'),
   restartOpenCode: (): Promise<OpenCodeSidecarStatus> => ipcRenderer.invoke('opencode:restart'),
+  getOpenKhodamConnection: (): Promise<ConnectionInfo> =>
+    ipcRenderer
+      .invoke('openkhodam:get-connection')
+      .then((connection: { url: string; token: string }) => ({
+        baseUrl: connection.url,
+        token: connection.token
+      })),
   getOpenKhodamStatus: (): Promise<OpenKhodamSidecarStatus> =>
     ipcRenderer.invoke('openkhodam:get-status'),
   restartOpenKhodam: (): Promise<OpenKhodamSidecarStatus> =>

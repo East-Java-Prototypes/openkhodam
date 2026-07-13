@@ -5,6 +5,10 @@ import { join } from 'node:path'
 import { app, utilityProcess } from 'electron'
 
 export type OpenKhodamConnection = { url: string; token: string }
+export type OpenKhodamConnections = {
+  plugin: OpenKhodamConnection
+  renderer: OpenKhodamConnection
+}
 export type OpenKhodamSidecarStatus = {
   state: 'starting' | 'connected' | 'error' | 'stopped'
   url: string | null
@@ -28,11 +32,13 @@ export type OpenKhodamSidecarAdapter = {
   fork(): ManagedProcess
   reservePort(): Promise<number>
   version(): string
+  corsOrigins(): string[]
   startupTimeoutMs?: number
   shutdownTimeoutMs?: number
 }
 export type OpenKhodamSidecar = {
-  getConnection(): Promise<OpenKhodamConnection>
+  getPluginConnection(): Promise<OpenKhodamConnection>
+  getRendererConnection(): Promise<OpenKhodamConnection>
   getStatus(): OpenKhodamSidecarStatus
   onStatusChange(listener: (status: OpenKhodamSidecarStatus) => void): () => void
   start(): Promise<OpenKhodamSidecarStatus>
@@ -47,7 +53,10 @@ const defaultShutdownTimeoutMs = 5_000
 export function createOpenKhodamSidecar(
   adapter: OpenKhodamSidecarAdapter = electronAdapter()
 ): OpenKhodamSidecar {
-  const connection = { url: `http://${hostname}:0`, token: randomUUID() }
+  const connections: OpenKhodamConnections = {
+    plugin: { url: `http://${hostname}:0`, token: randomUUID() },
+    renderer: { url: `http://${hostname}:0`, token: randomUUID() }
+  }
   const startupTimeoutMs = adapter.startupTimeoutMs ?? defaultStartupTimeoutMs
   const shutdownTimeoutMs = adapter.shutdownTimeoutMs ?? defaultShutdownTimeoutMs
   let child: ManagedProcess | undefined
@@ -73,20 +82,26 @@ export function createOpenKhodamSidecar(
     if (child && status.state === 'connected') return status
     if (child)
       return setAndReturn(
-        makeStatus('error', 'OpenKhodam sidecar is still stopping.', connection.url)
+        makeStatus('error', 'OpenKhodam sidecar is still stopping.', connections.renderer.url)
       )
     if (!adapter.workerExists())
       return setAndReturn(
         makeStatus('error', 'OpenKhodam sidecar worker was not found. Run pnpm build.')
       )
     try {
-      if (connection.url.endsWith(':0'))
-        connection.url = `http://${hostname}:${await adapter.reservePort()}`
+      if (connections.renderer.url.endsWith(':0')) {
+        const url = `http://${hostname}:${await adapter.reservePort()}`
+        connections.renderer.url = url
+        connections.plugin.url = url
+      }
     } catch (error) {
-      return setAndReturn(makeStatus('error', errorMessage(error), connection.url))
+      return setAndReturn(makeStatus('error', errorMessage(error), connections.renderer.url))
     }
 
-    set({ ...makeStatus('starting', 'Starting OpenKhodam sidecar...', connection.url), pid: null })
+    set({
+      ...makeStatus('starting', 'Starting OpenKhodam sidecar...', connections.renderer.url),
+      pid: null
+    })
     let current: ManagedProcess
     try {
       current = adapter.fork()
@@ -95,7 +110,7 @@ export function createOpenKhodamSidecar(
         makeStatus(
           'error',
           `Failed to fork OpenKhodam sidecar: ${errorMessage(error)}`,
-          connection.url
+          connections.renderer.url
         )
       )
     }
@@ -120,14 +135,15 @@ export function createOpenKhodamSidecar(
       if (stoppingGeneration === currentGeneration) return
       const message = `OpenKhodam sidecar exited with code ${String(code ?? 'unknown')}.`
       ready.reject(new Error(message))
-      set(makeStatus('error', message, connection.url))
+      set(makeStatus('error', message, connections.renderer.url))
     })
     try {
       current.postMessage({
         type: 'start',
-        token: connection.token,
+        tokens: [connections.renderer.token, connections.plugin.token],
         version: adapter.version(),
-        port: Number(new URL(connection.url).port)
+        port: Number(new URL(connections.renderer.url).port),
+        corsOrigins: adapter.corsOrigins()
       })
       await withTimeout(
         ready.promise,
@@ -137,7 +153,7 @@ export function createOpenKhodamSidecar(
       if (isCurrent())
         set({
           state: 'connected',
-          url: connection.url,
+          url: connections.renderer.url,
           pid: current.pid ?? null,
           message: 'OpenKhodam sidecar is connected.',
           updatedAt: Date.now()
@@ -150,7 +166,7 @@ export function createOpenKhodamSidecar(
         `Failed to stop OpenKhodam sidecar after startup failure: `
       )
       if (generation === currentGeneration)
-        set(makeStatus('error', errorMessage(error), connection.url))
+        set(makeStatus('error', errorMessage(error), connections.renderer.url))
     }
     return status
   }
@@ -159,7 +175,7 @@ export function createOpenKhodamSidecar(
     const current = child
     if (!current)
       return setAndReturn(
-        makeStatus('stopped', 'OpenKhodam sidecar is not running.', connection.url)
+        makeStatus('stopped', 'OpenKhodam sidecar is not running.', connections.renderer.url)
       )
     const currentGeneration = generation
     stoppingGeneration = currentGeneration
@@ -174,20 +190,22 @@ export function createOpenKhodamSidecar(
         'Failed to force-stop OpenKhodam sidecar: '
       )
       if (terminationError)
-        return setAndReturn(makeStatus('error', terminationError, connection.url))
+        return setAndReturn(makeStatus('error', terminationError, connections.renderer.url))
       if (error instanceof Error && error.message !== 'OpenKhodam sidecar did not stop in time.')
-        return setAndReturn(makeStatus('error', error.message, connection.url))
+        return setAndReturn(makeStatus('error', error.message, connections.renderer.url))
     }
     if (child === current && generation === currentGeneration) {
       return setAndReturn(
         makeStatus(
           'error',
           'OpenKhodam sidecar stop completed without an exit event.',
-          connection.url
+          connections.renderer.url
         )
       )
     }
-    return setAndReturn(makeStatus('stopped', 'OpenKhodam sidecar stopped.', connection.url))
+    return setAndReturn(
+      makeStatus('stopped', 'OpenKhodam sidecar stopped.', connections.renderer.url)
+    )
   }
 
   async function terminate(
@@ -227,10 +245,15 @@ export function createOpenKhodamSidecar(
       return startDirect()
     })
   return {
-    getConnection: async () => {
+    getPluginConnection: async () => {
       await start()
       if (status.state !== 'connected') throw new Error(status.message)
-      return { ...connection }
+      return { ...connections.plugin }
+    },
+    getRendererConnection: async () => {
+      await start()
+      if (status.state !== 'connected') throw new Error(status.message)
+      return { ...connections.renderer }
     },
     getStatus: () => status,
     onStatusChange: (listener) => {
@@ -253,7 +276,16 @@ function electronAdapter(): OpenKhodamSidecarAdapter {
         stdio: 'pipe'
       }) as unknown as ManagedProcess,
     reservePort,
-    version: () => app.getVersion()
+    version: () => app.getVersion(),
+    corsOrigins: () => {
+      const devOrigin = process.env.ELECTRON_RENDERER_URL
+      if (!devOrigin) return ['file://']
+      try {
+        return [new URL(devOrigin).origin]
+      } catch {
+        return []
+      }
+    }
   }
 }
 function makeStatus(

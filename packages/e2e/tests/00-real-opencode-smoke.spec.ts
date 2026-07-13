@@ -15,6 +15,7 @@ test('sends a prompt through the real OpenCode sidecar to a local fake provider'
   realOpenCode
 }) => {
   await waitForConnectedSidecar(appWindow)
+  await expectRendererOpenKhodamHealth(appWindow)
   await installProjectDirectoryPickerMock(electronApp, realOpenCode.workspaceDir)
   await openWorkspaceProject(appWindow, electronApp, realOpenCode.workspaceDir)
   await waitForOpenCodeProjectModelReadiness(appWindow, {
@@ -66,6 +67,14 @@ test('sends a prompt through the real OpenCode sidecar to a local fake provider'
   await expectFakeProviderPrompt(realOpenCode, firstPrompt)
   await expectFakeProviderPrompt(realOpenCode, secondPrompt)
 })
+
+async function expectRendererOpenKhodamHealth(page: Page): Promise<void> {
+  await expect(page.locator('[data-openkhodam-health]')).toHaveAttribute(
+    'data-openkhodam-health',
+    'ok',
+    { timeout: 45_000 }
+  )
+}
 
 type ModelReadinessContext = {
   workspaceDir: string

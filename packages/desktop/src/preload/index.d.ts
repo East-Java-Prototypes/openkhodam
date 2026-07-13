@@ -22,6 +22,7 @@ import type {
 } from '@openkhodam/ui/types'
 import type { ThemeMode } from '../theme'
 import type { OpenKhodamSidecarStatus } from '../main/openkhodam-sidecar'
+import type { ConnectionInfo } from '@openkhodam/protocol'
 
 export type {
   GetOpenCodeModelSelectionInput,
@@ -40,6 +41,7 @@ export type OpenKhodamAPI = {
   getOpenCodeConnection: () => Promise<OpenCodeConnection>
   getOpenCodeStatus: () => Promise<OpenCodeSidecarStatus>
   restartOpenCode: () => Promise<OpenCodeSidecarStatus>
+  getOpenKhodamConnection: () => Promise<ConnectionInfo>
   getOpenKhodamStatus: () => Promise<OpenKhodamSidecarStatus>
   restartOpenKhodam: () => Promise<OpenKhodamSidecarStatus>
   setNativeTheme: (mode: ThemeMode) => Promise<void>

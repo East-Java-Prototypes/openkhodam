@@ -1,6 +1,12 @@
 import { startOpenKhodamServer, type OpenKhodamListener } from '@openkhodam/server'
 
-type StartCommand = { type: 'start'; token: string; version: string; port: number }
+type StartCommand = {
+  type: 'start'
+  tokens: string[]
+  version: string
+  port: number
+  corsOrigins: string[]
+}
 type StopCommand = { type: 'stop' }
 type Command = StartCommand | StopCommand
 type Message =
@@ -30,9 +36,10 @@ async function start(command: StartCommand): Promise<void> {
   try {
     if (listener) throw new Error('OpenKhodam sidecar is already running.')
     listener = await startOpenKhodamServer({
-      token: command.token,
+      tokens: command.tokens,
       version: command.version,
-      port: command.port
+      port: command.port,
+      corsOrigins: command.corsOrigins
     })
     parentPort.postMessage({ type: 'ready' })
   } catch (error) {
@@ -58,11 +65,20 @@ function parseCommand(value: unknown): Command | undefined {
   if (command.type === 'stop') return { type: 'stop' }
   if (
     command.type === 'start' &&
-    typeof command.token === 'string' &&
+    Array.isArray(command.tokens) &&
+    command.tokens.every((token) => typeof token === 'string') &&
     typeof command.version === 'string' &&
-    typeof command.port === 'number'
+    typeof command.port === 'number' &&
+    Array.isArray(command.corsOrigins) &&
+    command.corsOrigins.every((origin) => typeof origin === 'string')
   ) {
-    return { type: 'start', token: command.token, version: command.version, port: command.port }
+    return {
+      type: 'start',
+      tokens: command.tokens,
+      version: command.version,
+      port: command.port,
+      corsOrigins: command.corsOrigins
+    }
   }
   return undefined
 }

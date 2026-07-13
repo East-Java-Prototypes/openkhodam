@@ -10,8 +10,8 @@ import { createGoogleWorkspaceIntegration } from './integrations/google-workspac
 import { createProjectArtifactsIntegration } from './integrations/project-artifacts'
 import { isThemeMode, type ThemeMode } from '../theme'
 
-const opencodeSidecar = createOpenCodeSidecar()
 const openkhodamSidecar = createOpenKhodamSidecar()
+const opencodeSidecar = createOpenCodeSidecar(openkhodamSidecar)
 const isE2e = process.env['OPENKHODAM_E2E'] === '1'
 const finishQuit = createQuitCleanup(opencodeSidecar, openkhodamSidecar, () => app.exit())
 
@@ -94,6 +94,7 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('opencode:get-status', () => opencodeSidecar.getStatus())
+  ipcMain.handle('openkhodam:get-connection', () => openkhodamSidecar.getRendererConnection())
   ipcMain.handle('openkhodam:get-status', () => openkhodamSidecar.getStatus())
   ipcMain.handle('openkhodam:restart', () => openkhodamSidecar.restart())
   ipcMain.handle('opencode:get-connection', () => opencodeSidecar.getConnection())

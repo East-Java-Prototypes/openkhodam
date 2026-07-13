@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join, relative } from 'node:path'
 
 import { expect, test } from '@playwright/test'
+import { startOpenKhodamServer, type OpenKhodamListener } from '@openkhodam/server'
 
 const testsDirectory = dirname(fileURLToPath(import.meta.url))
 const requireDesktopModule = createRequire(import.meta.url)
@@ -1221,7 +1222,7 @@ test('loads the ESM bundled plugin with the OpenCode loader-compatible module sh
     hasSessionID: true,
     hasWorktree: true,
     message: 'hello',
-    ok: true,
+    ok: false,
     plugin: 'openkhodam-poc',
     tool: toolName
   })
@@ -1230,6 +1231,89 @@ test('loads the ESM bundled plugin with the OpenCode loader-compatible module sh
     await plugin.tool.openkhodam_plugin_ping.execute({ payload: {} }, pingContext)
   ) as { message: string }
   expect(pong.message).toBe('pong')
+})
+
+test('the built plugin authenticates to the real OpenKhodam listener with only its plugin credential', async () => {
+  const originalUrl = process.env.OPENKHODAM_PLUGIN_URL
+  const originalToken = process.env.OPENKHODAM_PLUGIN_TOKEN
+  let listener: OpenKhodamListener | undefined
+  const rendererToken = 'renderer-token'
+  const pluginToken = 'plugin-token'
+
+  try {
+    listener = await startOpenKhodamServer({
+      tokens: [rendererToken, pluginToken],
+      version: 'test'
+    })
+    process.env.OPENKHODAM_PLUGIN_URL = `http://127.0.0.1:${listener.port}`
+    process.env.OPENKHODAM_PLUGIN_TOKEN = pluginToken
+
+    const pluginModule = (await import(
+      `${pathToFileURL(builtPluginPath).href}?health-proof`
+    )) as Record<string, unknown>
+    const plugin = await (pluginModule.OpenKhodamPoc as () => Promise<OpenKhodamPocPlugin>)()
+    const proof = JSON.parse(
+      await plugin.tool.openkhodam_plugin_ping.execute(
+        { payload: {} },
+        { directory: '/tmp/project', sessionID: 'session-123', worktree: '/tmp/project' }
+      )
+    ) as { ok: boolean; [key: string]: unknown }
+    expect(proof.ok).toBe(true)
+    expect(JSON.stringify(proof)).not.toContain(pluginToken)
+
+    await expect(
+      fetch(`http://127.0.0.1:${listener.port}/health`, {
+        headers: { authorization: `Bearer ${rendererToken}` }
+      })
+    ).resolves.toMatchObject({ status: 200 })
+    await expect(
+      fetch(`http://127.0.0.1:${listener.port}/health`, {
+        headers: { authorization: 'Bearer unknown-token' }
+      })
+    ).resolves.toMatchObject({ status: 401 })
+  } finally {
+    if (originalUrl === undefined) delete process.env.OPENKHODAM_PLUGIN_URL
+    else process.env.OPENKHODAM_PLUGIN_URL = originalUrl
+    if (originalToken === undefined) delete process.env.OPENKHODAM_PLUGIN_TOKEN
+    else process.env.OPENKHODAM_PLUGIN_TOKEN = originalToken
+    await listener?.close()
+  }
+})
+
+test('the built plugin fails closed when bootstrap is absent or health authentication fails', async () => {
+  const originalUrl = process.env.OPENKHODAM_PLUGIN_URL
+  const originalToken = process.env.OPENKHODAM_PLUGIN_TOKEN
+  try {
+    delete process.env.OPENKHODAM_PLUGIN_URL
+    delete process.env.OPENKHODAM_PLUGIN_TOKEN
+    const pluginModule = (await import(
+      `${pathToFileURL(builtPluginPath).href}?fail-closed`
+    )) as Record<string, unknown>
+    const plugin = await (pluginModule.OpenKhodamPoc as () => Promise<OpenKhodamPocPlugin>)()
+    const context = {
+      directory: '/tmp/project',
+      sessionID: 'session-123',
+      worktree: '/tmp/project'
+    }
+    expect(
+      JSON.parse(await plugin.tool.openkhodam_plugin_ping.execute({ payload: {} }, context))
+    ).toMatchObject({
+      ok: false
+    })
+
+    process.env.OPENKHODAM_PLUGIN_URL = 'http://127.0.0.1:1'
+    process.env.OPENKHODAM_PLUGIN_TOKEN = 'invalid-plugin-token'
+    expect(
+      JSON.parse(await plugin.tool.openkhodam_plugin_ping.execute({ payload: {} }, context))
+    ).toMatchObject({
+      ok: false
+    })
+  } finally {
+    if (originalUrl === undefined) delete process.env.OPENKHODAM_PLUGIN_URL
+    else process.env.OPENKHODAM_PLUGIN_URL = originalUrl
+    if (originalToken === undefined) delete process.env.OPENKHODAM_PLUGIN_TOKEN
+    else process.env.OPENKHODAM_PLUGIN_TOKEN = originalToken
+  }
 })
 
 test('loads the Google Workspace ESM plugin and searches Drive with safe metadata', async () => {

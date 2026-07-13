@@ -66,8 +66,18 @@ export const OpenKhodamPoc = async (): Promise<OpenKhodamPocHooks> => ({
             ? args.payload.message
             : 'pong'
 
+        const connection = getOpenKhodamPluginConnection(process.env)
+        let ok = false
+        if (connection) {
+          try {
+            ok = (await createOpenKhodamClient(connection).health()).status === 'ok'
+          } catch {
+            ok = false
+          }
+        }
+
         return JSON.stringify({
-          ok: true,
+          ok,
           plugin: pluginName,
           tool: toolName,
           message,
@@ -82,3 +92,4 @@ export const OpenKhodamPoc = async (): Promise<OpenKhodamPocHooks> => ({
     output.system.push(loadedMessage)
   }
 })
+import { createOpenKhodamClient, getOpenKhodamPluginConnection } from '@openkhodam/client'

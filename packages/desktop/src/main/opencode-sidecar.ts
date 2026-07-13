@@ -10,6 +10,7 @@ import { OPENKHODAM_CONFIG_FILE_NAME } from './integrations/openkhodam-config'
 import { resolveOpenKhodamPluginPaths } from './opencode-plugin-path'
 import { createSidecarEnv } from './opencode-sidecar-env'
 import { writeRuntimeOpenCodeConfig } from './opencode-runtime-config'
+import type { OpenKhodamConnection, OpenKhodamSidecar } from './openkhodam-sidecar'
 
 type HealthResponse = {
   healthy?: boolean
@@ -46,7 +47,7 @@ const serviceName = 'opencode server'
 const startupTimeoutMs = 30_000
 const shutdownTimeoutMs = 5_000
 
-export function createOpenCodeSidecar(): OpenCodeSidecar {
+export function createOpenCodeSidecar(openkhodamSidecar?: OpenKhodamSidecar): OpenCodeSidecar {
   let opencodeChildProcess: UtilityProcess | null = null
   let connection: OpenCodeConnection | null = null
   let stopping = false
@@ -175,12 +176,16 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
       pid: null
     })
 
+    const pluginConnection = openkhodamSidecar
+      ? await openkhodamSidecar.getPluginConnection()
+      : undefined
     const sidecarProcess = utilityProcess.fork(sidecarPath, [], {
       cwd: process.cwd(),
       env: createSidecarEnv({
         env: {
           ...process.env,
-          OPENKHODAM_CONFIG_PATH: openKhodamConfigPath
+          OPENKHODAM_CONFIG_PATH: openKhodamConfigPath,
+          ...createPluginEnv(pluginConnection)
         },
         password,
         profileDir,
@@ -333,6 +338,15 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
     restart,
     start,
     stop
+  }
+}
+
+export function createPluginEnv(connection: OpenKhodamConnection | undefined): NodeJS.ProcessEnv {
+  if (!connection) return {}
+  return {
+    OPENKHODAM_PLUGIN_URL: connection.url,
+    OPENKHODAM_PLUGIN_TOKEN: connection.token,
+    OPENKHODAM_PROTOCOL_VERSION: '1'
   }
 }
 
