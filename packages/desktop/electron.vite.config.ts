@@ -7,10 +7,16 @@ import tanstackRouter from '@tanstack/router-plugin/vite'
 export default defineConfig({
   main: {
     build: {
+      externalizeDeps: {
+        exclude: ['@openkhodam/server', '@openkhodam/protocol', 'hono', '@hono/node-server']
+      },
       rollupOptions: {
+        external: ['electron', /^node:/],
+        treeshake: true,
         input: {
           index: 'src/main/index.ts',
-          'opencode-sidecar-worker': 'src/main/opencode-sidecar-worker.ts'
+          'opencode-sidecar-worker': 'src/main/opencode-sidecar-worker.ts',
+          'openkhodam-sidecar-worker': 'src/main/openkhodam-sidecar-worker.ts'
         }
       }
     }

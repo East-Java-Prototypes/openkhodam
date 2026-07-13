@@ -21,6 +21,7 @@ import type {
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
 import type { ThemeMode } from '../theme'
+import type { OpenKhodamSidecarStatus } from '../main/openkhodam-sidecar'
 
 export type {
   GetOpenCodeModelSelectionInput,
@@ -39,6 +40,8 @@ export type OpenKhodamAPI = {
   getOpenCodeConnection: () => Promise<OpenCodeConnection>
   getOpenCodeStatus: () => Promise<OpenCodeSidecarStatus>
   restartOpenCode: () => Promise<OpenCodeSidecarStatus>
+  getOpenKhodamStatus: () => Promise<OpenKhodamSidecarStatus>
+  restartOpenKhodam: () => Promise<OpenKhodamSidecarStatus>
   setNativeTheme: (mode: ThemeMode) => Promise<void>
   getOpenCodeModelSelection: (
     input: GetOpenCodeModelSelectionInput
@@ -78,6 +81,7 @@ export type OpenKhodamAPI = {
     input: UpdateLinkedGoogleDocListingInput
   ) => Promise<LinkedGoogleDoc | null>
   onOpenCodeStatus: (callback: (status: OpenCodeSidecarStatus) => void) => () => void
+  onOpenKhodamStatus: (callback: (status: OpenKhodamSidecarStatus) => void) => () => void
 }
 
 declare global {

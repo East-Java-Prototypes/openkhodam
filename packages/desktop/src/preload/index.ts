@@ -21,6 +21,7 @@ import type {
   SetOpenCodeModelSelectionInput,
   UpdateLinkedGoogleDocListingInput
 } from '@openkhodam/ui/types'
+import type { OpenKhodamSidecarStatus } from '../main/openkhodam-sidecar'
 import type { ThemeMode } from '../theme'
 
 type SupportedDesktopPlatform = 'darwin' | 'linux' | 'win32'
@@ -39,6 +40,10 @@ const api = {
   getOpenCodeStatus: (): Promise<OpenCodeSidecarStatus> =>
     ipcRenderer.invoke('opencode:get-status'),
   restartOpenCode: (): Promise<OpenCodeSidecarStatus> => ipcRenderer.invoke('opencode:restart'),
+  getOpenKhodamStatus: (): Promise<OpenKhodamSidecarStatus> =>
+    ipcRenderer.invoke('openkhodam:get-status'),
+  restartOpenKhodam: (): Promise<OpenKhodamSidecarStatus> =>
+    ipcRenderer.invoke('openkhodam:restart'),
   setNativeTheme: (mode: ThemeMode): Promise<void> =>
     ipcRenderer.invoke('appearance:set-native-theme', mode),
   getOpenCodeModelSelection: (
@@ -104,6 +109,14 @@ const api = {
     ipcRenderer.on('opencode:status', listener)
     return (): void => {
       ipcRenderer.removeListener('opencode:status', listener)
+    }
+  },
+  onOpenKhodamStatus: (callback: (status: OpenKhodamSidecarStatus) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: OpenKhodamSidecarStatus): void =>
+      callback(status)
+    ipcRenderer.on('openkhodam:status', listener)
+    return (): void => {
+      ipcRenderer.removeListener('openkhodam:status', listener)
     }
   }
 }

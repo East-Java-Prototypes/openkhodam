@@ -20,7 +20,7 @@ export function createOpenKhodamApp(options: OpenKhodamServerOptions) {
     if (context.req.header('authorization') !== `Bearer ${options.token}`) {
       return context.json(errorResponse('unauthorized', 'Unauthorized'), 401)
     }
-    await next()
+    return next()
   })
 
   app.get('/health', (context) => context.json({ status: 'ok' as const }))

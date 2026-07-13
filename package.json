@@ -19,7 +19,7 @@
     "build:win": "pnpm --filter @openkhodam/desktop build:win",
     "build:mac": "pnpm --filter @openkhodam/desktop build:mac",
     "build:linux": "pnpm --filter @openkhodam/desktop build:linux",
-    "test": "pnpm --filter @openkhodam/protocol test && pnpm --filter @openkhodam/client test && pnpm --filter @openkhodam/server test",
+    "test": "pnpm --filter @openkhodam/protocol test && pnpm --filter @openkhodam/client test && pnpm --filter @openkhodam/server test && pnpm --filter @openkhodam/desktop test",
     "test:e2e": "pnpm --filter @openkhodam/e2e test"
   },
   "devDependencies": {
