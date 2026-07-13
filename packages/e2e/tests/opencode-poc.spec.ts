@@ -1567,7 +1567,7 @@ test('registers exactly generic Google Workspace tools and discovers strict Shee
     'google_workspace_execute_command'
   ])
   const commands = await listGoogleWorkspaceCommands(plugin)
-  expect(commands.commands).toHaveLength(13)
+  expect(commands.commands).toHaveLength(15)
   const byId = new Map(commands.commands.map((command) => [command.id, command.inputSchema]))
   expect(byId.get('google.sheets.read')).toMatchObject({
     additionalProperties: false,
@@ -3630,13 +3630,15 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
         inputSchema: { properties?: Record<string, unknown>; required: string[] }
       }>
     }
-    expect(discovery.commands).toHaveLength(13)
+    expect(discovery.commands).toHaveLength(15)
     expect(discovery.commands.map((command) => command.id)).toEqual([
       'google.drive.search_files',
       'google.docs.read',
       ...cases.map((item) => item.command),
       'google.docs.format_text',
       'google.docs.format_paragraph',
+      'google.docs.insert_list',
+      'google.docs.format_list',
       'google.sheets.read',
       'google.sheets.set_values',
       'google.sheets.append_rows',
@@ -3652,6 +3654,8 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       ['documentId', 'match'],
       ['documentId', 'match', 'style'],
       ['documentId', 'match', 'style'],
+      ['documentId', 'items', 'listType', 'placement'],
+      ['documentId', 'match', 'listType'],
       ['spreadsheetId'],
       ['spreadsheetId', 'range', 'values'],
       ['spreadsheetId', 'range', 'rows'],
@@ -3669,6 +3673,8 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       ['documentId', 'match', 'occurrence'],
       ['documentId', 'match', 'occurrence', 'style'],
       ['documentId', 'match', 'occurrence', 'style'],
+      ['documentId', 'listType', 'match', 'occurrence', 'items', 'placement'],
+      ['documentId', 'listType', 'match', 'occurrence'],
       ['spreadsheetId', 'ranges', 'valueRenderOption'],
       ['spreadsheetId', 'range', 'values', 'valueInputOption'],
       ['spreadsheetId', 'range', 'rows', 'valueInputOption'],
@@ -3997,6 +4003,247 @@ test('Google Docs format commands compile strict native style requests', async (
       ).rejects.toThrow('positive number')
     }
     expect(getCounts.size).toBe(fetchCount)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('Google Docs list commands isolate inserted paragraphs and use native presets', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-lists-'))
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const requests = new Map<string, unknown>()
+  const events: string[] = []
+  const counts = new Map<string, number>()
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'list-token',
+      expiresAt: Date.now() + 3600000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const id = url.includes(':batchUpdate')
+      ? decodeURIComponent(
+          new URL(url).pathname.slice('/v1/documents/'.length, -':batchUpdate'.length)
+        )
+      : readFetchedGoogleDocsDocumentId(url)
+    if (url.includes(':batchUpdate')) {
+      events.push(`${id}:write`)
+      requests.set(id, JSON.parse(init?.body as string))
+      return new Response(JSON.stringify({ documentId: id }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const count = (counts.get(id) ?? 0) + 1
+    counts.set(id, count)
+    events.push(`${id}:get:${count}`)
+    return new Response(
+      JSON.stringify({
+        body: {
+          content: [
+            {
+              startIndex: 1,
+              endIndex: 8,
+              paragraph: {
+                elements: [{ startIndex: 1, endIndex: 8, textRun: { content: 'Intro\n' } }]
+              }
+            },
+            {
+              startIndex: 8,
+              endIndex: 20,
+              paragraph: {
+                elements: [{ startIndex: 8, endIndex: 20, textRun: { content: 'target text\n' } }]
+              }
+            },
+            {
+              startIndex: 20,
+              endIndex: 27,
+              paragraph: {
+                elements: [{ startIndex: 20, endIndex: 27, textRun: { content: 'Outro\n' } }]
+              }
+            }
+          ]
+        },
+        documentId: id,
+        revisionId: count === 1 ? 'list-before' : 'list-after',
+        title: 'Lists'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.insert_list',
+      {
+        documentId: 'before',
+        items: ['One', 'Two'],
+        listType: 'bullet',
+        placement: 'before',
+        match: 'target',
+        occurrence: 'first'
+      },
+      {}
+    )
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.insert_list',
+      {
+        documentId: 'after',
+        items: ['One', 'Two'],
+        listType: 'numbered',
+        placement: 'after',
+        match: 'target',
+        occurrence: 'last'
+      },
+      {}
+    )
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.insert_list',
+      { documentId: 'end', items: ['Done'], listType: 'checkbox', placement: 'document_end' },
+      {}
+    )
+    await executeGoogleWorkspaceCommand(
+      plugin,
+      'google.docs.format_list',
+      { documentId: 'format', match: 'target', occurrence: 1, listType: 'bullet' },
+      {}
+    )
+    expect(requests.get('before')).toEqual({
+      requests: [
+        { insertText: { location: { index: 8 }, text: 'One\nTwo\n' } },
+        {
+          createParagraphBullets: {
+            bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+            range: { startIndex: 8, endIndex: 16 }
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'list-before' }
+    })
+    expect(requests.get('after')).toEqual({
+      requests: [
+        { insertText: { location: { index: 19 }, text: '\nOne\nTwo' } },
+        {
+          createParagraphBullets: {
+            bulletPreset: 'NUMBERED_DECIMAL_ALPHA_ROMAN',
+            range: { startIndex: 20, endIndex: 28 }
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'list-before' }
+    })
+    expect(requests.get('end')).toEqual({
+      requests: [
+        { insertText: { location: { index: 26 }, text: '\nDone' } },
+        {
+          createParagraphBullets: {
+            bulletPreset: 'BULLET_CHECKBOX',
+            range: { startIndex: 27, endIndex: 32 }
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'list-before' }
+    })
+    expect(requests.get('format')).toEqual({
+      requests: [
+        {
+          createParagraphBullets: {
+            bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+            range: { startIndex: 8, endIndex: 20 }
+          }
+        }
+      ],
+      writeControl: { requiredRevisionId: 'list-before' }
+    })
+    expect(events).toEqual([
+      'before:get:1',
+      'before:write',
+      'before:get:2',
+      'after:get:1',
+      'after:write',
+      'after:get:2',
+      'end:get:1',
+      'end:write',
+      'end:get:2',
+      'format:get:1',
+      'format:write',
+      'format:get:2'
+    ])
+    const noWriteCount = events.length
+    for (const input of [
+      {
+        documentId: 'invalid',
+        items: [],
+        listType: 'bullet',
+        placement: 'before',
+        match: 'target'
+      },
+      {
+        documentId: 'invalid',
+        items: ['a\nb'],
+        listType: 'bullet',
+        placement: 'before',
+        match: 'target'
+      },
+      {
+        documentId: 'invalid',
+        items: ['\ta'],
+        listType: 'bullet',
+        placement: 'before',
+        match: 'target'
+      },
+      {
+        documentId: 'invalid',
+        items: ['a'],
+        listType: 'bad',
+        placement: 'before',
+        match: 'target'
+      },
+      {
+        documentId: 'invalid',
+        items: ['a'],
+        listType: 'bullet',
+        placement: 'document_end',
+        match: 'target'
+      },
+      { documentId: 'invalid', items: ['a'], listType: 'bullet', placement: 'before' }
+    ])
+      await expect(
+        executeGoogleWorkspaceCommand(plugin, 'google.docs.insert_list', input, {})
+      ).rejects.toThrow()
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.format_list',
+        { documentId: 'invalid', match: 'missing', listType: 'bullet', occurrence: 0 },
+        {}
+      )
+    ).rejects.toThrow()
+    expect(events).toHaveLength(noWriteCount)
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.format_list',
+        { documentId: 'unresolved', match: 'missing', listType: 'bullet' },
+        {}
+      )
+    ).rejects.toThrow('could not find')
+    expect(events.slice(-1)).toEqual(['unresolved:get:1'])
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)

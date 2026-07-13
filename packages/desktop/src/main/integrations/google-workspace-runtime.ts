@@ -45,6 +45,9 @@ const MAX_DRIVE_SEARCH_LIMIT = 20
 const TOKEN_EXPIRY_SKEW_MS = 60 * 1000
 const GOOGLE_DOCS_READ_PREVIEW_BLOCK_LIMIT = 20
 const GOOGLE_DOCS_READ_PREVIEW_TEXT_LIMIT = 12_000
+const GOOGLE_DOCS_MAX_LIST_ITEMS = 100
+const GOOGLE_DOCS_MAX_LIST_ITEM_TEXT_LENGTH = 2_000
+const GOOGLE_DOCS_MAX_LIST_TEXT_LENGTH = 20_000
 const GOOGLE_SHEETS_DEFAULT_RANGE_A1 = 'A1:Z200'
 const GOOGLE_SHEETS_MAX_READ_RANGES = 5
 const GOOGLE_SHEETS_MAX_RANGE_ROWS = 200
@@ -301,8 +304,24 @@ export type GoogleDocsEditOperation =
       style: GoogleDocsParagraphStyle
       type: 'format_paragraph'
     }
+  | {
+      items: string[]
+      listType: GoogleDocsListType
+      match?: string
+      occurrence?: GoogleDocsTextOccurrence
+      placement: GoogleDocsListPlacement
+      type: 'insert_list'
+    }
+  | {
+      listType: GoogleDocsListType
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      type: 'format_list'
+    }
 
 export type GoogleDocsTextOccurrence = 'first' | 'last' | number
+export type GoogleDocsListType = 'bullet' | 'numbered' | 'checkbox'
+export type GoogleDocsListPlacement = 'before' | 'after' | 'document_end'
 
 export type GoogleDocsTextStyle = {
   backgroundColor?: string | null
@@ -413,6 +432,24 @@ type ResolvedGoogleDocsEditOperation =
       style: GoogleDocsParagraphStyle
       type: 'format_paragraph'
     }
+  | {
+      insertionIndex: number
+      items: string[]
+      listType: GoogleDocsListType
+      listRangeEndIndex: number
+      listRangeStartIndex: number
+      placement: GoogleDocsListPlacement
+      text: string
+      type: 'insert_list'
+    }
+  | {
+      listType: GoogleDocsListType
+      match: string
+      occurrence: GoogleDocsTextOccurrence
+      paragraphEndIndex: number
+      paragraphStartIndex: number
+      type: 'format_list'
+    }
 
 type GoogleDocsBatchUpdateRequestBody = {
   requests: GoogleDocsBatchUpdateRequest[]
@@ -448,8 +485,20 @@ type GoogleDocsBatchUpdateRequest =
         range: { endIndex: number; startIndex: number }
       }
     }
+  | {
+      createParagraphBullets: {
+        bulletPreset:
+          | 'BULLET_DISC_CIRCLE_SQUARE'
+          | 'NUMBERED_DECIMAL_ALPHA_ROMAN'
+          | 'BULLET_CHECKBOX'
+        range: { endIndex: number; startIndex: number }
+      }
+    }
 
-type GoogleDocsTextMatchOperation = Exclude<GoogleDocsEditOperation, { type: 'append_text' }>
+type GoogleDocsTextMatchOperation = Exclude<
+  GoogleDocsEditOperation,
+  { type: 'append_text' } | { type: 'insert_list' }
+>
 
 type GoogleDocsTextMatchCandidate = {
   matchEndIndex: number | null
@@ -686,7 +735,11 @@ export async function editGoogleDocDocument({
   const resolvedOperation = resolveGoogleDocsEditOperation(
     extractIndexedGoogleDocBodyBlocks(current.rawDocument),
     normalizedOperation,
-    normalizedOperation.type === 'append_text' ? getBodyEndInsertionIndex(current.rawDocument) : 0
+    normalizedOperation.type === 'append_text' ||
+      (normalizedOperation.type === 'insert_list' &&
+        normalizedOperation.placement === 'document_end')
+      ? getBodyEndInsertionIndex(current.rawDocument)
+      : 0
   )
 
   const batchUpdateResponse = await fetchImpl(createDocsBatchUpdateUrl(resolvedDocumentId), {
@@ -1161,15 +1214,90 @@ function normalizeGoogleDocsEditOperation(
     }
   }
 
+  if (operation.type === 'insert_list') {
+    return normalizeGoogleDocsInsertListOperation(operation)
+  }
+
+  if (operation.type === 'format_list') {
+    return {
+      listType: normalizeGoogleDocsListType(operation.listType, operation.type),
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      type: 'format_list'
+    }
+  }
+
   throw new Error(
-    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, delete_text, format_text, or format_paragraph.'
+    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, delete_text, format_text, format_paragraph, insert_list, or format_list.'
   )
 }
 
-function normalizeGoogleDocsMatchText(
-  match: unknown,
-  operationType: GoogleDocsTextMatchOperation['type']
-): string {
+function googleDocsListPreset(
+  listType: GoogleDocsListType
+): 'BULLET_DISC_CIRCLE_SQUARE' | 'NUMBERED_DECIMAL_ALPHA_ROMAN' | 'BULLET_CHECKBOX' {
+  if (listType === 'bullet') return 'BULLET_DISC_CIRCLE_SQUARE'
+  if (listType === 'numbered') return 'NUMBERED_DECIMAL_ALPHA_ROMAN'
+  return 'BULLET_CHECKBOX'
+}
+
+function normalizeGoogleDocsInsertListOperation(
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_list' }>
+): GoogleDocsEditOperation {
+  const placement = normalizeGoogleDocsListPlacement(operation.placement)
+  const items = normalizeGoogleDocsListItems(operation.items)
+  const listType = normalizeGoogleDocsListType(operation.listType, operation.type)
+  if (placement === 'document_end') {
+    if (operation.match !== undefined || operation.occurrence !== undefined) {
+      throw new Error('Google Docs insert_list document_end does not accept match or occurrence.')
+    }
+    return { items, listType, placement, type: 'insert_list' }
+  }
+  return {
+    items,
+    listType,
+    match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+    occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+    placement,
+    type: 'insert_list'
+  }
+}
+
+function normalizeGoogleDocsListItems(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > GOOGLE_DOCS_MAX_LIST_ITEMS) {
+    throw new Error(
+      `Google Docs insert_list requires items as a non-empty array of at most ${GOOGLE_DOCS_MAX_LIST_ITEMS} strings.`
+    )
+  }
+  const items = value.map((item, index) => {
+    if (typeof item !== 'string' || !item || item.length > GOOGLE_DOCS_MAX_LIST_ITEM_TEXT_LENGTH) {
+      throw new Error(
+        `Google Docs insert_list item ${index + 1} must be a non-empty string of at most ${GOOGLE_DOCS_MAX_LIST_ITEM_TEXT_LENGTH} characters.`
+      )
+    }
+    if (/[\r\n]/.test(item) || item.startsWith('\t')) {
+      throw new Error('Google Docs insert_list items cannot contain CR/LF or start with a tab.')
+    }
+    return item
+  })
+  if (items.join('\n').length > GOOGLE_DOCS_MAX_LIST_TEXT_LENGTH) {
+    throw new Error(
+      `Google Docs insert_list total item text must be at most ${GOOGLE_DOCS_MAX_LIST_TEXT_LENGTH} characters.`
+    )
+  }
+  return items
+}
+
+function normalizeGoogleDocsListType(value: unknown, operationType: string): GoogleDocsListType {
+  if (value === 'bullet' || value === 'numbered' || value === 'checkbox') return value
+  throw new Error(`Google Docs ${operationType} listType must be bullet, numbered, or checkbox.`)
+}
+
+function normalizeGoogleDocsListPlacement(value: unknown): GoogleDocsListPlacement {
+  if (value === 'before' || value === 'after' || value === 'document_end') return value
+  throw new Error('Google Docs insert_list placement must be before, after, or document_end.')
+}
+
+function normalizeGoogleDocsMatchText(match: unknown, operationType: string): string {
   const normalized = typeof match === 'string' ? match : ''
   if (!normalized) throw new Error(`Google Docs ${operationType} requires match text.`)
 
@@ -1191,7 +1319,7 @@ function normalizeGoogleDocsEditText(text: string): string {
 
 function normalizeTextOccurrence(
   occurrence: unknown,
-  operationType: GoogleDocsTextMatchOperation['type']
+  operationType: string
 ): GoogleDocsTextOccurrence {
   if (occurrence === undefined || occurrence === null || occurrence === '') return 'last'
   if (occurrence === 'first' || occurrence === 'last') return occurrence
@@ -1429,6 +1557,35 @@ function createGoogleDocsBatchUpdateRequests(
         updateParagraphStyle: {
           fields: Object.keys(paragraphStyle.fields).join(','),
           paragraphStyle: paragraphStyle.style,
+          range: {
+            endIndex: operation.paragraphEndIndex,
+            startIndex: operation.paragraphStartIndex
+          }
+        }
+      }
+    ]
+  }
+
+  if (operation.type === 'insert_list') {
+    return [
+      { insertText: { location: { index: operation.insertionIndex }, text: operation.text } },
+      {
+        createParagraphBullets: {
+          bulletPreset: googleDocsListPreset(operation.listType),
+          range: {
+            endIndex: operation.listRangeEndIndex,
+            startIndex: operation.listRangeStartIndex
+          }
+        }
+      }
+    ]
+  }
+
+  if (operation.type === 'format_list') {
+    return [
+      {
+        createParagraphBullets: {
+          bulletPreset: googleDocsListPreset(operation.listType),
           range: {
             endIndex: operation.paragraphEndIndex,
             startIndex: operation.paragraphStartIndex
@@ -2433,7 +2590,73 @@ function resolveGoogleDocsEditOperation(
     }
   }
 
+  if (operation.type === 'insert_list' && operation.placement === 'document_end') {
+    const text = `\n${operation.items.join('\n')}`
+    return {
+      insertionIndex: appendInsertionIndex,
+      items: operation.items,
+      listRangeEndIndex: appendInsertionIndex + text.length + 1,
+      listRangeStartIndex: appendInsertionIndex + 1,
+      listType: operation.listType,
+      placement: operation.placement,
+      text,
+      type: 'insert_list'
+    }
+  }
+
+  if (operation.type === 'insert_list') {
+    return resolveGoogleDocsInsertListMatchOperation(indexedBlocks, operation)
+  }
   return resolveTextMatchOperation(indexedBlocks, operation)
+}
+
+function resolveGoogleDocsInsertListMatchOperation(
+  indexedBlocks: IndexedGoogleDocBodyBlock[],
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_list' }>
+): ResolvedGoogleDocsEditOperation {
+  if (operation.placement === 'document_end' || !operation.match) {
+    throw new Error('Google Docs insert_list document_end must be resolved at the body end.')
+  }
+  const matches = indexedBlocks.flatMap((block) =>
+    findBlockMatchCandidates(block, operation.match!)
+  )
+  const occurrence = operation.occurrence ?? 'last'
+  const match = selectTextMatch(matches, occurrence, operation.type)
+  if (match.matchStartIndex === null || match.matchEndIndex === null) {
+    throw new Error('Google Docs insert_list matched text in an unsupported paragraph structure.')
+  }
+  const paragraph = findContainingGoogleDocsParagraph(
+    indexedBlocks,
+    match.matchStartIndex,
+    match.matchEndIndex
+  )
+  if (!paragraph)
+    throw new Error('Google Docs insert_list matched text in an unsupported paragraph structure.')
+  const insertedText = operation.items.join('\n')
+  if (operation.placement === 'before') {
+    const text = `${insertedText}\n`
+    return {
+      insertionIndex: paragraph.startIndex,
+      items: operation.items,
+      listRangeEndIndex: paragraph.startIndex + text.length,
+      listRangeStartIndex: paragraph.startIndex,
+      listType: operation.listType,
+      placement: operation.placement,
+      text,
+      type: 'insert_list'
+    }
+  }
+  const text = `\n${insertedText}`
+  return {
+    insertionIndex: paragraph.endIndex - 1,
+    items: operation.items,
+    listRangeEndIndex: paragraph.endIndex + text.length,
+    listRangeStartIndex: paragraph.endIndex,
+    listType: operation.listType,
+    placement: operation.placement,
+    text,
+    type: 'insert_list'
+  }
 }
 
 function resolveTextMatchOperation(
@@ -2490,6 +2713,25 @@ function resolveTextMatchOperation(
     }
   }
 
+  if (operation.type === 'format_list') {
+    const paragraph = findContainingGoogleDocsParagraph(
+      indexedBlocks,
+      matchStartIndex,
+      matchEndIndex
+    )
+    if (!paragraph) {
+      throw new Error('Google Docs format_list matched text in an unsupported paragraph structure.')
+    }
+    return {
+      listType: operation.listType,
+      match: operation.match,
+      occurrence,
+      paragraphEndIndex: paragraph.endIndex,
+      paragraphStartIndex: paragraph.startIndex,
+      type: 'format_list'
+    }
+  }
+
   if (operation.type === 'insert_after_text') {
     return {
       ...resolvedMatch,
@@ -2520,6 +2762,22 @@ function resolveTextMatchOperation(
     ...resolvedMatch,
     type: 'delete_text'
   }
+}
+
+function findContainingGoogleDocsParagraph(
+  indexedBlocks: IndexedGoogleDocBodyBlock[],
+  matchStartIndex: number,
+  matchEndIndex: number
+): { endIndex: number; startIndex: number } | null {
+  const paragraph = indexedBlocks.find(
+    (block) =>
+      block.startIndex !== null &&
+      block.endIndex !== null &&
+      matchStartIndex >= block.startIndex &&
+      matchEndIndex <= block.endIndex
+  )
+  if (!paragraph || paragraph.startIndex === null || paragraph.endIndex === null) return null
+  return { endIndex: paragraph.endIndex, startIndex: paragraph.startIndex }
 }
 
 function findBlockMatchCandidates(
@@ -2561,7 +2819,7 @@ function getContiguousTextStartIndex(block: IndexedGoogleDocBodyBlock): number |
 function selectTextMatch<T>(
   matches: T[],
   occurrence: GoogleDocsTextOccurrence,
-  operationType: GoogleDocsTextMatchOperation['type']
+  operationType: string
 ): T {
   const match =
     occurrence === 'first'
