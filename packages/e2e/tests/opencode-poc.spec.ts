@@ -308,10 +308,11 @@ test('bundles a valid Google Workspace artifact workflow skill', async () => {
   expect(skill).toContain('artifactRef')
   expect(skill).toContain('nextCursor')
   expect(skill).toContain('discard old cursors')
-  expect(skill).toContain('stale, missing, or invalid')
+  expect(skill).toContain('stale, missing, invalid')
   expect(skill).toContain('first tab')
-  expect(skill).toContain('paragraph')
-  expect(skill).toContain('tables are unsupported')
+  expect(skill).toContain('rich text, native lists, and simple rectangular table cells')
+  expect(skill).toContain('Merged or irregular tables and images are unsupported')
+  expect(skill).toContain('explicit unsupported-table markers')
 })
 
 test('build emits the bundled Google Workspace artifact skill tree', async () => {
@@ -954,23 +955,38 @@ test('persists Google Workspace artifact files with stable product paths', async
 
     expect(persistedDoc).toEqual({
       artifactPath: expectedGoogleDocArtifactPath(documentId),
+      cachedAt: 12345,
       created: true
     })
     expect(persistedSheet).toEqual({
       artifactPath: expectedGoogleSheetArtifactPath(spreadsheetId),
+      cachedAt: 12345,
       created: true
     })
-    expect(
-      JSON.parse(
-        await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
-      )
-    ).toMatchObject({
+    const persistedDocumentPayload = JSON.parse(
+      await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
+    )
+    expect(persistedDocumentPayload).toMatchObject({
       id: documentId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       cachedAt: 12_345,
       title: 'Shared Docs Artifact',
-      type: 'google.doc.document'
+      type: 'google.doc.document',
+      body: {
+        blocks: [
+          {
+            id: 'body-block-1',
+            text: 'Hello shared Docs\n',
+            runs: [{ text: 'Hello shared Docs\n', style: {} }],
+            location: { kind: 'body', bodyIndex: 0 }
+          }
+        ]
+      }
     })
+    const offlineDocument = await store.readGoogleDocDocumentArtifact(
+      `google-docs:v1:${Buffer.from(documentId, 'utf8').toString('base64url')}`
+    )
+    expect(offlineDocument.document.body.blocks).toEqual(persistedDocumentPayload.body.blocks)
     expect(
       JSON.parse(
         await readFile(expectedGoogleSheetArtifactAbsolutePath(projectPath, spreadsheetId), 'utf8')
@@ -987,6 +1003,69 @@ test('persists Google Workspace artifact files with stable product paths', async
     expect(persistedDoc.artifactPath).not.toContain(documentId)
     expect(persistedSheet.artifactPath).not.toContain(spreadsheetId)
     await expect(stat(join(projectPath, '.openkhodam', 'artifacts.json'))).rejects.toThrow()
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejects invalid Google Docs persistence input without changing artifact files', async () => {
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
+  )
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-persistence-validation-'))
+  const projectPath = join(tempRoot, 'project')
+  const documentId = 'validation-doc'
+  const artifactPath = expectedGoogleDocArtifactAbsolutePath(projectPath, documentId)
+  const validDocument = {
+    type: 'google.doc.document' as const,
+    id: documentId,
+    title: 'Valid',
+    revision: 'rev-1',
+    link: null,
+    text: 'Valid text',
+    body: {
+      blocks: [{ id: 'paragraph-1', ordinal: 1, type: 'paragraph' as const, text: 'Valid text' }]
+    }
+  }
+
+  try {
+    await mkdir(projectPath, { recursive: true })
+    const store = new ProjectArtifactsFileStore(projectPath, { now: () => 12_345 })
+    await expect(
+      store.persistGoogleDocDocumentArtifact({
+        ...validDocument,
+        id: 'invalid-new-doc',
+        body: {
+          blocks: [
+            {
+              ...validDocument.body.blocks[0],
+              runs: [],
+              location: { kind: 'body', bodyIndex: -1 }
+            }
+          ]
+        }
+      })
+    ).rejects.toThrow(/rich text is inconsistent|invalid paragraph location/)
+    await expect(
+      stat(expectedGoogleDocArtifactAbsolutePath(projectPath, 'invalid-new-doc'))
+    ).rejects.toThrow()
+
+    await store.persistGoogleDocDocumentArtifact(validDocument)
+    const before = await readFile(artifactPath, 'utf8')
+    await expect(
+      store.persistGoogleDocDocumentArtifact({
+        ...validDocument,
+        body: {
+          blocks: [
+            {
+              ...validDocument.body.blocks[0],
+              runs: [{ text: 'mismatch', style: { bold: 'true' } }]
+            }
+          ]
+        }
+      })
+    ).rejects.toThrow(/invalid rich text style/)
+    await expect(readFile(artifactPath, 'utf8')).resolves.toBe(before)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
@@ -1547,6 +1626,8 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     const output = JSON.parse(
       await executeGoogleWorkspaceCommand(plugin, 'google.docs.read', { documentId: ' doc-1 ' }, {})
     ) as {
+      artifactRef: string
+      artifactSync: Record<string, unknown>
       document: Record<string, unknown>
     }
 
@@ -1558,11 +1639,12 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     expect(tokenParams.get('refresh_token')).toBe('refresh-token')
     expect(docsAuthorization).toBe('Bearer new-docs-access-token')
     expect(docsUrl?.pathname).toBe('/v1/documents/doc-1')
-    expect(docsUrl?.searchParams.get('fields')).toBe(
-      'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content))),table(tableRows(tableCells(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))))))'
-    )
+    expect(docsUrl?.searchParams.get('fields')).toContain('lists(listProperties(nestingLevels')
+    expect(docsUrl?.searchParams.get('fields')).toContain('textStyle(')
+    expect(docsUrl?.searchParams.get('fields')).toContain('paragraphStyle(')
     expect(output).toEqual({
       artifactRef: null,
+      artifactSync: { status: 'unavailable', reason: 'project_context_missing' },
       document: {
         type: 'google.doc.document',
         id: 'doc-1',
@@ -1573,16 +1655,20 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
         body: {
           blocks: [
             {
-              id: 'body-block-1',
+              id: 'paragraph-1',
               ordinal: 1,
               type: 'paragraph',
-              text: 'Hello Docs\n'
+              text: 'Hello Docs\n',
+              runs: [{ text: 'Hello Docs\n', style: {} }],
+              location: { kind: 'body', bodyIndex: 0 }
             },
             {
-              id: 'body-block-2',
+              id: 'paragraph-2',
               ordinal: 2,
               type: 'paragraph',
-              text: 'Second line\n'
+              text: 'Second line\n',
+              runs: [{ text: 'Second line\n', style: {} }],
+              location: { kind: 'body', bodyIndex: 1 }
             }
           ]
         },
@@ -3299,7 +3385,7 @@ test('refreshes full Google Docs artifacts after successful append_text edits', 
     expect(fullArtifact).toMatchObject({
       id: documentId,
       revision: 'rev-artifact-after',
-      schemaVersion: 1,
+      schemaVersion: 2,
       text: updatedText,
       title: 'Edited Artifact Target'
     })
@@ -4544,10 +4630,32 @@ test('Google Docs insert_table stages native table creation and cell population'
     const artifact = JSON.parse(
       await readFile(expectedGoogleDocArtifactAbsolutePath(userDataPath, 'table-doc'), 'utf8')
     ) as { body: { blocks: Array<{ ordinal: number; text: string }> } }
-    expect(artifact.body.blocks).toMatchObject([
-      { ordinal: 1, text: 'target\n' },
-      { ordinal: 3, text: 'after table\n' }
-    ])
+    expect(artifact.body.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ordinal: 1,
+          text: 'target\n',
+          location: { kind: 'body', bodyIndex: 0 }
+        }),
+        expect.objectContaining({
+          ordinal: 2,
+          text: '\n',
+          location: {
+            kind: 'unsupported-table',
+            tableIndex: 1,
+            reason: 'merged-or-irregular',
+            rowIndex: 0,
+            columnIndex: 0,
+            paragraphIndex: 0
+          }
+        }),
+        expect.objectContaining({
+          ordinal: 6,
+          text: 'after table\n',
+          location: { kind: 'body', bodyIndex: 2 }
+        })
+      ])
+    )
     const offline = JSON.parse(
       await executeGoogleWorkspaceCommand(
         plugin,
@@ -4560,14 +4668,41 @@ test('Google Docs insert_table stages native table creation and cell population'
       returnedBlocks: Array<{ ordinal: number; text: string }>
     }
     expect(offline.coverage).toEqual({
-      firstTabOnly: true,
-      paragraphsOnly: true,
-      tablesUnsupported: true
+      richText: true,
+      lists: true,
+      simpleTables: true,
+      mergedOrIrregularTables: false,
+      unsupportedTableStructures: { present: true, count: 1 },
+      images: false,
+      firstTabOnly: true
     })
-    expect(offline.returnedBlocks).toEqual([
-      { id: 'body-block-1', ordinal: 1, text: 'target\n', type: 'paragraph' },
-      { id: 'body-block-3', ordinal: 3, text: 'after table\n', type: 'paragraph' }
-    ])
+    expect(offline.returnedBlocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'paragraph-1',
+          ordinal: 1,
+          text: 'target\n',
+          type: 'paragraph'
+        }),
+        expect.objectContaining({
+          id: 'paragraph-2',
+          ordinal: 2,
+          text: '\n',
+          type: 'paragraph',
+          location: expect.objectContaining({
+            kind: 'unsupported-table',
+            rowIndex: 0,
+            columnIndex: 0
+          })
+        }),
+        expect.objectContaining({
+          id: 'paragraph-6',
+          ordinal: 6,
+          text: 'after table\n',
+          type: 'paragraph'
+        })
+      ])
+    )
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
@@ -5277,7 +5412,7 @@ test('logs sanitized Google Docs batchUpdate failures after direct append_text e
       ],
       writeControl: { requiredRevisionId: 'rev-before-conflict' }
     })
-    expect(warnings).toEqual([
+    expect(warnings.slice(-2)).toEqual([
       [
         'Google Workspace API request failed',
         {
@@ -5466,7 +5601,31 @@ test('bounds Google Docs read previews while persisting the full normalized arti
       },
       text: 'Preview without session'
     })
-    await expect(stat(join(noSessionProjectPath, '.openkhodam'))).rejects.toThrow()
+    expect(noSessionOutput.artifactRef).toBe(
+      `google-docs:v1:${Buffer.from(noSessionDocumentId).toString('base64url')}`
+    )
+    expect(noSessionOutput.artifactSync).toMatchObject({
+      artifactRef: noSessionOutput.artifactRef,
+      linked: false,
+      providerRevision: 'rev-no-session',
+      status: 'synced'
+    })
+    const noSessionArtifact = JSON.parse(
+      await readFile(
+        expectedGoogleDocArtifactAbsolutePath(noSessionProjectPath, noSessionDocumentId),
+        'utf8'
+      )
+    )
+    expect(noSessionOutput.artifactSync.cachedAt).toBe(noSessionArtifact.cachedAt)
+    const noSessionOffline = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: noSessionOutput.artifactRef },
+        { directory: noSessionProjectPath }
+      )
+    )
+    expect(noSessionOffline.returnedBlocks).toMatchObject([{ text: 'Preview without session\n' }])
 
     const textCapArtifactPath = expectedGoogleDocArtifactAbsolutePath(
       projectPath,
@@ -5478,7 +5637,7 @@ test('bounds Google Docs read previews while persisting the full normalized arti
       schemaVersion: unknown
       text: string
     }
-    expect(fullTextCapArtifact.schemaVersion).toBe(1)
+    expect(fullTextCapArtifact.schemaVersion).toBe(2)
     expect(typeof fullTextCapArtifact.cachedAt).toBe('number')
     expect(fullTextCapArtifact.text).toHaveLength(17_500)
     expect(fullTextCapArtifact.body.blocks).toHaveLength(25)
@@ -5606,9 +5765,13 @@ test('persists Google Docs reads and serves complete offline pagination without 
         totalTextLength: number
       }
       expect(page.coverage).toEqual({
-        firstTabOnly: true,
-        paragraphsOnly: true,
-        tablesUnsupported: true
+        richText: true,
+        lists: true,
+        simpleTables: true,
+        mergedOrIrregularTables: false,
+        unsupportedTableStructures: { present: false, count: 0 },
+        images: false,
+        firstTabOnly: true
       })
       if (page.nextCursor) {
         expect(page.nextAction).toEqual({
@@ -5787,7 +5950,7 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
     '../../desktop/src/main/integrations/project-artifacts'
   )
   const ref = (id: string) => `google-docs:v1:${Buffer.from(id, 'utf8').toString('base64url')}`
-  const valid = (id: string, blocks: string[]) => ({
+  const validV2 = (id: string, blocks: string[]) => ({
     type: 'google.doc.document' as const,
     id,
     title: id,
@@ -5796,18 +5959,20 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
     text: blocks.join('').trimEnd(),
     body: {
       blocks: blocks.map((text, index) => ({
-        id: `body-block-${index + 1}`,
+        id: `paragraph-${index + 1}`,
         ordinal: index,
         type: 'paragraph' as const,
-        text
+        text,
+        runs: [{ text, style: {} }],
+        location: { kind: 'body' as const, bodyIndex: index }
       }))
     }
   })
   await mkdir(projectPath, { recursive: true })
   const store = new ProjectArtifactsFileStore(projectPath, { now: () => 1234 })
-  await store.persistGoogleDocDocumentArtifact(valid('cursor-doc', ['A😀B', '', 'C']))
-  await store.persistGoogleDocDocumentArtifact(valid('other-doc', ['Other']))
-  await store.persistGoogleDocDocumentArtifact(valid('empty-doc', []))
+  await store.persistGoogleDocDocumentArtifact(validV2('cursor-doc', ['A😀B', '', 'C']))
+  await store.persistGoogleDocDocumentArtifact(validV2('other-doc', ['Other']))
+  await store.persistGoogleDocDocumentArtifact(validV2('empty-doc', []))
   globalThis.fetch = (async () => {
     throw new Error('offline success and failure paths must not fetch')
   }) as typeof fetch
@@ -5831,9 +5996,30 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
       )
     ) as { returnedBlocks: Array<{ id: string; ordinal: number; text: string }> }
     expect(second.returnedBlocks).toEqual([
-      { id: 'body-block-1', ordinal: 0, type: 'paragraph', text: 'B' },
-      { id: 'body-block-2', ordinal: 1, type: 'paragraph', text: '' },
-      { id: 'body-block-3', ordinal: 2, type: 'paragraph', text: 'C' }
+      {
+        id: 'paragraph-1',
+        ordinal: 0,
+        type: 'paragraph',
+        text: 'B',
+        runs: [{ text: 'B', style: {} }],
+        location: { kind: 'body', bodyIndex: 0 }
+      },
+      {
+        id: 'paragraph-2',
+        ordinal: 1,
+        type: 'paragraph',
+        text: '',
+        runs: [],
+        location: { kind: 'body', bodyIndex: 1 }
+      },
+      {
+        id: 'paragraph-3',
+        ordinal: 2,
+        type: 'paragraph',
+        text: 'C',
+        runs: [{ text: 'C', style: {} }],
+        location: { kind: 'body', bodyIndex: 2 }
+      }
     ])
     const empty = JSON.parse(
       await executeGoogleWorkspaceCommand(
@@ -5855,7 +6041,7 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
       )
     ).rejects.toThrow('cursor is stale')
     const beforeRefresh = await store.readGoogleDocDocumentArtifact(ref('cursor-doc'))
-    await store.persistGoogleDocDocumentArtifact(valid('cursor-doc', ['Changed']))
+    await store.persistGoogleDocDocumentArtifact(validV2('cursor-doc', ['Changed']))
     const afterRefresh = await store.readGoogleDocDocumentArtifact(ref('cursor-doc'))
     expect(beforeRefresh.document.cachedAt).toBe(afterRefresh.document.cachedAt)
     expect(beforeRefresh.snapshotId).not.toBe(afterRefresh.snapshotId)
@@ -5894,13 +6080,42 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
       ['corrupt JSON', '{', /cache is corrupt/],
       [
         'unsupported schema',
-        { ...JSON.parse(originalPayload), schemaVersion: 2 },
+        { ...JSON.parse(originalPayload), schemaVersion: 3 },
         /unsupported schema/
       ],
       [
         'wrong type',
         { ...JSON.parse(originalPayload), type: 'google.sheet.spreadsheet' },
         /wrong payload type/
+      ],
+      ...(['title', 'revision', 'link'] as const).flatMap(
+        (field) =>
+          [
+            [
+              `missing v2 ${field}`,
+              (() => {
+                const payload = JSON.parse(originalPayload)
+                delete payload[field]
+                return payload
+              })(),
+              /invalid v2 envelope/
+            ],
+            [
+              `object v2 ${field}`,
+              { ...JSON.parse(originalPayload), [field]: {} },
+              /invalid v2 envelope/
+            ]
+          ] as Array<[string, unknown, RegExp]>
+      ),
+      [
+        'fractional v2 cachedAt',
+        { ...JSON.parse(originalPayload), cachedAt: 1.5 },
+        /invalid document ID or body/
+      ],
+      [
+        'negative v2 cachedAt',
+        { ...JSON.parse(originalPayload), cachedAt: -1 },
+        /invalid document ID or body/
       ],
       ['missing ID', { ...JSON.parse(originalPayload), id: '' }, /invalid document ID or body/],
       [
@@ -5919,8 +6134,22 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
           ...JSON.parse(originalPayload),
           body: {
             blocks: [
-              { id: 'body-block-3', ordinal: 3, type: 'paragraph', text: 'A😀B' },
-              { id: 'body-block-1', ordinal: 1, type: 'paragraph', text: 'C' }
+              {
+                id: 'paragraph-3',
+                ordinal: 3,
+                type: 'paragraph',
+                text: 'A😀B',
+                runs: [{ text: 'A😀B', style: {} }],
+                location: { kind: 'body', bodyIndex: 0 }
+              },
+              {
+                id: 'paragraph-1',
+                ordinal: 1,
+                type: 'paragraph',
+                text: 'C',
+                runs: [{ text: 'C', style: {} }],
+                location: { kind: 'body', bodyIndex: 1 }
+              }
             ]
           }
         },
@@ -5932,8 +6161,22 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
           ...JSON.parse(originalPayload),
           body: {
             blocks: [
-              { id: 'body-block-1', ordinal: 1, type: 'paragraph', text: 'A😀B' },
-              { id: 'body-block-1b', ordinal: 1, type: 'paragraph', text: 'C' }
+              {
+                id: 'paragraph-1',
+                ordinal: 1,
+                type: 'paragraph',
+                text: 'A😀B',
+                runs: [{ text: 'A😀B', style: {} }],
+                location: { kind: 'body', bodyIndex: 0 }
+              },
+              {
+                id: 'paragraph-1b',
+                ordinal: 1,
+                type: 'paragraph',
+                text: 'C',
+                runs: [{ text: 'C', style: {} }],
+                location: { kind: 'body', bodyIndex: 1 }
+              }
             ]
           }
         },
@@ -5944,7 +6187,16 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
         {
           ...JSON.parse(originalPayload),
           body: {
-            blocks: [{ id: 'body-block-negative', ordinal: -1, type: 'paragraph', text: 'A😀BC' }]
+            blocks: [
+              {
+                id: 'paragraph-negative',
+                ordinal: -1,
+                type: 'paragraph',
+                text: 'A😀BC',
+                runs: [{ text: 'A😀BC', style: {} }],
+                location: { kind: 'body', bodyIndex: 0 }
+              }
+            ]
           }
         },
         /invalid paragraph block ordering/
@@ -5954,11 +6206,431 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
         {
           ...JSON.parse(originalPayload),
           body: {
-            blocks: [{ id: 'body-block-fraction', ordinal: 1.5, type: 'paragraph', text: 'A😀BC' }]
+            blocks: [
+              {
+                id: 'paragraph-fraction',
+                ordinal: 1.5,
+                type: 'paragraph',
+                text: 'A😀BC',
+                runs: [{ text: 'A😀BC', style: {} }],
+                location: { kind: 'body', bodyIndex: 0 }
+              }
+            ]
           }
         },
         /invalid paragraph block ordering/
-      ]
+      ],
+      ...[
+        [
+          'unknown envelope property',
+          (payload: any) => ({ ...payload, unexpected: true }),
+          /invalid payload/
+        ],
+        [
+          'unknown body property',
+          (payload: any) => ({ ...payload, body: { ...payload.body, unexpected: true } }),
+          /invalid body/
+        ],
+        [
+          'unknown block property',
+          (payload: any) => ({
+            ...payload,
+            body: { blocks: [{ ...payload.body.blocks[0], unexpected: true }] }
+          }),
+          /invalid paragraph block/
+        ],
+        [
+          'runs wrong type',
+          (payload: any) => ({
+            ...payload,
+            body: { blocks: [{ ...payload.body.blocks[0], runs: {} }] }
+          }),
+          /invalid rich text runs/
+        ],
+        [
+          'unknown run property',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], unexpected: true }]
+                }
+              ]
+            }
+          }),
+          /invalid rich text run/
+        ],
+        [
+          'run text wrong type',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], text: 1 }]
+                }
+              ]
+            }
+          }),
+          /invalid rich text runs/
+        ],
+        [
+          'run text mismatch',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], text: 'wrong' }]
+                }
+              ]
+            }
+          }),
+          /rich text is inconsistent/
+        ],
+        [
+          'run style wrong type',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], style: null }]
+                }
+              ]
+            }
+          }),
+          /invalid rich text runs/
+        ],
+        [
+          'unknown style property',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], style: { unexpected: true } }]
+                }
+              ]
+            }
+          }),
+          /invalid rich text style/
+        ],
+        [
+          'style boolean wrong type',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], style: { bold: 'true' } }]
+                }
+              ]
+            }
+          }),
+          /invalid rich text style/
+        ],
+        [
+          'style link wrong type',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], style: { linkUrl: 1 } }]
+                }
+              ]
+            }
+          }),
+          /invalid rich text style/
+        ],
+        [
+          'style font wrong type',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], style: { fontFamily: 1 } }]
+                }
+              ]
+            }
+          }),
+          /invalid rich text style/
+        ],
+        [
+          'style font size invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [{ ...payload.body.blocks[0].runs[0], style: { fontSizePt: 0 } }]
+                }
+              ]
+            }
+          }),
+          /invalid rich text style/
+        ],
+        [
+          'style color malformed',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  runs: [
+                    { ...payload.body.blocks[0].runs[0], style: { foregroundColor: '#abcdef' } }
+                  ]
+                }
+              ]
+            }
+          }),
+          /invalid rich text style/
+        ],
+        [
+          'paragraph style unknown property',
+          (payload: any) => ({
+            ...payload,
+            body: { blocks: [{ ...payload.body.blocks[0], paragraphStyle: { unexpected: true } }] }
+          }),
+          /invalid paragraph style/
+        ],
+        [
+          'paragraph alignment invalid',
+          (payload: any) => ({
+            ...payload,
+            body: { blocks: [{ ...payload.body.blocks[0], paragraphStyle: { alignment: 'LEFT' } }] }
+          }),
+          /invalid paragraph style/
+        ],
+        [
+          'paragraph range invalid',
+          (payload: any) => ({
+            ...payload,
+            body: { blocks: [{ ...payload.body.blocks[0], paragraphStyle: { spaceAbovePt: -1 } }] }
+          }),
+          /invalid paragraph style/
+        ],
+        [
+          'list wrong type',
+          (payload: any) => ({
+            ...payload,
+            body: { blocks: [{ ...payload.body.blocks[0], list: [] }] }
+          }),
+          /invalid list metadata/
+        ],
+        [
+          'list unknown property',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  list: { listId: 'list', nestingLevel: 0, kind: 'bullet', unexpected: true }
+                }
+              ]
+            }
+          }),
+          /invalid list metadata/
+        ],
+        [
+          'list kind invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  list: { listId: 'list', nestingLevel: 0, kind: 'bad' }
+                }
+              ]
+            }
+          }),
+          /invalid list metadata/
+        ],
+        [
+          'list id invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                { ...payload.body.blocks[0], list: { listId: '', nestingLevel: 0, kind: 'bullet' } }
+              ]
+            }
+          }),
+          /invalid list metadata/
+        ],
+        [
+          'list nesting invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  list: { listId: 'list', nestingLevel: -1, kind: 'bullet' }
+                }
+              ]
+            }
+          }),
+          /invalid list metadata/
+        ],
+        [
+          'list glyph invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  list: { listId: 'list', nestingLevel: 0, kind: 'bullet', glyphType: 1 }
+                }
+              ]
+            }
+          }),
+          /invalid list metadata/
+        ],
+        [
+          'location wrong type',
+          (payload: any) => ({
+            ...payload,
+            body: { blocks: [{ ...payload.body.blocks[0], location: null }] }
+          }),
+          /invalid paragraph location/
+        ],
+        [
+          'location unknown property',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  location: { kind: 'body', bodyIndex: 0, unexpected: true }
+                }
+              ]
+            }
+          }),
+          /invalid paragraph location/
+        ],
+        [
+          'body location invalid offset',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [{ ...payload.body.blocks[0], location: { kind: 'body', bodyIndex: -1 } }]
+            }
+          }),
+          /invalid paragraph location/
+        ],
+        [
+          'table cell coordinates invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  location: {
+                    kind: 'table-cell',
+                    tableIndex: 0,
+                    rowIndex: 1,
+                    columnIndex: 0,
+                    paragraphIndex: 0,
+                    rowCount: 1,
+                    columnCount: 1
+                  }
+                }
+              ]
+            }
+          }),
+          /invalid paragraph location/
+        ],
+        [
+          'table cell dimensions invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  location: {
+                    kind: 'table-cell',
+                    tableIndex: 0,
+                    rowIndex: 0,
+                    columnIndex: 0,
+                    paragraphIndex: 0,
+                    rowCount: 0,
+                    columnCount: 1
+                  }
+                }
+              ]
+            }
+          }),
+          /invalid paragraph location/
+        ],
+        [
+          'unsupported location reason invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  location: {
+                    kind: 'unsupported-table',
+                    tableIndex: 0,
+                    reason: 'bad',
+                    rowIndex: 0,
+                    columnIndex: 0,
+                    paragraphIndex: 0
+                  }
+                }
+              ]
+            }
+          }),
+          /invalid paragraph location/
+        ],
+        [
+          'unsupported location offsets invalid',
+          (payload: any) => ({
+            ...payload,
+            body: {
+              blocks: [
+                {
+                  ...payload.body.blocks[0],
+                  location: {
+                    kind: 'unsupported-table',
+                    tableIndex: 0,
+                    reason: 'merged-or-irregular',
+                    rowIndex: -1,
+                    columnIndex: 0,
+                    paragraphIndex: 0
+                  }
+                }
+              ]
+            }
+          }),
+          /invalid paragraph location/
+        ]
+      ].map(([name, mutate, expected]) => [
+        name as string,
+        (mutate as (payload: any) => unknown)(JSON.parse(originalPayload)),
+        expected as RegExp
+      ])
     ]
     for (const [, payload, expected] of cases) {
       await writeFile(
@@ -5987,6 +6659,443 @@ test('validates Google Docs offline artifact cursor and cache failure contracts 
     ).rejects.toThrow('cache is missing')
   } finally {
     globalThis.fetch = originalFetch
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('reads persisted schema v1 Google Docs artifacts with limited truthful coverage', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-v1-artifact-'))
+  const projectPath = join(tempRoot, 'project')
+  const documentId = 'legacy-doc'
+  const artifactRef = `google-docs:v1:${Buffer.from(documentId, 'utf8').toString('base64url')}`
+  await mkdir(projectPath, { recursive: true })
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
+  )
+  const store = new ProjectArtifactsFileStore(projectPath)
+  await store.persistGoogleDocDocumentArtifact({
+    type: 'google.doc.document',
+    id: documentId,
+    title: 'Legacy',
+    revision: 'legacy-rev',
+    link: null,
+    text: 'Legacy text',
+    body: { blocks: [{ id: 'paragraph-1', ordinal: 1, type: 'paragraph', text: 'Legacy text' }] }
+  })
+  const cachePath = expectedGoogleDocArtifactAbsolutePath(projectPath, documentId)
+  const persisted = JSON.parse(await readFile(cachePath, 'utf8'))
+  persisted.schemaVersion = 1
+  persisted.cachedAt = 1.5
+  persisted.title = { legacy: true }
+  persisted.revision = false
+  persisted.link = []
+  delete persisted.body.blocks[0].runs
+  delete persisted.body.blocks[0].location
+  await writeFile(cachePath, JSON.stringify(persisted), 'utf8')
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const result = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef },
+        { directory: projectPath }
+      )
+    ) as { coverage: unknown; returnedBlocks: Array<{ text: string }> }
+    expect(result.coverage).toEqual({
+      richText: false,
+      lists: false,
+      simpleTables: false,
+      mergedOrIrregularTables: false,
+      unsupportedTableStructures: { present: false, count: 0 },
+      images: false,
+      firstTabOnly: true
+    })
+    expect(result.returnedBlocks).toEqual([
+      { id: 'paragraph-1', ordinal: 1, type: 'paragraph', text: 'Legacy text' }
+    ])
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('preserves rich Google Docs semantic blocks and Unicode-styled pagination fragments', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-rich-artifact-'))
+  const projectPath = join(tempRoot, 'project')
+  const documentId = 'rich-doc'
+  const artifactRef = `google-docs:v1:${Buffer.from(documentId, 'utf8').toString('base64url')}`
+  await mkdir(projectPath, { recursive: true })
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
+  )
+  const blocks = [
+    {
+      id: 'paragraph-1',
+      ordinal: 1,
+      type: 'paragraph' as const,
+      text: 'A😀BC\n',
+      runs: [
+        {
+          text: 'A😀',
+          style: {
+            bold: true,
+            italic: true,
+            underline: true,
+            strikethrough: true,
+            fontFamily: 'Arial',
+            fontSizePt: 12,
+            foregroundColor: '#112233',
+            backgroundColor: '#445566',
+            linkUrl: 'https://example.com'
+          }
+        },
+        { text: 'BC\n', style: {} }
+      ],
+      paragraphStyle: {
+        namedStyle: 'HEADING_1',
+        alignment: 'CENTER',
+        lineSpacingPercent: 120,
+        spaceAbovePt: 8,
+        spaceBelowPt: 6
+      },
+      location: { kind: 'body' as const, bodyIndex: 0 }
+    },
+    {
+      id: 'paragraph-2',
+      ordinal: 2,
+      type: 'paragraph' as const,
+      text: 'Nested\n',
+      runs: [{ text: 'Nested\n', style: {} }],
+      list: {
+        listId: 'bullet-list',
+        nestingLevel: 1,
+        kind: 'bullet' as const,
+        glyphSymbol: '•'
+      },
+      location: { kind: 'body' as const, bodyIndex: 1 }
+    },
+    {
+      id: 'paragraph-3',
+      ordinal: 3,
+      type: 'paragraph' as const,
+      text: 'Cell\n',
+      runs: [{ text: 'Cell\n', style: {} }],
+      list: {
+        listId: 'unknown-list',
+        nestingLevel: 0,
+        kind: 'unknown' as const,
+        glyphType: 'UNSUPPORTED',
+        glyphSymbol: '¤'
+      },
+      location: {
+        kind: 'table-cell' as const,
+        tableIndex: 2,
+        rowIndex: 0,
+        columnIndex: 1,
+        paragraphIndex: 0,
+        rowCount: 1,
+        columnCount: 2
+      }
+    }
+  ]
+  const store = new ProjectArtifactsFileStore(projectPath)
+  await store.persistGoogleDocDocumentArtifact({
+    type: 'google.doc.document',
+    id: documentId,
+    title: 'Rich',
+    revision: 'rich-rev',
+    link: null,
+    text: blocks
+      .map((block) => block.text)
+      .join('')
+      .trimEnd(),
+    body: { blocks }
+  })
+  const persisted = JSON.parse(
+    await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
+  )
+  expect(persisted.schemaVersion).toBe(2)
+  expect(persisted.body.blocks).toEqual(blocks)
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    let cursor: string | undefined
+    const returned: typeof blocks = []
+    do {
+      const page = JSON.parse(
+        await executeGoogleWorkspaceCommand(
+          plugin,
+          'google.artifacts.read',
+          { artifactRef, cursor, maxBlocks: 1, maxCharacters: 2 },
+          { directory: projectPath }
+        )
+      ) as { nextCursor: string | null; returnedBlocks: typeof blocks }
+      returned.push(...page.returnedBlocks)
+      cursor = page.nextCursor ?? undefined
+    } while (cursor)
+    expect(returned.map((block) => block.text).join('')).toBe(
+      blocks.map((block) => block.text).join('')
+    )
+    expect(
+      returned
+        .flatMap((block) => block.runs ?? [])
+        .map((run) => run.text)
+        .join('')
+    ).toBe(
+      blocks
+        .flatMap((block) => block.runs)
+        .map((run) => run.text)
+        .join('')
+    )
+    expect(returned[0]).toMatchObject({
+      text: 'A😀',
+      runs: [{ text: 'A😀', style: blocks[0].runs[0].style }]
+    })
+    expect(returned).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ list: blocks[1].list }),
+        expect.objectContaining({ list: blocks[2].list, location: blocks[2].location })
+      ])
+    )
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('normalizes provider-shaped rich Docs responses through persisted offline artifacts', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-provider-rich-docs-'))
+  const userDataPath = join(tempRoot, 'user-data')
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(userDataPath, 'openkhodam-config.json')
+  const documentId = 'provider-rich-doc'
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  let fields: string | null = null
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'provider-rich-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    fields = url.searchParams.get('fields')
+    expect(new Headers(init?.headers).get('authorization')).toBe(
+      'Bearer provider-rich-access-token'
+    )
+    return new Response(
+      JSON.stringify({
+        documentId,
+        title: 'Provider rich document',
+        revisionId: 'provider-rich-rev',
+        lists: {
+          bullet: {
+            listProperties: { nestingLevels: [{ glyphType: 'BULLET', glyphSymbol: '•' }] }
+          },
+          numbered: {
+            listProperties: { nestingLevels: [{ glyphType: 'DECIMAL', glyphSymbol: '%0.' }] }
+          },
+          checkbox: {
+            listProperties: { nestingLevels: [{ glyphType: 'BULLET', glyphSymbol: '❏' }] }
+          },
+          unknown: { listProperties: { nestingLevels: [{ glyphType: 'CUSTOM', glyphSymbol: '' }] } }
+        },
+        body: {
+          content: [
+            {
+              paragraph: {
+                bullet: { listId: 'bullet', nestingLevel: 0 },
+                paragraphStyle: {
+                  namedStyleType: 'HEADING_1',
+                  alignment: 'CENTER',
+                  lineSpacing: 120,
+                  spaceAbove: { magnitude: 0, unit: 'PT' },
+                  spaceBelow: { magnitude: 0, unit: 'PT' }
+                },
+                elements: [
+                  {
+                    textRun: {
+                      content: 'Styled\n',
+                      textStyle: {
+                        bold: true,
+                        italic: false,
+                        underline: true,
+                        strikethrough: false,
+                        weightedFontFamily: { fontFamily: 'Arial' },
+                        fontSize: { magnitude: 12, unit: 'PT' },
+                        foregroundColor: { color: { rgbColor: { red: 1 } } },
+                        backgroundColor: { color: { rgbColor: {} } },
+                        link: { url: 'https://example.test/' }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            ...['numbered', 'checkbox', 'unknown'].map((listId) => ({
+              paragraph: {
+                bullet: { listId, nestingLevel: 0 },
+                elements: [{ textRun: { content: `${listId}\n` } }]
+              }
+            })),
+            {
+              table: {
+                rows: 1,
+                columns: 2,
+                tableRows: [
+                  {
+                    tableCells: [
+                      {
+                        tableCellStyle: { rowSpan: 1, columnSpan: 1 },
+                        content: [{ paragraph: { elements: [{ textRun: { content: 'A\n' } }] } }]
+                      },
+                      {
+                        tableCellStyle: { rowSpan: 1, columnSpan: 1 },
+                        content: [{ paragraph: { elements: [{ textRun: { content: 'B\n' } }] } }]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              table: {
+                rows: 1,
+                columns: 2,
+                tableRows: [
+                  {
+                    tableCells: [
+                      {
+                        tableCellStyle: { rowSpan: 1, columnSpan: 2 },
+                        content: [
+                          { paragraph: { elements: [{ textRun: { content: 'Merged\n' } }] } }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const online = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId },
+        { directory: projectPath }
+      )
+    ) as { artifactRef: string; document: { body: { blocks: Array<Record<string, unknown>> } } }
+    expect(fields).toContain('rows,columns,tableRows(tableCells(tableCellStyle(rowSpan,columnSpan)')
+    expect(fields).toContain(
+      'textStyle(bold,italic,underline,strikethrough,weightedFontFamily,fontSize,foregroundColor,backgroundColor,link)'
+    )
+    expect(fields).toContain(
+      'paragraphStyle(namedStyleType,alignment,lineSpacing,spaceAbove,spaceBelow)'
+    )
+    expect(fields).toContain('bullet(listId,nestingLevel)')
+    expect(fields).toContain('lists(listProperties(nestingLevels(glyphType,glyphSymbol)))')
+    expect(online.document.body.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: 'Styled\n',
+          runs: [
+            {
+              text: 'Styled\n',
+              style: expect.objectContaining({
+                bold: true,
+                italic: false,
+                strikethrough: false,
+                foregroundColor: '#FF0000',
+                backgroundColor: '#000000',
+                linkUrl: 'https://example.test/'
+              })
+            }
+          ],
+          paragraphStyle: expect.objectContaining({ spaceAbovePt: 0, spaceBelowPt: 0 })
+        }),
+        expect.objectContaining({
+          text: 'numbered\n',
+          list: expect.objectContaining({ kind: 'numbered' })
+        }),
+        expect.objectContaining({
+          text: 'checkbox\n',
+          list: expect.objectContaining({ kind: 'checkbox' })
+        }),
+        expect.objectContaining({
+          text: 'unknown\n',
+          list: expect.objectContaining({ kind: 'unknown' })
+        }),
+        expect.objectContaining({
+          text: 'A\n',
+          location: {
+            kind: 'table-cell',
+            tableIndex: 4,
+            rowIndex: 0,
+            columnIndex: 0,
+            paragraphIndex: 0,
+            rowCount: 1,
+            columnCount: 2
+          }
+        }),
+        expect.objectContaining({
+          text: 'B\n',
+          location: {
+            kind: 'table-cell',
+            tableIndex: 4,
+            rowIndex: 0,
+            columnIndex: 1,
+            paragraphIndex: 0,
+            rowCount: 1,
+            columnCount: 2
+          }
+        }),
+        expect.objectContaining({
+          text: 'Merged\n',
+          location: {
+            kind: 'unsupported-table',
+            tableIndex: 5,
+            reason: 'merged-or-irregular',
+            rowIndex: 0,
+            columnIndex: 0,
+            paragraphIndex: 0
+          }
+        })
+      ])
+    )
+    const persisted = JSON.parse(
+      await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
+    )
+    expect(persisted.schemaVersion).toBe(2)
+    const offline = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: online.artifactRef, maxBlocks: 100 },
+        { directory: projectPath }
+      )
+    ) as {
+      coverage: { unsupportedTableStructures: { count: number; present: boolean } }
+      returnedBlocks: Array<Record<string, unknown>>
+    }
+    expect(offline.coverage.unsupportedTableStructures).toEqual({ present: true, count: 1 })
+    expect(offline.returnedBlocks).toEqual(online.document.body.blocks)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(tempRoot, { recursive: true, force: true })
   }
 })
@@ -6107,8 +7216,19 @@ test('records linked Google Docs from directory context when worktree is root-li
         context
       )
     ) as {
+      artifactRef: string
+      artifactSync: Record<string, unknown>
       document: Record<string, unknown>
     }
+    expect(firstOutput.artifactRef).toBe(
+      `google-docs:v1:${Buffer.from('doc-1').toString('base64url')}`
+    )
+    expect(firstOutput.artifactSync).toMatchObject({
+      artifactRef: firstOutput.artifactRef,
+      linked: true,
+      providerRevision: 'rev-1',
+      status: 'synced'
+    })
     expect(firstOutput.document).toMatchObject({
       id: 'doc-1',
       link: 'https://docs.google.com/document/d/doc-1/edit',
@@ -6146,10 +7266,13 @@ test('records linked Google Docs from directory context when worktree is root-li
       },
       id: 'doc-1',
       revision: 'rev-1',
-      schemaVersion: 1,
+      schemaVersion: 2,
       text: 'Hello Docs 1',
       title: 'Docs Plan'
     })
+    expect(firstOutput.artifactSync.cachedAt).toBe(
+      JSON.parse(await readFile(fullArtifactPath, 'utf8')).cachedAt
+    )
 
     const secondOutput = JSON.parse(
       await executeGoogleWorkspaceCommand(
@@ -6170,7 +7293,7 @@ test('records linked Google Docs from directory context when worktree is root-li
     expect(JSON.parse(await readFile(fullArtifactPath, 'utf8'))).toMatchObject({
       id: 'doc-1',
       revision: 'rev-2',
-      schemaVersion: 1,
+      schemaVersion: 2,
       text: 'Hello Docs 2',
       title: 'Updated Docs Plan'
     })
@@ -6345,7 +7468,7 @@ test('records tool-call message provenance for linked Google Docs and Sheets art
   }
 })
 
-test('cleans up full Google Doc artifacts when session index recording fails', async () => {
+test('retains full Google Doc artifacts when session index recording fails', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-index-failure-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project-path-should-not-log')
@@ -6408,6 +7531,8 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
         { directory: projectPath, sessionID: 'session-1' }
       )
     ) as {
+      artifactRef: string | null
+      artifactSync: Record<string, unknown>
       document: Record<string, unknown>
     }
 
@@ -6427,7 +7552,6 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
       [
         'Failed to record linked Google Doc artifact',
         {
-          artifactCleanedUp: true,
           docId: 'doc-index-failure',
           reason: 'artifact_record_failed',
           sessionId: 'session-1'
@@ -6442,9 +7566,21 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
     expect(warningText).not.toContain('EACCES')
     expect(warningText).not.toContain(tempRoot)
     expect(warningText).not.toContain(projectPath)
-    await expect(
-      stat(expectedGoogleDocArtifactAbsolutePath(projectPath, 'doc-index-failure'))
-    ).rejects.toThrow()
+    expect(output.artifactRef).toBe(
+      `google-docs:v1:${Buffer.from('doc-index-failure').toString('base64url')}`
+    )
+    expect(output.artifactSync).toMatchObject({
+      artifactRef: output.artifactRef,
+      linked: false,
+      providerRevision: 'rev-index-failure',
+      status: 'synced'
+    })
+    const artifactPath = expectedGoogleDocArtifactAbsolutePath(projectPath, 'doc-index-failure')
+    await expect(stat(artifactPath)).resolves.toBeTruthy()
+    expect(JSON.parse(await readFile(artifactPath, 'utf8'))).toMatchObject({
+      id: 'doc-index-failure',
+      text: 'Cleanup me'
+    })
     await expect(readFile(artifactsPath, 'utf8')).resolves.toBe(
       '{\n  "version": 1,\n  "sessions": {}\n}\n'
     )
@@ -6457,7 +7593,7 @@ test('cleans up full Google Doc artifacts when session index recording fails', a
   }
 })
 
-test('cleans up only newly created Google Sheet artifacts when session index recording fails', async () => {
+test('retains Google Sheet artifacts when session index recording fails', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-sheets-index-failure-'))
   const userDataPath = join(tempRoot, 'user-data')
   const projectPath = join(tempRoot, 'project-path-should-not-log')
@@ -6603,25 +7739,34 @@ test('cleans up only newly created Google Sheet artifacts when session index rec
       type: 'google.sheet.spreadsheet'
     })
 
-    expect(warnings).toEqual([
-      [
-        'Failed to record linked Google Sheet artifact',
-        {
-          artifactCleanedUp: null,
-          reason: 'artifact_record_failed',
-          sessionId: 'session-1',
-          spreadsheetId: existingSpreadsheetId
-        }
-      ],
-      [
-        'Failed to record linked Google Sheet artifact',
-        {
-          artifactCleanedUp: true,
-          reason: 'artifact_record_failed',
-          sessionId: 'session-1',
-          spreadsheetId: createdSpreadsheetId
-        }
-      ]
+    const artifactRecordWarnings = warnings.filter(
+      (warning): warning is [string, Record<string, unknown>] =>
+        warning[0] === 'Failed to record linked Google Sheet artifact' &&
+        typeof warning[1] === 'object' &&
+        warning[1] !== null &&
+        (warning[1] as Record<string, unknown>).reason === 'artifact_record_failed'
+    )
+    expect(
+      artifactRecordWarnings.find((warning) => warning[1].spreadsheetId === existingSpreadsheetId)
+    ).toEqual([
+      'Failed to record linked Google Sheet artifact',
+      {
+        artifactCleanedUp: null,
+        reason: 'artifact_record_failed',
+        sessionId: 'session-1',
+        spreadsheetId: existingSpreadsheetId
+      }
+    ])
+    expect(
+      artifactRecordWarnings.find((warning) => warning[1].spreadsheetId === createdSpreadsheetId)
+    ).toEqual([
+      'Failed to record linked Google Sheet artifact',
+      {
+        artifactCleanedUp: true,
+        reason: 'artifact_record_failed',
+        sessionId: 'session-1',
+        spreadsheetId: createdSpreadsheetId
+      }
     ])
 
     const warningText = JSON.stringify(warnings)
@@ -6632,7 +7777,7 @@ test('cleans up only newly created Google Sheet artifacts when session index rec
     expect(warningText).not.toContain(tempRoot)
     expect(warningText).not.toContain(projectPath)
     await expect(stat(existingArtifactPath)).resolves.toMatchObject({})
-    await expect(stat(createdArtifactPath)).rejects.toThrow()
+    await expect(stat(createdArtifactPath)).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(artifactsPath, 'utf8')).resolves.toBe(
       '{\n  "version": 1,\n  "sessions": {}\n}\n'
     )

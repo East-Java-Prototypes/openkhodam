@@ -24,7 +24,6 @@ import {
   searchGoogleDriveFiles
 } from '../integrations/google-workspace-runtime'
 import {
-  deleteGoogleDocDocumentArtifact,
   deleteGoogleSheetSpreadsheetArtifact,
   getOrCreateLinkedGoogleArtifact,
   getOrCreateLinkedGoogleDoc,
@@ -50,21 +49,27 @@ type GoogleWorkspaceToolContext = {
   worktree?: string
 }
 
-type GoogleWorkspaceArtifactSessionContext = {
+type GoogleWorkspaceArtifactContext = {
   messageId: string | null
   projectDirectory: string
-  sessionId: string
+  sessionId: string | null
 }
 
-type PersistedReadGoogleWorkspaceArtifact = GoogleWorkspaceArtifactSessionContext & {
+type PersistedReadGoogleWorkspaceArtifact = GoogleWorkspaceArtifactContext & {
   artifactPath: string
+  cachedAt: number
   created: boolean
 }
 
-type DeletePersistedGoogleWorkspaceArtifact = (input: {
-  artifactPath: string
-  projectDirectory: string
-}) => Promise<{ deleted: boolean }>
+type GoogleDocArtifactSync =
+  | { reason: 'project_context_missing' | 'persist_failed'; status: 'unavailable' }
+  | {
+      artifactRef: string
+      cachedAt: number
+      linked: boolean
+      providerRevision: string | null
+      status: 'synced'
+    }
 
 type GoogleWorkspaceListCommandsToolDefinition = {
   args: {
@@ -846,12 +851,16 @@ function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
         documentId: input.documentId,
         signal: context.abort
       })
-      const artifactRef = await recordReadGoogleDocArtifact(context, result.document)
+      const artifactSync = await recordReadGoogleDocArtifact(context, result.document)
       const document = createGoogleDocDocumentPreview(result.document)
       return JSON.stringify({
-        artifactRef,
+        artifactRef: artifactSync.status === 'synced' ? artifactSync.artifactRef : null,
+        artifactSync,
         document,
-        ...createGoogleDocArtifactNextAction(artifactRef, document.preview.truncated)
+        ...createGoogleDocArtifactNextAction(
+          artifactSync.status === 'synced' ? artifactSync.artifactRef : null,
+          document.preview.truncated
+        )
       })
     },
     parseInput(value) {
@@ -865,7 +874,7 @@ function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
 function createGoogleArtifactsReadCommand(): GoogleWorkspaceCommand {
   return {
     description:
-      'Read a cached Google Docs artifact offline. Continue with nextCursor; refresh with google.docs.read when stale or missing. Supports first-tab paragraphs only; tables are unsupported.',
+      'Read a cached Google Docs artifact offline. Continue with nextCursor; refresh with google.docs.read when stale or missing. Supports first-tab rich text, lists, and simple table cells; merged or irregular tables and images are unsupported.',
     id: 'google.artifacts.read',
     inputSchema: {
       additionalProperties: false,
@@ -925,7 +934,37 @@ function createGoogleArtifactsReadCommand(): GoogleWorkspaceCommand {
       return JSON.stringify({
         artifactRef: cached.artifactRef,
         cachedAt: cached.document.cachedAt,
-        coverage: { firstTabOnly: true, paragraphsOnly: true, tablesUnsupported: true },
+        coverage:
+          cached.document.schemaVersion === 2
+            ? {
+                richText: true,
+                lists: true,
+                simpleTables: true,
+                mergedOrIrregularTables: false,
+                unsupportedTableStructures: {
+                  present: cached.document.body.blocks.some(
+                    (block) => block.location?.kind === 'unsupported-table'
+                  ),
+                  count: new Set(
+                    cached.document.body.blocks.flatMap((block) =>
+                      block.location?.kind === 'unsupported-table'
+                        ? [block.location.tableIndex]
+                        : []
+                    )
+                  ).size
+                },
+                images: false,
+                firstTabOnly: true
+              }
+            : {
+                richText: false,
+                lists: false,
+                simpleTables: false,
+                mergedOrIrregularTables: false,
+                unsupportedTableStructures: { present: false, count: 0 },
+                images: false,
+                firstTabOnly: true
+              },
         nextCursor: page.nextCursor,
         providerRevision: cached.document.revision,
         returnedBlocks: page.blocks,
@@ -1202,14 +1241,18 @@ async function executeGoogleDocsEdit(input: {
     operation: input.operation,
     signal: input.context.abort
   })
-  const artifactRef = await recordReadGoogleDocArtifact(input.context, result.document)
+  const artifactSync = await recordReadGoogleDocArtifact(input.context, result.document)
 
   const document = createGoogleDocDocumentPreview(result.document)
   return JSON.stringify({
     edit: result.edit,
-    artifactRef,
+    artifactRef: artifactSync.status === 'synced' ? artifactSync.artifactRef : null,
+    artifactSync,
     document,
-    ...createGoogleDocArtifactNextAction(artifactRef, document.preview.truncated)
+    ...createGoogleDocArtifactNextAction(
+      artifactSync.status === 'synced' ? artifactSync.artifactRef : null,
+      document.preview.truncated
+    )
   })
 }
 
@@ -1284,8 +1327,8 @@ function occurrenceArg(value: unknown): GoogleDocsTextOccurrence | undefined {
 async function recordReadGoogleDocArtifact(
   context: GoogleWorkspaceToolContext,
   document: GoogleDocDocumentArtifact
-): Promise<string | null> {
-  const persisted = await persistReadGoogleWorkspaceArtifact({
+): Promise<GoogleDocArtifactSync> {
+  const persisted = await persistReadGoogleDocArtifact({
     context,
     failureDetails: {
       docId: document.id,
@@ -1298,7 +1341,23 @@ async function recordReadGoogleDocArtifact(
         projectDirectory
       })
   })
-  if (!persisted) return null
+  if (!persisted) {
+    return {
+      reason: nonEmptyString(context.directory) ? 'persist_failed' : 'project_context_missing',
+      status: 'unavailable'
+    }
+  }
+
+  const artifactRef = createGoogleDocArtifactRef(document.id)
+  if (!persisted.sessionId) {
+    return {
+      artifactRef,
+      cachedAt: persisted.cachedAt,
+      linked: false,
+      providerRevision: document.revision,
+      status: 'synced'
+    }
+  }
 
   try {
     await getOrCreateLinkedGoogleDoc({
@@ -1312,27 +1371,26 @@ async function recordReadGoogleDocArtifact(
       messageId: persisted.messageId,
       sessionId: persisted.sessionId
     })
-    return createGoogleDocArtifactRef(document.id)
+    return {
+      artifactRef,
+      cachedAt: persisted.cachedAt,
+      linked: true,
+      providerRevision: document.revision,
+      status: 'synced'
+    }
   } catch {
-    const artifactCleanedUp = await cleanupCreatedGoogleWorkspaceArtifact({
-      artifactPath: persisted.artifactPath,
-      createdArtifact: persisted.created,
-      deleteArtifact: deleteGoogleDocDocumentArtifact,
-      failureDetails: {
-        docId: document.id,
-        reason: 'artifact_cleanup_failed',
-        sessionId: persisted.sessionId
-      },
-      failureMessage: 'Failed to clean up Google Doc artifact after record failure',
-      projectDirectory: persisted.projectDirectory
-    })
     console.warn('Failed to record linked Google Doc artifact', {
-      artifactCleanedUp,
       docId: document.id,
       reason: 'artifact_record_failed',
       sessionId: persisted.sessionId
     })
-    return null
+    return {
+      artifactRef,
+      cachedAt: persisted.cachedAt,
+      linked: false,
+      providerRevision: document.revision,
+      status: 'synced'
+    }
   }
 }
 
@@ -1340,7 +1398,7 @@ async function recordReadGoogleSheetArtifact(
   context: GoogleWorkspaceToolContext,
   spreadsheet: GoogleSheetSpreadsheetArtifact
 ): Promise<void> {
-  const persisted = await persistReadGoogleWorkspaceArtifact({
+  const persisted = await persistReadGoogleSheetArtifact({
     context,
     failureDetails: {
       reason: 'artifact_persist_failed',
@@ -1354,6 +1412,7 @@ async function recordReadGoogleSheetArtifact(
       })
   })
   if (!persisted) return
+  if (!persisted.sessionId) return
 
   try {
     await getOrCreateLinkedGoogleArtifact({
@@ -1390,13 +1449,44 @@ async function recordReadGoogleSheetArtifact(
   }
 }
 
-async function persistReadGoogleWorkspaceArtifact(input: {
+async function cleanupCreatedGoogleWorkspaceArtifact({
+  artifactPath,
+  createdArtifact,
+  deleteArtifact,
+  failureDetails,
+  failureMessage,
+  projectDirectory
+}: {
+  artifactPath: string
+  createdArtifact: boolean
+  deleteArtifact: (input: {
+    artifactPath: string
+    projectDirectory: string
+  }) => Promise<{ deleted: boolean }>
+  failureDetails: Record<string, string>
+  failureMessage: string
+  projectDirectory: string
+}): Promise<boolean | null> {
+  if (!createdArtifact) return null
+  try {
+    return (await deleteArtifact({ artifactPath, projectDirectory })).deleted
+  } catch {
+    console.warn(failureMessage, failureDetails)
+    return false
+  }
+}
+
+async function persistReadGoogleDocArtifact(input: {
   context: GoogleWorkspaceToolContext
   failureDetails: Record<string, string>
   failureMessage: string
-  persist: (projectDirectory: string) => Promise<{ artifactPath: string; created: boolean }>
+  persist: (projectDirectory: string) => Promise<{
+    artifactPath: string
+    cachedAt: number
+    created: boolean
+  }>
 }): Promise<PersistedReadGoogleWorkspaceArtifact | null> {
-  const artifactContext = getGoogleWorkspaceArtifactSessionContext(input.context)
+  const artifactContext = getGoogleDocArtifactContext(input.context)
   if (!artifactContext) return null
 
   try {
@@ -1411,44 +1501,46 @@ async function persistReadGoogleWorkspaceArtifact(input: {
   }
 }
 
-function getGoogleWorkspaceArtifactSessionContext(
+async function persistReadGoogleSheetArtifact(input: {
   context: GoogleWorkspaceToolContext
-): GoogleWorkspaceArtifactSessionContext | null {
+  failureDetails: Record<string, string>
+  failureMessage: string
+  persist: (projectDirectory: string) => Promise<{
+    artifactPath: string
+    cachedAt: number
+    created: boolean
+  }>
+}): Promise<PersistedReadGoogleWorkspaceArtifact | null> {
+  const artifactContext = getGoogleSheetArtifactContext(input.context)
+  if (!artifactContext) return null
+  try {
+    const persisted = await input.persist(artifactContext.projectDirectory)
+    return { ...artifactContext, ...persisted }
+  } catch {
+    console.warn(input.failureMessage, input.failureDetails)
+    return null
+  }
+}
+
+function getGoogleDocArtifactContext(
+  context: GoogleWorkspaceToolContext
+): GoogleWorkspaceArtifactContext | null {
   const projectDirectory = nonEmptyString(context.directory)
   const messageId = nonEmptyString(context.messageID)
   const sessionId = nonEmptyString(context.sessionID)
-  if (!projectDirectory || !sessionId) return null
+  if (!projectDirectory) return null
 
   return { messageId, projectDirectory, sessionId }
 }
 
-async function cleanupCreatedGoogleWorkspaceArtifact({
-  artifactPath,
-  createdArtifact,
-  deleteArtifact,
-  failureDetails,
-  failureMessage,
-  projectDirectory
-}: {
-  artifactPath: string
-  createdArtifact: boolean
-  deleteArtifact: DeletePersistedGoogleWorkspaceArtifact
-  failureDetails: Record<string, string>
-  failureMessage: string
-  projectDirectory: string
-}): Promise<boolean | null> {
-  if (!createdArtifact) return null
-
-  try {
-    const result = await deleteArtifact({
-      artifactPath,
-      projectDirectory
-    })
-    return result.deleted
-  } catch {
-    console.warn(failureMessage, failureDetails)
-    return false
-  }
+function getGoogleSheetArtifactContext(
+  context: GoogleWorkspaceToolContext
+): GoogleWorkspaceArtifactContext | null {
+  const projectDirectory = nonEmptyString(context.directory)
+  const messageId = nonEmptyString(context.messageID)
+  const sessionId = nonEmptyString(context.sessionID)
+  if (!projectDirectory || !sessionId) return null
+  return { messageId, projectDirectory, sessionId }
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -1523,10 +1615,10 @@ function createGoogleDocArtifactPage(
   maxCharacters: number,
   cursor: GoogleDocArtifactCursor
 ): {
-  blocks: Array<{ id: string; ordinal: number; text: string; type: 'paragraph' }>
+  blocks: GoogleDocDocumentArtifact['body']['blocks']
   nextCursor: string | null
 } {
-  const blocks: Array<{ id: string; ordinal: number; text: string; type: 'paragraph' }> = []
+  const blocks: GoogleDocDocumentArtifact['body']['blocks'] = []
   let blockIndex = cursor.block
   let character = cursor.character
   let remaining = maxCharacters
@@ -1546,7 +1638,13 @@ function createGoogleDocArtifactPage(
         'Google Docs artifact cursor is invalid. Restart google.artifacts.read without a cursor.'
       )
     const text = codePoints.slice(character, character + remaining).join('')
-    blocks.push({ ...block, text })
+    blocks.push({
+      ...block,
+      text,
+      ...(block.runs
+        ? { runs: sliceGoogleDocTextRuns(block.runs, character, Array.from(text).length) }
+        : {})
+    })
     remaining -= Array.from(text).length
     character += Array.from(text).length
     if (character < codePoints.length) break
@@ -1561,6 +1659,25 @@ function createGoogleDocArtifactPage(
           'utf8'
         ).toString('base64url')
   return { blocks, nextCursor }
+}
+
+function sliceGoogleDocTextRuns(
+  runs: NonNullable<GoogleDocDocumentArtifact['body']['blocks'][number]['runs']>,
+  start: number,
+  length: number
+) {
+  let offset = 0
+  let remaining = length
+  return runs.flatMap((run) => {
+    const points = Array.from(run.text)
+    const runStart = Math.max(0, start - offset)
+    const available = points.length - runStart
+    const take = Math.min(available, remaining)
+    offset += points.length
+    if (take <= 0 || remaining <= 0) return []
+    remaining -= take
+    return [{ ...run, text: points.slice(runStart, runStart + take).join('') }]
+  })
 }
 
 function createGoogleDocArtifactRef(id: string): string {

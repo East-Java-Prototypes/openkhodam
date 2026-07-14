@@ -99,11 +99,69 @@ export type LinkedGoogleDoc = LinkedGoogleArtifact
 
 export type LinkedGoogleDocRecord = LinkedGoogleArtifactRecord
 
+export type GoogleDocTextStyle = {
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strikethrough?: boolean
+  fontFamily?: string
+  fontSizePt?: number
+  foregroundColor?: string
+  backgroundColor?: string
+  linkUrl?: string
+}
+
+export type GoogleDocTextRun = {
+  text: string
+  style: GoogleDocTextStyle
+}
+
+export type GoogleDocParagraphStyle = {
+  namedStyle?: string
+  alignment?: string
+  lineSpacingPercent?: number
+  spaceAbovePt?: number
+  spaceBelowPt?: number
+}
+
+export type GoogleDocListMetadata = {
+  listId: string
+  nestingLevel: number
+  kind: 'bullet' | 'numbered' | 'checkbox' | 'unknown'
+  glyphType?: string
+  glyphSymbol?: string
+}
+
+export type GoogleDocBodyLocation = { kind: 'body'; bodyIndex: number }
+
+export type GoogleDocTableCellLocation = {
+  kind: 'table-cell'
+  tableIndex: number
+  rowIndex: number
+  columnIndex: number
+  paragraphIndex: number
+  rowCount: number
+  columnCount: number
+}
+
+export type GoogleDocUnsupportedTableLocation = {
+  kind: 'unsupported-table'
+  tableIndex: number
+  reason: 'merged-or-irregular'
+  rowIndex: number
+  columnIndex: number
+  paragraphIndex: number
+}
+
 export type GoogleDocBodyBlock = {
   id: string
   ordinal: number
   type: 'paragraph'
   text: string
+  runs?: GoogleDocTextRun[]
+  paragraphStyle?: GoogleDocParagraphStyle
+  list?: GoogleDocListMetadata
+  location?: GoogleDocBodyLocation | GoogleDocTableCellLocation | GoogleDocUnsupportedTableLocation
 }
 
 export type GoogleDocDocumentArtifact = {
@@ -130,7 +188,7 @@ export type GoogleDocDocumentPreviewArtifact = GoogleDocDocumentArtifact & {
 }
 
 export type PersistedGoogleDocDocumentArtifact = GoogleDocDocumentArtifact & {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   cachedAt: number
 }
 
