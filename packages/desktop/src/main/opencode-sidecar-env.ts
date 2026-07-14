@@ -5,6 +5,7 @@ export type CreateSidecarEnvOptions = {
   password: string
   profileDir: string
   runtimeConfigPath: string
+  managedSkillPath?: string
   username?: string
 }
 
@@ -13,12 +14,14 @@ export function createSidecarEnv({
   password,
   profileDir,
   runtimeConfigPath,
+  managedSkillPath,
   username = 'opencode'
 }: CreateSidecarEnvOptions): NodeJS.ProcessEnv {
   const baseEnv: NodeJS.ProcessEnv = {
     ...env,
     OPENCODE_CLIENT: 'openkhodam-desktop',
     OPENCODE_CONFIG: runtimeConfigPath,
+    ...(managedSkillPath ? { OPENKHODAM_MANAGED_SKILL_PATH: managedSkillPath } : {}),
     OPENCODE_CONFIG_DIR: join(profileDir, 'config'),
     OPENCODE_SERVER_USERNAME: username,
     OPENCODE_SERVER_PASSWORD: password,

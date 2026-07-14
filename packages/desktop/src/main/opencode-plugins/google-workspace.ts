@@ -96,6 +96,7 @@ type GoogleWorkspaceExecuteCommandToolDefinition = {
 }
 
 type GoogleWorkspaceHooks = {
+  config: (config: { skills?: { paths?: string[] } }) => void
   tool: {
     google_workspace_execute_command: GoogleWorkspaceExecuteCommandToolDefinition
     google_workspace_list_commands: GoogleWorkspaceListCommandsToolDefinition
@@ -103,6 +104,9 @@ type GoogleWorkspaceHooks = {
 }
 
 export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
+  config(config) {
+    appendManagedSkillPath(config, process.env.OPENKHODAM_MANAGED_SKILL_PATH)
+  },
   tool: {
     google_workspace_list_commands: {
       description:
@@ -155,6 +159,16 @@ export const GoogleWorkspace = async (): Promise<GoogleWorkspaceHooks> => ({
   }
 })
 
+function appendManagedSkillPath(
+  config: { skills?: { paths?: string[] } },
+  managedSkillPath: string | undefined
+): void {
+  const path = managedSkillPath?.trim()
+  if (!path) return
+  const paths = config.skills?.paths ?? []
+  config.skills = { ...config.skills, paths: [...new Set([...paths, path])] }
+}
+
 type GoogleWorkspaceCommandInputSchema = {
   additionalProperties: false
   properties: Record<string, unknown>
@@ -181,31 +195,36 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
   createGoogleDocsReadCommand(),
   createGoogleArtifactsReadCommand(),
   createGoogleDocsCommand({
-    description: 'Append literal text to the end of a Google Docs document.',
+    description:
+      'Append literal text to a Google Docs document, then use its refreshed artifactRef for offline reads.',
     id: 'google.docs.append_text',
     operationType: 'append_text',
     required: ['documentId', 'text']
   }),
   createGoogleDocsCommand({
-    description: 'Insert literal text before a matching text occurrence in a Google Docs document.',
+    description:
+      'Insert literal text before a matching Google Docs occurrence, then use its refreshed artifactRef for offline reads.',
     id: 'google.docs.insert_before_text',
     operationType: 'insert_before_text',
     required: ['documentId', 'match', 'text']
   }),
   createGoogleDocsCommand({
-    description: 'Insert literal text after a matching text occurrence in a Google Docs document.',
+    description:
+      'Insert literal text after a matching Google Docs occurrence, then use its refreshed artifactRef for offline reads.',
     id: 'google.docs.insert_after_text',
     operationType: 'insert_after_text',
     required: ['documentId', 'match', 'text']
   }),
   createGoogleDocsCommand({
-    description: 'Replace a matching text occurrence with literal text in a Google Docs document.',
+    description:
+      'Replace a matching Google Docs occurrence, then use its refreshed artifactRef for offline reads.',
     id: 'google.docs.replace_text',
     operationType: 'replace_text',
     required: ['documentId', 'match', 'text']
   }),
   createGoogleDocsCommand({
-    description: 'Delete a matching text occurrence from a Google Docs document.',
+    description:
+      'Delete a matching Google Docs occurrence, then use its refreshed artifactRef for offline reads.',
     id: 'google.docs.delete_text',
     operationType: 'delete_text',
     required: ['documentId', 'match']
@@ -340,7 +359,8 @@ function createGoogleDriveSearchCommand(): GoogleWorkspaceCommand {
 
 function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
   return {
-    description: 'Read a Google Docs document and return a bounded artifact preview.',
+    description:
+      'Read and refresh a Google Docs artifact preview. Use artifactRef with google.artifacts.read when truncated.',
     id: 'google.docs.read',
     inputSchema: {
       additionalProperties: false,
@@ -357,9 +377,11 @@ function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
         signal: context.abort
       })
       const artifactRef = await recordReadGoogleDocArtifact(context, result.document)
+      const document = createGoogleDocDocumentPreview(result.document)
       return JSON.stringify({
         artifactRef,
-        document: createGoogleDocDocumentPreview(result.document)
+        document,
+        ...createGoogleDocArtifactNextAction(artifactRef, document.preview.truncated)
       })
     },
     parseInput(value) {
@@ -373,7 +395,7 @@ function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
 function createGoogleArtifactsReadCommand(): GoogleWorkspaceCommand {
   return {
     description:
-      'Read a cached Google Docs artifact offline. Supports first-tab paragraphs only; tables are unsupported.',
+      'Read a cached Google Docs artifact offline. Continue with nextCursor; refresh with google.docs.read when stale or missing. Supports first-tab paragraphs only; tables are unsupported.',
     id: 'google.artifacts.read',
     inputSchema: {
       additionalProperties: false,
@@ -442,7 +464,8 @@ function createGoogleArtifactsReadCommand(): GoogleWorkspaceCommand {
           (length, block) => length + block.text.length,
           0
         ),
-        truncated: page.nextCursor !== null
+        truncated: page.nextCursor !== null,
+        ...createGoogleDocArtifactCursorNextAction(cached.artifactRef, page.nextCursor)
       })
     },
     parseInput(value) {
@@ -711,11 +734,39 @@ async function executeGoogleDocsEdit(input: {
   })
   const artifactRef = await recordReadGoogleDocArtifact(input.context, result.document)
 
+  const document = createGoogleDocDocumentPreview(result.document)
   return JSON.stringify({
     edit: result.edit,
     artifactRef,
-    document: createGoogleDocDocumentPreview(result.document)
+    document,
+    ...createGoogleDocArtifactNextAction(artifactRef, document.preview.truncated)
   })
+}
+
+function createGoogleDocArtifactNextAction(artifactRef: string | null, truncated: boolean): object {
+  if (!artifactRef || !truncated) return {}
+  return {
+    nextAction: {
+      artifactRef,
+      command: 'google.artifacts.read',
+      reason: 'The document preview is truncated; read the cached artifact for more content.'
+    }
+  }
+}
+
+function createGoogleDocArtifactCursorNextAction(
+  artifactRef: string,
+  nextCursor: string | null
+): object {
+  if (!nextCursor) return {}
+  return {
+    nextAction: {
+      artifactRef,
+      command: 'google.artifacts.read',
+      cursor: nextCursor,
+      reason: 'More cached artifact content remains; continue with this cursor.'
+    }
+  }
 }
 
 function stringArg(value: unknown): string {

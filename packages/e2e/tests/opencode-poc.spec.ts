@@ -198,6 +198,7 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
   const appConfigPath = join(userDataPath, 'openkhodam-config.json')
   const configStore = new OpenKhodamConfigFileStore(appConfigPath)
   const pluginPaths = ['/tmp/openkhodam-poc.mjs', '/tmp/google-workspace.mjs']
+  const skillPath = '/tmp/opencode-skills'
 
   try {
     await expect(configStore.read()).resolves.toEqual({
@@ -250,16 +251,106 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
     expect(typeof appConfig.integrations.googleWorkspace.updatedAt).toBe('number')
     expect((await stat(appConfigPath)).mode & 0o777).toBe(0o600)
 
-    const runtimeConfigPath = await writeRuntimeOpenCodeConfig(userDataPath, pluginPaths)
+    const runtimeConfigPath = await writeRuntimeOpenCodeConfig(userDataPath, pluginPaths, skillPath)
     expect(runtimeConfigPath).toBe(
       join(userDataPath, 'opencode-sidecar', 'runtime-opencode-config.json')
     )
     expect(JSON.parse(await readFile(runtimeConfigPath, 'utf8'))).toEqual(
-      createRuntimeOpenCodeConfig(pluginPaths)
+      createRuntimeOpenCodeConfig(pluginPaths, skillPath)
     )
     expect((await stat(runtimeConfigPath)).mode & 0o777).toBe(0o600)
   } finally {
     await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('resolves the bundled Google Workspace artifact skill in development, built, and packaged modes', async () => {
+  const { resolveOpenKhodamSkillPath } = loadDesktopModule<{
+    resolveOpenKhodamSkillPath: (options: {
+      baseDir?: string
+      dev?: boolean
+      packaged?: boolean
+      resourcesPath?: string
+    }) => string
+  }>('../../desktop/src/main/opencode-skill-path')
+  const desktopDirectory = '/app/packages/desktop'
+
+  expect(resolveOpenKhodamSkillPath({ baseDir: desktopDirectory, dev: true })).toBe(
+    join(desktopDirectory, 'src', 'main', 'opencode-skills')
+  )
+  expect(resolveOpenKhodamSkillPath({ baseDir: join(desktopDirectory, 'out', 'main') })).toBe(
+    join(desktopDirectory, 'out', 'opencode-skills')
+  )
+  expect(
+    resolveOpenKhodamSkillPath({
+      packaged: true,
+      resourcesPath: '/app/resources'
+    })
+  ).toBe('/app/resources/opencode-skills')
+})
+
+test('bundles a valid Google Workspace artifact workflow skill', async () => {
+  const skillPath = join(
+    process.cwd(),
+    '..',
+    'desktop',
+    'src',
+    'main',
+    'opencode-skills',
+    'google-workspace-artifact-workflow',
+    'SKILL.md'
+  )
+  const skill = await readFile(skillPath, 'utf8')
+
+  expect(skill).toContain('name: google-workspace-artifact-workflow')
+  expect(skill).toContain('description:')
+  expect(skill).toContain('google.docs.read')
+  expect(skill).toContain('google.artifacts.read')
+  expect(skill).toContain('artifactRef')
+  expect(skill).toContain('nextCursor')
+  expect(skill).toContain('discard old cursors')
+  expect(skill).toContain('stale, missing, or invalid')
+  expect(skill).toContain('first tab')
+  expect(skill).toContain('paragraph')
+  expect(skill).toContain('tables are unsupported')
+})
+
+test('build emits the bundled Google Workspace artifact skill tree', async () => {
+  const sourceSkillPath = join(
+    process.cwd(),
+    '..',
+    'desktop',
+    'src',
+    'main',
+    'opencode-skills',
+    'google-workspace-artifact-workflow',
+    'SKILL.md'
+  )
+  const builtSkillPath = join(
+    process.cwd(),
+    '..',
+    'desktop',
+    'out',
+    'opencode-skills',
+    'google-workspace-artifact-workflow',
+    'SKILL.md'
+  )
+
+  expect(await readFile(builtSkillPath, 'utf8')).toBe(await readFile(sourceSkillPath, 'utf8'))
+})
+
+test('Google Workspace config hook retains project skill paths and appends the managed path once', async () => {
+  const originalManagedSkillPath = process.env.OPENKHODAM_MANAGED_SKILL_PATH
+  process.env.OPENKHODAM_MANAGED_SKILL_PATH = '/managed/skills'
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const config = { skills: { paths: ['/project/skills', '/managed/skills'] } }
+
+    plugin.config(config)
+
+    expect(config.skills.paths).toEqual(['/project/skills', '/managed/skills'])
+  } finally {
+    restoreEnv('OPENKHODAM_MANAGED_SKILL_PATH', originalManagedSkillPath)
   }
 })
 
@@ -3615,6 +3706,15 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       'google.sheets.append_rows',
       'google.sheets.clear_range'
     ])
+    expect(
+      discovery.commands.find((command) => command.id === 'google.docs.read')?.description
+    ).toContain('google.artifacts.read')
+    expect(
+      discovery.commands.find((command) => command.id === 'google.docs.append_text')?.description
+    ).toContain('artifactRef')
+    expect(
+      discovery.commands.find((command) => command.id === 'google.artifacts.read')?.description
+    ).toContain('nextCursor')
     expect(discovery.commands.map((command) => command.inputSchema.required)).toEqual([
       [],
       ['documentId'],
@@ -4352,10 +4452,20 @@ test('persists Google Docs reads and serves complete offline pagination without 
         { documentId },
         { directory: projectPath, sessionID: 'offline-session' }
       )
-    ) as { artifactRef: string }
+    ) as {
+      artifactRef: string
+      document: { preview: { truncated: boolean } }
+      nextAction?: { artifactRef: string; command: string; reason: string }
+    }
     expect(online.artifactRef).toBe(
       `google-docs:v1:${Buffer.from(documentId, 'utf8').toString('base64url')}`
     )
+    expect(online.document.preview.truncated).toBe(true)
+    expect(online.nextAction).toEqual({
+      artifactRef: online.artifactRef,
+      command: 'google.artifacts.read',
+      reason: 'The document preview is truncated; read the cached artifact for more content.'
+    })
     expect(providerCalls).toBe(1)
     const stored = JSON.parse(
       await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
@@ -4383,6 +4493,7 @@ test('persists Google Docs reads and serves complete offline pagination without 
       ) as {
         coverage: unknown
         nextCursor: string | null
+        nextAction?: { artifactRef: string; command: string; cursor: string; reason: string }
         returnedBlocks: Array<{ id: string; ordinal: number; text: string }>
         totalTextLength: number
       }
@@ -4391,6 +4502,16 @@ test('persists Google Docs reads and serves complete offline pagination without 
         paragraphsOnly: true,
         tablesUnsupported: true
       })
+      if (page.nextCursor) {
+        expect(page.nextAction).toEqual({
+          artifactRef,
+          command: 'google.artifacts.read',
+          cursor: page.nextCursor,
+          reason: 'More cached artifact content remains; continue with this cursor.'
+        })
+      } else {
+        expect(page.nextAction).toBeUndefined()
+      }
       expect(page.totalTextLength).toBe(
         stored.body.blocks.reduce((total, block) => total + Array.from(block.text).length, 0)
       )
@@ -4517,11 +4638,17 @@ test('returns offline artifacts after an existing Google Docs edit command persi
         { documentId, text: ' Added' },
         { directory: projectPath, sessionID: 'edit-offline-session' }
       )
-    ) as { artifactRef: string }
+    ) as {
+      artifactRef: string
+      document: { preview: { truncated: boolean } }
+      nextAction?: { artifactRef: string; command: string; reason: string }
+    }
     expect(events).toEqual(['documents.get', 'batchUpdate', 'documents.get'])
     expect(edited.artifactRef).toBe(
       `google-docs:v1:${Buffer.from(documentId, 'utf8').toString('base64url')}`
     )
+    expect(edited.document.preview.truncated).toBe(false)
+    expect(edited.nextAction).toBeUndefined()
 
     globalThis.fetch = (async () => {
       throw new Error('offline artifact read must not fetch after edit')
