@@ -10,6 +10,7 @@ import {
 
 const repositoryDirectory = dirname(process.cwd())
 const desktopOutDirectory = join(repositoryDirectory, 'desktop', 'out')
+const builtManagedSkillDirectory = join(desktopOutDirectory, 'opencode-skills')
 const fakeProjectDirectory = process.cwd()
 const projectArtifactsDirectory = join(fakeProjectDirectory, '.openkhodam')
 const projectArtifactsFile = join(projectArtifactsDirectory, 'artifacts.json')
@@ -2451,13 +2452,15 @@ test('shows the real OpenCode sidecar settings surface', async ({
   const runtimeConfig = JSON.parse(await readFile(runtimeConfigPath, 'utf8')) as {
     $schema: string
     plugin: string[]
+    skills: { paths: string[] }
   }
   expect(runtimeConfig).toEqual({
     $schema: 'https://opencode.ai/config.json',
     plugin: [
       join(desktopOutDirectory, 'opencode-plugins', 'openkhodam-poc.mjs'),
       join(desktopOutDirectory, 'opencode-plugins', 'google-workspace.mjs')
-    ]
+    ],
+    skills: { paths: [builtManagedSkillDirectory] }
   })
 
   await projectSettingsLink(appWindow).click()

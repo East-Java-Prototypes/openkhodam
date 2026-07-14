@@ -19,6 +19,8 @@ extraResources:
     to: opencode-plugins/openkhodam-poc.mjs
   - from: out/opencode-plugins/google-workspace.mjs
     to: opencode-plugins/google-workspace.mjs
+  - from: out/opencode-skills
+    to: opencode-skills
 win:
   executableName: openkhodam
 nsis:
