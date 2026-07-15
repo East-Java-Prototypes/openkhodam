@@ -11,6 +11,7 @@ import type {
   GoogleSheetSpreadsheetPreviewArtifact,
   GoogleSheetSpreadsheetPreviewMetadata
 } from '@openkhodam/ui/types'
+import { createHash } from 'node:crypto'
 
 import type { GoogleWorkspaceTokenConfig } from './openkhodam-config'
 import { OpenKhodamConfigFileStore } from './openkhodam-config'
@@ -184,6 +185,18 @@ export type GoogleDocsReadDocumentInput = {
   documentId: string
   fetch?: Fetch
   signal?: AbortSignal
+}
+
+export type GoogleDocsReadSeekInput = {
+  documentId: string
+  maxBlocks?: number
+  maxCharacters?: number
+  seek?: string
+}
+
+export type GoogleDocsReadSeekResult = {
+  document: GoogleDocDocumentPreviewArtifact
+  nextSeek: string | null
 }
 
 export type GoogleSheetsReadSpreadsheetResult = {
@@ -796,6 +809,85 @@ export function createGoogleDocDocumentPreview(
       includedBlockCount: blocks.length
     }
   }
+}
+
+export function createGoogleDocDocumentSeekPreview(
+  document: GoogleDocDocumentArtifact,
+  input: GoogleDocsReadSeekInput
+): GoogleDocsReadSeekResult {
+  const legacyFirstPage =
+    !input.seek && input.maxBlocks === undefined && input.maxCharacters === undefined
+  const maxBlocks = input.maxBlocks ?? GOOGLE_DOCS_READ_PREVIEW_BLOCK_LIMIT
+  const maxCharacters = input.maxCharacters ?? GOOGLE_DOCS_READ_PREVIEW_TEXT_LIMIT
+  const identity = createGoogleDocSeekIdentity(document)
+  const start = input.seek
+    ? parseGoogleDocSeek(input.seek, document, identity)
+    : { block: 0, character: 0, textOffset: 0 }
+  if (legacyFirstPage) {
+    const legacy = createGoogleDocDocumentPreview(document)
+    const page = pageLegacyGoogleDocPreview(document)
+    return {
+      document: legacy,
+      nextSeek: page.next
+        ? createGoogleDocSeek({
+            documentId: document.id,
+            identity,
+            textOffset: legacy.text.length,
+            ...page.next
+          })
+        : null
+    }
+  }
+  const page = pageGoogleDocBodyBlocks(document.body.blocks, start, maxBlocks, maxCharacters)
+  const textEnd = page.next
+    ? getGoogleDocGlobalOffset(document.body.blocks, page.next)
+    : document.text.length
+  const text = document.text.slice(start.textOffset, Math.min(textEnd, document.text.length))
+
+  return {
+    document: {
+      ...document,
+      text,
+      body: { blocks: page.blocks },
+      preview: {
+        truncated: page.next !== null,
+        totalTextLength: document.text.length,
+        totalBlockCount: document.body.blocks.length,
+        includedBlockCount: page.blocks.length
+      }
+    },
+    nextSeek: page.next
+      ? createGoogleDocSeek({
+          documentId: document.id,
+          identity,
+          textOffset: Math.min(textEnd, document.text.length),
+          ...page.next
+        })
+      : null
+  }
+}
+
+function pageLegacyGoogleDocPreview(document: GoogleDocDocumentArtifact): {
+  blocks: GoogleDocBodyBlock[]
+  next: { block: number; character: number } | null
+} {
+  const blocks = limitGoogleDocBodyBlocksForPreview(document.body.blocks)
+  const next = getGoogleDocCursorAfterBlocks(document.body.blocks, blocks)
+  return { blocks, next }
+}
+
+function getGoogleDocCursorAfterBlocks(
+  allBlocks: GoogleDocBodyBlock[],
+  blocks: GoogleDocBodyBlock[]
+): { block: number; character: number } | null {
+  if (!blocks.length) return allBlocks.length ? { block: 0, character: 0 } : null
+  const last = blocks[blocks.length - 1]!
+  const index = allBlocks.findIndex((block) => block.id === last.id)
+  if (index < 0) return null
+  const full = allBlocks[index]!.text
+  const included = last.text
+  if (included.length < full.length) return { block: index, character: included.length }
+  return index + 1 < allBlocks.length ? { block: index + 1, character: 0 } : null
 }
 
 export function createGoogleSheetSpreadsheetPreview(
@@ -2025,6 +2117,166 @@ function limitGoogleDocBodyBlocksForPreview(blocks: GoogleDocBodyBlock[]): Googl
   }
 
   return previewBlocks
+}
+
+function pageGoogleDocBodyBlocks(
+  blocks: GoogleDocBodyBlock[],
+  start: { block: number; character: number },
+  maxBlocks: number,
+  maxCharacters: number
+): { blocks: GoogleDocBodyBlock[]; next: { block: number; character: number } | null } {
+  const page: GoogleDocBodyBlock[] = []
+  let blockIndex = start.block
+  let characterIndex = start.character
+  let remainingCharacters = maxCharacters
+
+  while (blockIndex < blocks.length && page.length < maxBlocks) {
+    const block = blocks[blockIndex]!
+    if (characterIndex > block.text.length) {
+      throw new Error('Google Docs seek is invalid. Restart google.docs.read without seek.')
+    }
+
+    const remaining = block.text.slice(characterIndex)
+    const characters = Array.from(remaining)
+    const available = characters.length
+    if (available === 0) {
+      page.push({ ...block, text: '' })
+      blockIndex += 1
+      characterIndex = 0
+      continue
+    }
+    if (remainingCharacters === 0) break
+
+    const count = Math.min(available, remainingCharacters)
+    const text = characters.slice(0, count).join('')
+    page.push({ ...block, text })
+    remainingCharacters -= count
+    if (count < available) {
+      return { blocks: page, next: { block: blockIndex, character: characterIndex + text.length } }
+    }
+    blockIndex += 1
+    characterIndex = 0
+  }
+
+  return {
+    blocks: page,
+    next: blockIndex < blocks.length ? { block: blockIndex, character: 0 } : null
+  }
+}
+
+function validateGoogleDocSeekCursor(
+  blocks: GoogleDocBodyBlock[],
+  cursor: { block: number; character: number; textOffset: number }
+): void {
+  if (cursor.block >= blocks.length) {
+    throw new Error('Google Docs seek cursor is invalid. Restart google.docs.read without seek.')
+  }
+  const length = blocks[cursor.block]!.text.length
+  if (cursor.character >= length && !(length === 0 && cursor.character === 0)) {
+    throw new Error('Google Docs seek cursor is invalid. Restart google.docs.read without seek.')
+  }
+  const globalOffset = getGoogleDocGlobalOffset(blocks, cursor)
+  if (
+    cursor.textOffset > globalOffset ||
+    cursor.textOffset > getGoogleDocNormalizedText(blocks).length
+  ) {
+    throw new Error('Google Docs seek cursor is invalid. Restart google.docs.read without seek.')
+  }
+}
+
+function getGoogleDocGlobalOffset(
+  blocks: GoogleDocBodyBlock[],
+  cursor: { block: number; character: number }
+): number {
+  return (
+    blocks.slice(0, cursor.block).reduce((offset, block) => offset + block.text.length, 0) +
+    cursor.character
+  )
+}
+
+function getGoogleDocNormalizedText(blocks: GoogleDocBodyBlock[]): string {
+  return blocks
+    .map((block) => block.text)
+    .join('')
+    .trimEnd()
+}
+
+function createGoogleDocSeekIdentity(document: GoogleDocDocumentArtifact): string {
+  return document.revision ?? stableGoogleDocTextIdentity(document.body.blocks)
+}
+
+function stableGoogleDocTextIdentity(blocks: GoogleDocBodyBlock[]): string {
+  const hash = createHash('sha256')
+  for (const block of blocks) hash.update(`${block.id}\u0000${block.text}\u0001`, 'utf8')
+  return `content-${hash.digest('base64url')}`
+}
+
+function createGoogleDocSeek(input: {
+  block: number
+  character: number
+  documentId: string
+  identity: string
+  textOffset: number
+}): string {
+  return Buffer.from(JSON.stringify({ v: 3, ...input }), 'utf8').toString('base64url')
+}
+
+function parseGoogleDocSeek(
+  seek: string,
+  document: GoogleDocDocumentArtifact,
+  identity: string
+): { block: number; character: number; textOffset: number } {
+  if (!/^[A-Za-z0-9_-]+$/.test(seek) || seek.length % 4 === 1) {
+    throw new Error('Google Docs seek is malformed. Restart google.docs.read without seek.')
+  }
+  let value: unknown
+  try {
+    const decoded = Buffer.from(seek, 'base64url')
+    if (decoded.toString('base64url') !== seek) throw new Error('noncanonical')
+    value = JSON.parse(decoded.toString('utf8'))
+  } catch {
+    throw new Error('Google Docs seek is malformed. Restart google.docs.read without seek.')
+  }
+  if (!value || typeof value !== 'object') {
+    throw new Error('Google Docs seek is malformed. Restart google.docs.read without seek.')
+  }
+  const token = value as Record<string, unknown>
+  const expectedKeys = ['block', 'character', 'documentId', 'identity', 'textOffset', 'v']
+  if (
+    Object.keys(token).sort().join(',') !== expectedKeys.join(',') ||
+    token.v !== 3 ||
+    !Number.isInteger(token.block) ||
+    !Number.isInteger(token.character) ||
+    !Number.isInteger(token.textOffset) ||
+    typeof token.documentId !== 'string' ||
+    typeof token.identity !== 'string'
+  ) {
+    throw new Error('Google Docs seek is malformed. Restart google.docs.read without seek.')
+  }
+  if (
+    (token.block as number) < 0 ||
+    (token.character as number) < 0 ||
+    (token.textOffset as number) < 0
+  ) {
+    throw new Error('Google Docs seek is malformed. Restart google.docs.read without seek.')
+  }
+  const cursor = {
+    block: token.block as number,
+    character: token.character as number,
+    textOffset: token.textOffset as number
+  }
+  validateGoogleDocSeekCursor(document.body.blocks, cursor)
+  if (token.documentId !== document.id) {
+    throw new Error(
+      'Google Docs seek belongs to a different document. Restart google.docs.read without seek.'
+    )
+  }
+  if (token.identity !== identity) {
+    throw new Error(
+      'Google Docs seek is stale because the document changed. Restart google.docs.read without seek.'
+    )
+  }
+  return cursor
 }
 
 function extractParagraphTextRuns(value: unknown): Array<{
