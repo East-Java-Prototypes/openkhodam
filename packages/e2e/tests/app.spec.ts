@@ -68,6 +68,8 @@ const selectedProjectSessions = (page: Page): Locator =>
 const messageTranscript = (page: Page): Locator => page.getByRole('region', { name: 'Messages' })
 const chatActionPane = (page: Page): Locator =>
   page.getByRole('complementary', { name: 'Action pane', exact: true })
+const artifactsShortcut = (page: Page): Locator =>
+  page.getByRole('button', { name: /^(Open|Collapse) Artifacts$/ })
 const paneControls = (page: Page): Locator => page.getByRole('toolbar', { name: 'Pane controls' })
 const terminalProjectRouteState = (page: Page): Locator =>
   page.getByText('No sessions found for this project.').or(sessionChatLink(page))
@@ -369,9 +371,22 @@ async function expectSplitCornerPaneControls(
   }
 }
 
-async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<void>> {
+async function seedSessionLinkedDocs(
+  sessionId: string,
+  overflowArtifactCount = 0
+): Promise<() => Promise<void>> {
   const previousArtifacts = await readOptionalFile(projectArtifactsFile)
   await mkdir(projectArtifactsDirectory, { recursive: true })
+  const overflowArtifacts = Array.from({ length: overflowArtifactCount }, (_, index) => ({
+    id: `overflow-artifact-${index}`,
+    title: `Overflow artifact ${index}`,
+    url: fixtureLinkedDocUrl,
+    listed: true,
+    firstSeenAt: 1_900_000_000_000 + index,
+    lastSeenAt: 1_900_000_000_000 + index,
+    firstMessageId: 'message-1',
+    lastMessageId: 'message-1'
+  }))
   await writeFile(
     projectArtifactsFile,
     `${JSON.stringify(
@@ -440,7 +455,8 @@ async function seedSessionLinkedDocs(sessionId: string): Promise<() => Promise<v
               lastSeenAt: 1_800_000_011_000,
               firstMessageId: 'message-3',
               lastMessageId: 'message-3'
-            }
+            },
+            ...overflowArtifacts
           ]
         }
       },
@@ -690,12 +706,35 @@ test('renders the built desktop chat shell', async ({ appWindow }) => {
   expect(homeBox.x).toBeLessThan(settingsBox.x)
   expect(heartbeatBox.x + heartbeatBox.width).toBeLessThanOrEqual(footerBox.x + footerBox.width + 1)
   await expect(chatActionPane(appWindow)).toBeVisible()
+  const artifactsButton = artifactsShortcut(appWindow)
+  await expect(artifactsButton).toBeVisible()
+  await expect(artifactsButton).toHaveAccessibleName('Collapse Artifacts')
+  await expect(artifactsButton).toHaveAttribute('aria-pressed', 'true')
+  const artifactsTab = chatActionPane(appWindow).getByRole('tab', {
+    name: 'Artifacts',
+    exact: true
+  })
+  await expect(artifactsTab).toBeVisible()
+  await expect(artifactsTab).toHaveAttribute('aria-selected', 'true')
   await expect(
     chatActionPane(appWindow).getByText('No linked Google Workspace artifacts yet.')
   ).toBeVisible()
   await expect(
     chatActionPane(appWindow).getByText(/Google Docs and Sheets linked to this chat/)
   ).toBeVisible()
+  const artifactsPanel = chatActionPane(appWindow).getByRole('tabpanel')
+  const emptyArtifactsState = chatActionPane(appWindow)
+    .getByText('No linked Google Workspace artifacts yet.')
+    .locator('..')
+  const artifactsPanelBox = await elementBox(artifactsPanel, 'empty artifacts panel')
+  const emptyArtifactsBox = await elementBox(emptyArtifactsState, 'empty artifacts state')
+  expect(
+    Math.abs(
+      emptyArtifactsBox.y +
+        emptyArtifactsBox.height / 2 -
+        (artifactsPanelBox.y + artifactsPanelBox.height / 2)
+    )
+  ).toBeLessThanOrEqual(24)
   const transcript = messageTranscript(appWindow)
   await expect(transcript).toBeVisible()
   await expect(transcript.getByText('Select a project to view sessions.')).toHaveCount(0)
@@ -779,6 +818,7 @@ test('renders basename project labels and opens the project new-conversation she
     'showActiveProjectSessions'
   )
   await expect(appWindow.getByRole('heading', { name: 'No chat selected' })).toBeVisible()
+  await expect(artifactsShortcut(appWindow)).toBeVisible()
   await expectChatComposerWithoutHelperCopy(appWindow)
   await expect(selectedProjectSessions(appWindow)).toBeVisible()
 })
@@ -943,6 +983,8 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     const titlebar = paneControls(appWindow)
     const collapseSidebarButton = titlebar.getByRole('button', { name: 'Collapse project sidebar' })
     const collapseActionPaneButton = titlebar.getByRole('button', { name: 'Collapse action pane' })
+    const artifactsButton = artifactsShortcut(appWindow)
+    const artifactsTab = actionPane.getByRole('tab', { name: 'Artifacts', exact: true })
     const linkedDocToggle = actionPane.getByRole('button', {
       name: 'Toggle linked Google Doc Fixture linked Google Doc',
       exact: true
@@ -955,6 +997,9 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
       name: 'Open linked Google Doc Fixture linked Google Doc in Google Docs'
     })
     await expect(linkedDocToggle).toBeVisible()
+    await expect(artifactsButton).toHaveAccessibleName('Collapse Artifacts')
+    await expect(artifactsButton).toHaveAttribute('aria-pressed', 'true')
+    await expect(artifactsTab).toHaveAttribute('aria-selected', 'true')
     const chatPanel = appWindow.locator('[id="chat-center-panel"]')
     const resizeHandle = appWindow.getByRole('separator', { name: 'Resize action pane' })
     const initialActionPaneBox = await elementBox(actionPane, 'expanded action pane')
@@ -1153,6 +1198,20 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(appWindow.getByRole('heading', { name: 'Structured fixture chat' })).toBeVisible()
     await expect(appWindow.getByRole('form', { name: 'Chat prompt' })).toBeVisible()
 
+    await artifactsShortcut(appWindow).click()
+    await expect(actionPane).toBeVisible()
+    await expect(artifactsShortcut(appWindow)).toHaveAccessibleName('Collapse Artifacts')
+    await expect(artifactsShortcut(appWindow)).toHaveAttribute('aria-pressed', 'true')
+    await expect(actionPane.getByRole('tab', { name: 'Artifacts', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    await artifactsShortcut(appWindow).click()
+    await expect(actionPane).toHaveCount(0)
+    await expect(artifactsShortcut(appWindow)).toHaveAccessibleName('Open Artifacts')
+    await expect(artifactsShortcut(appWindow)).toHaveAttribute('aria-pressed', 'false')
+
     await titlebar.getByRole('button', { name: 'Restore action pane' }).click()
     await expect(actionPane).toBeVisible()
     const restoredActionPaneBox = await elementBox(actionPane, 'restored action pane')
@@ -1196,6 +1255,47 @@ test('resizes and collapses/restores the chat action pane', async ({ appWindow, 
     await expect(actionPane.getByText('Preview', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Browser preview', { exact: true })).toHaveCount(0)
     await expect(actionPane.getByText('Preview placeholder')).toHaveCount(0)
+  } finally {
+    await restoreProjectArtifacts()
+  }
+})
+
+test('scrolls overflowing linked artifacts within the action pane', async ({
+  appWindow,
+  electronApp
+}) => {
+  const restoreProjectArtifacts = await seedSessionLinkedDocs('structured-session', 24)
+
+  try {
+    await setResizeTestViewport(electronApp, appWindow)
+    await seedOpenedFakeProject(appWindow)
+    await projectChatLink(appWindow).filter({ hasText: 'Fake Project' }).click()
+    await expectOpenedProjectRouteResolved(appWindow)
+    await sessionChatLink(appWindow).filter({ hasText: 'Structured fixture chat' }).click()
+
+    const actionPane = chatActionPane(appWindow)
+    const artifactPanel = actionPane.getByRole('tabpanel')
+    const artifactList = actionPane.getByRole('region', {
+      name: 'Linked Google Workspace artifacts'
+    })
+    const artifactPanelBox = await elementBox(artifactPanel, 'artifacts tab panel')
+    const artifactListBox = await elementBox(artifactList, 'overflowing artifact list')
+    expect(artifactListBox.height).toBeLessThanOrEqual(artifactPanelBox.height + 1)
+
+    const metrics = await artifactList.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop
+    }))
+    expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
+    await artifactList.hover()
+    await appWindow.mouse.wheel(0, 1_000)
+    await expect
+      .poll(() => artifactList.evaluate((element) => element.scrollTop), {
+        message: 'artifact list should scroll after wheel input'
+      })
+      .toBeGreaterThan(metrics.scrollTop)
+    await expect(artifactList.getByText('Overflow artifact 23')).toBeVisible()
   } finally {
     await restoreProjectArtifacts()
   }

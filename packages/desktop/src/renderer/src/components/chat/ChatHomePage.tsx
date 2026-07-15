@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LinkedGoogleArtifact } from '@openkhodam/ui/types'
-import { SquareIcon } from 'lucide-react'
+import { PanelRightIcon, SquareIcon } from 'lucide-react'
 import {
   createContext,
   useCallback,
@@ -89,7 +89,11 @@ type ActionPaneControlsContextValue = {
   isActionPaneOpen: boolean
   setActionPaneOpen: (open: boolean) => void
   setActionPaneAvailable: (available: boolean) => void
+  selectedActionPaneTab: ActionPaneTab
+  selectActionPaneTab: (tab: ActionPaneTab) => void
 }
+
+type ActionPaneTab = 'artifacts'
 
 const ActionPaneControlsContext = createContext<ActionPaneControlsContextValue | null>(null)
 
@@ -115,14 +119,17 @@ export function ChatHomePage({
   const [isProjectSidebarOpen, setProjectSidebarOpen] = useState(true)
   const [isActionPaneOpen, setActionPaneOpen] = useState(true)
   const [isActionPaneAvailable, setActionPaneAvailable] = useState(false)
+  const [selectedActionPaneTab, setSelectedActionPaneTab] = useState<ActionPaneTab>('artifacts')
 
   const actionPaneControls = useMemo<ActionPaneControlsContextValue>(
     () => ({
       isActionPaneOpen,
       setActionPaneOpen,
-      setActionPaneAvailable
+      setActionPaneAvailable,
+      selectedActionPaneTab,
+      selectActionPaneTab: setSelectedActionPaneTab
     }),
-    [isActionPaneOpen]
+    [isActionPaneOpen, selectedActionPaneTab]
   )
 
   const syncProjectSidebarPanel = useCallback((open: boolean): void => {
@@ -762,7 +769,13 @@ export function ActiveChatPanel({
   composer?: ReactNode
   composerErrorMessage?: string | null
 }): JSX.Element {
-  const { isActionPaneOpen, setActionPaneOpen, setActionPaneAvailable } = useActionPaneControls()
+  const {
+    isActionPaneOpen,
+    setActionPaneOpen,
+    setActionPaneAvailable,
+    selectedActionPaneTab,
+    selectActionPaneTab
+  } = useActionPaneControls()
   const actionPanePanelRef = useRef<PanelImperativeHandle | null>(null)
   const messages = session?.messages ?? emptyChatMessages
 
@@ -804,6 +817,21 @@ export function ActiveChatPanel({
     return () => setActionPaneAvailable(false)
   }, [setActionPaneAvailable])
 
+  const toggleArtifacts = useCallback((): void => {
+    if (!isActionPaneOpen) {
+      handleActionPaneOpenChange(true)
+      selectActionPaneTab('artifacts')
+      return
+    }
+
+    if (selectedActionPaneTab !== 'artifacts') {
+      selectActionPaneTab('artifacts')
+      return
+    }
+
+    handleActionPaneOpenChange(false)
+  }, [handleActionPaneOpenChange, isActionPaneOpen, selectActionPaneTab, selectedActionPaneTab])
+
   return (
     <ResizablePanelGroup
       id="active-chat-layout"
@@ -815,10 +843,32 @@ export function ActiveChatPanel({
           className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
           aria-labelledby="active-chat-heading"
         >
-          <header className="shrink-0 px-6 py-3">
-            <h2 id="active-chat-heading" className="text-base font-semibold tracking-tight">
+          <header className="flex shrink-0 items-center gap-2 px-6 py-3">
+            <h2
+              id="active-chat-heading"
+              className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight"
+            >
               {session?.activeChat?.title ?? 'No chat selected'}
             </h2>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label={isActionPaneOpen ? 'Collapse Artifacts' : 'Open Artifacts'}
+                    aria-pressed={isActionPaneOpen}
+                    onClick={toggleArtifacts}
+                  />
+                }
+              >
+                <PanelRightIcon aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent>
+                {isActionPaneOpen ? 'Collapse Artifacts' : 'Open Artifacts'}
+              </TooltipContent>
+            </Tooltip>
           </header>
           <Separator />
           <ChatMessageList
@@ -873,7 +923,11 @@ export function ActiveChatPanel({
         onResize={handleActionPaneResize}
       >
         {isActionPaneOpen ? (
-          <ChatActionPane linkedGoogleArtifacts={linkedGoogleArtifacts} />
+          <ChatActionPane
+            linkedGoogleArtifacts={linkedGoogleArtifacts}
+            selectedTab={selectedActionPaneTab}
+            onSelectedTabChange={selectActionPaneTab}
+          />
         ) : (
           <CollapsedActionPaneRail onRestore={() => handleActionPaneOpenChange(true)} />
         )}
