@@ -11,6 +11,10 @@ import {
   editGoogleDocDocument,
   editGoogleSheetSpreadsheet,
   type GoogleDocsEditOperation,
+  type GoogleDocsListPlacement,
+  type GoogleDocsListType,
+  type GoogleDocsParagraphStyle,
+  type GoogleDocsTextStyle,
   type GoogleDocsTextOccurrence,
   type GoogleSheetsEditOperation,
   type GoogleSheetsValueInputOption,
@@ -20,7 +24,6 @@ import {
   searchGoogleDriveFiles
 } from '../integrations/google-workspace-runtime'
 import {
-  deleteGoogleDocDocumentArtifact,
   deleteGoogleSheetSpreadsheetArtifact,
   getOrCreateLinkedGoogleArtifact,
   getOrCreateLinkedGoogleDoc,
@@ -46,21 +49,27 @@ type GoogleWorkspaceToolContext = {
   worktree?: string
 }
 
-type GoogleWorkspaceArtifactSessionContext = {
+type GoogleWorkspaceArtifactContext = {
   messageId: string | null
   projectDirectory: string
-  sessionId: string
+  sessionId: string | null
 }
 
-type PersistedReadGoogleWorkspaceArtifact = GoogleWorkspaceArtifactSessionContext & {
+type PersistedReadGoogleWorkspaceArtifact = GoogleWorkspaceArtifactContext & {
   artifactPath: string
+  cachedAt: number
   created: boolean
 }
 
-type DeletePersistedGoogleWorkspaceArtifact = (input: {
-  artifactPath: string
-  projectDirectory: string
-}) => Promise<{ deleted: boolean }>
+type GoogleDocArtifactSync =
+  | { reason: 'project_context_missing' | 'persist_failed'; status: 'unavailable' }
+  | {
+      artifactRef: string
+      cachedAt: number
+      linked: boolean
+      providerRevision: string | null
+      status: 'synced'
+    }
 
 type GoogleWorkspaceListCommandsToolDefinition = {
   args: {
@@ -229,6 +238,30 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
     operationType: 'delete_text',
     required: ['documentId', 'match']
   }),
+  createGoogleDocsFormatCommand({
+    description: 'Format a matching text occurrence in a Google Docs document.',
+    id: 'google.docs.format_text',
+    operationType: 'format_text'
+  }),
+  createGoogleDocsFormatCommand({
+    description:
+      'Format the paragraph containing a matching text occurrence in a Google Docs document.',
+    id: 'google.docs.format_paragraph',
+    operationType: 'format_paragraph'
+  }),
+  createGoogleDocsListCommand({
+    description:
+      'Insert isolated native list paragraphs before, after, or at the end of a Google Docs document.',
+    id: 'google.docs.insert_list',
+    operationType: 'insert_list'
+  }),
+  createGoogleDocsTableCommand(),
+  createGoogleDocsListCommand({
+    description:
+      'Format only the paragraph containing a matching text occurrence as a native Google Docs list.',
+    id: 'google.docs.format_list',
+    operationType: 'format_list'
+  }),
   createGoogleSheetsReadCommand(),
   createGoogleSheetsEditCommand({
     description: 'Set 2D values in a Google Sheets A1 range.',
@@ -248,6 +281,243 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
     operationType: 'clear_range'
   })
 ]
+
+function createGoogleDocsTableCommand(): GoogleWorkspaceCommand {
+  const id = 'google.docs.insert_table'
+  return {
+    description:
+      'Insert a simple native Google Docs table before, after, or at the end of a Google Docs document.',
+    id,
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        documentId: { description: 'The Google Docs document ID to edit.', type: 'string' },
+        match: { description: 'Text in the paragraph to target.', type: 'string' },
+        occurrence: {
+          description:
+            'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+          type: ['number', 'string']
+        },
+        placement: { enum: ['before', 'after', 'document_end'], type: 'string' },
+        rows: {
+          items: {
+            items: { maxLength: 2000, type: 'string' },
+            maxItems: 100,
+            minItems: 1,
+            type: 'array'
+          },
+          maxItems: 100,
+          minItems: 1,
+          type: 'array'
+        }
+      },
+      required: ['documentId', 'placement', 'rows'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${id} input`)
+      rejectAdditionalProperties(
+        record,
+        ['documentId', 'match', 'occurrence', 'placement', 'rows'],
+        id,
+        options?.rejectUndefinedProperties
+      )
+      const documentId = requiredStringArg(record.documentId, id, 'documentId')
+      const placement = listPlacementArg(record.placement, id)
+      const hasMatch = record.match !== undefined
+      const hasOccurrence = record.occurrence !== undefined
+      if (placement === 'document_end' && (hasMatch || hasOccurrence)) {
+        throw new Error(
+          `Google Workspace command ${id} does not accept match or occurrence for document_end.`
+        )
+      }
+      if (placement !== 'document_end' && !hasMatch) {
+        throw new Error(`Google Workspace command ${id} requires match for ${placement}.`)
+      }
+      if (!Array.isArray(record.rows) || record.rows.length === 0 || record.rows.length > 100) {
+        throw new Error(
+          `Google Workspace command ${id} requires rows as a non-empty array of at most 100 rows.`
+        )
+      }
+      const rows = record.rows as unknown[]
+      let columnCount: number | null = null
+      let totalLength = 0
+      for (const row of rows) {
+        if (!Array.isArray(row) || row.length === 0 || row.length > 100) {
+          throw new Error(
+            `Google Workspace command ${id} requires non-empty rows of at most 100 strings.`
+          )
+        }
+        if (columnCount === null) columnCount = row.length
+        if (row.length !== columnCount)
+          throw new Error(`Google Workspace command ${id} requires rectangular rows.`)
+        for (const cell of row) {
+          if (typeof cell !== 'string' || cell.length > 2000 || /[\r\n]/.test(cell)) {
+            throw new Error(
+              `Google Workspace command ${id} requires single-line string cells of at most 2000 characters.`
+            )
+          }
+          totalLength += cell.length
+        }
+      }
+      if (totalLength > 20_000)
+        throw new Error(
+          `Google Workspace command ${id} cell text must be at most 20000 characters.`
+        )
+      return {
+        documentId,
+        operation: {
+          ...(placement === 'document_end'
+            ? {}
+            : {
+                match: requiredStringArg(record.match, id, 'match'),
+                occurrence: occurrenceArg(record.occurrence)
+              }),
+          placement,
+          rows: rows as string[][],
+          type: 'insert_table'
+        }
+      }
+    }
+  }
+}
+
+function createGoogleDocsListCommand(input: {
+  description: string
+  id: string
+  operationType: 'insert_list' | 'format_list'
+}): GoogleWorkspaceCommand {
+  const isInsert = input.operationType === 'insert_list'
+  const properties: Record<string, unknown> = {
+    documentId: { description: 'The Google Docs document ID to edit.', type: 'string' },
+    listType: { enum: ['bullet', 'numbered', 'checkbox'], type: 'string' },
+    match: { description: 'Text in the paragraph to target.', type: 'string' },
+    occurrence: {
+      description: 'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+      type: ['number', 'string']
+    }
+  }
+  if (isInsert) {
+    properties.items = {
+      items: { maxLength: 2000, minLength: 1, type: 'string' },
+      maxItems: 100,
+      minItems: 1,
+      type: 'array'
+    }
+    properties.placement = { enum: ['before', 'after', 'document_end'], type: 'string' }
+  }
+  const allowed = Object.keys(properties)
+  return {
+    ...input,
+    inputSchema: {
+      additionalProperties: false,
+      properties,
+      required: isInsert
+        ? ['documentId', 'items', 'listType', 'placement']
+        : ['documentId', 'match', 'listType'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${input.id} input`)
+      rejectAdditionalProperties(record, allowed, input.id, options?.rejectUndefinedProperties)
+      const documentId = requiredStringArg(record.documentId, input.id, 'documentId')
+      const listType = listTypeArg(record.listType, input.id)
+      const occurrence = occurrenceArg(record.occurrence)
+      if (!isInsert) {
+        return {
+          documentId,
+          operation: {
+            listType,
+            match: requiredStringArg(record.match, input.id, 'match'),
+            occurrence,
+            type: 'format_list'
+          }
+        }
+      }
+      const placement = listPlacementArg(record.placement, input.id)
+      const hasMatch = record.match !== undefined
+      const hasOccurrence = record.occurrence !== undefined
+      if (placement === 'document_end' && (hasMatch || hasOccurrence)) {
+        throw new Error(
+          `Google Workspace command ${input.id} does not accept match or occurrence for document_end.`
+        )
+      }
+      if (placement !== 'document_end' && !hasMatch) {
+        throw new Error(`Google Workspace command ${input.id} requires match for ${placement}.`)
+      }
+      return {
+        documentId,
+        operation: {
+          items: listItemsArg(record.items, input.id),
+          listType,
+          ...(placement === 'document_end'
+            ? {}
+            : { match: requiredStringArg(record.match, input.id, 'match'), occurrence }),
+          placement,
+          type: 'insert_list'
+        }
+      }
+    }
+  }
+}
+
+function listTypeArg(value: unknown, command: string): GoogleDocsListType {
+  if (value === 'bullet' || value === 'numbered' || value === 'checkbox') return value
+  throw new Error(
+    `Google Workspace command ${command} requires listType to be bullet, numbered, or checkbox.`
+  )
+}
+
+function listPlacementArg(value: unknown, command: string): GoogleDocsListPlacement {
+  if (value === 'before' || value === 'after' || value === 'document_end') return value
+  throw new Error(
+    `Google Workspace command ${command} requires placement to be before, after, or document_end.`
+  )
+}
+
+function listItemsArg(value: unknown, command: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
+    throw new Error(
+      `Google Workspace command ${command} requires items as a non-empty array of at most 100 strings.`
+    )
+  }
+  if (
+    value.some(
+      (item) =>
+        typeof item !== 'string' ||
+        !item ||
+        item.length > 2000 ||
+        /[\r\n]/.test(item) ||
+        item.startsWith('\t')
+    )
+  ) {
+    throw new Error(
+      `Google Workspace command ${command} requires non-empty single-line items that do not start with a tab.`
+    )
+  }
+  if ((value as string[]).join('\n').length > 20_000) {
+    throw new Error(
+      `Google Workspace command ${command} item text must be at most 20000 characters.`
+    )
+  }
+  return value as string[]
+}
 
 function createGoogleDocsCommand(input: {
   description: string
@@ -302,6 +572,211 @@ function createGoogleDocsCommand(input: {
       }
     }
   }
+}
+
+function createGoogleDocsFormatCommand(input: {
+  description: string
+  id: string
+  operationType: 'format_text' | 'format_paragraph'
+}): GoogleWorkspaceCommand {
+  const styleSchema =
+    input.operationType === 'format_text'
+      ? googleDocsTextStyleSchema()
+      : googleDocsParagraphStyleSchema()
+  return {
+    ...input,
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        documentId: { description: 'The Google Docs document ID to edit.', type: 'string' },
+        match: { description: 'Text to find for match-based formatting.', type: 'string' },
+        occurrence: {
+          description:
+            'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+          type: ['number', 'string']
+        },
+        style: styleSchema
+      },
+      required: ['documentId', 'match', 'style'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${input.id} input`)
+      rejectAdditionalProperties(
+        record,
+        ['documentId', 'match', 'occurrence', 'style'],
+        input.id,
+        options?.rejectUndefinedProperties
+      )
+      const documentId = requiredStringArg(record.documentId, input.id, 'documentId')
+      const match = requiredStringArg(record.match, input.id, 'match')
+      const occurrence = occurrenceArg(record.occurrence)
+      const style =
+        input.operationType === 'format_text'
+          ? parseGoogleDocsTextStyle(record.style, input.id)
+          : parseGoogleDocsParagraphStyle(record.style, input.id)
+      return {
+        documentId,
+        operation: {
+          match,
+          occurrence,
+          style,
+          type: input.operationType
+        } as GoogleDocsEditOperation
+      }
+    }
+  }
+}
+
+function googleDocsTextStyleSchema(): Record<string, unknown> {
+  return {
+    additionalProperties: false,
+    minProperties: 1,
+    properties: {
+      bold: { type: ['boolean', 'null'] },
+      italic: { type: ['boolean', 'null'] },
+      underline: { type: ['boolean', 'null'] },
+      strikethrough: { type: ['boolean', 'null'] },
+      fontFamily: { type: ['string', 'null'] },
+      fontSizePt: { exclusiveMinimum: 0, type: ['number', 'null'] },
+      foregroundColor: { pattern: '^#[0-9A-F]{6}$', type: ['string', 'null'] },
+      backgroundColor: { pattern: '^#[0-9A-F]{6}$', type: ['string', 'null'] },
+      linkUrl: { type: ['string', 'null'] }
+    },
+    type: 'object'
+  }
+}
+
+function googleDocsParagraphStyleSchema(): Record<string, unknown> {
+  return {
+    additionalProperties: false,
+    minProperties: 1,
+    properties: {
+      namedStyle: {
+        enum: [
+          'NORMAL_TEXT',
+          'TITLE',
+          'SUBTITLE',
+          'HEADING_1',
+          'HEADING_2',
+          'HEADING_3',
+          'HEADING_4',
+          'HEADING_5',
+          'HEADING_6',
+          null
+        ]
+      },
+      alignment: { enum: ['START', 'CENTER', 'END', 'JUSTIFIED', null] },
+      lineSpacingPercent: { exclusiveMinimum: 0, type: ['number', 'null'] },
+      spaceAbovePt: { exclusiveMinimum: 0, type: ['number', 'null'] },
+      spaceBelowPt: { exclusiveMinimum: 0, type: ['number', 'null'] }
+    },
+    type: 'object'
+  }
+}
+
+function parseGoogleDocsTextStyle(value: unknown, command: string): GoogleDocsTextStyle {
+  const record = objectArg(value, `Google Workspace command ${command} style`)
+  rejectAdditionalProperties(
+    record,
+    [
+      'bold',
+      'italic',
+      'underline',
+      'strikethrough',
+      'fontFamily',
+      'fontSizePt',
+      'foregroundColor',
+      'backgroundColor',
+      'linkUrl'
+    ],
+    command
+  )
+  if (!Object.keys(record).length)
+    throw new Error(`Google Workspace command ${command} requires a non-empty style.`)
+  for (const key of ['bold', 'italic', 'underline', 'strikethrough'])
+    if (record[key] !== undefined && record[key] !== null && typeof record[key] !== 'boolean')
+      throw new Error(`Google Workspace command ${command} requires ${key} to be boolean or null.`)
+  if (
+    record.fontFamily !== undefined &&
+    record.fontFamily !== null &&
+    (typeof record.fontFamily !== 'string' || !record.fontFamily.trim())
+  )
+    throw new Error(
+      `Google Workspace command ${command} requires fontFamily to be a non-empty string or null.`
+    )
+  for (const key of ['fontSizePt'] as const)
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'number' || !Number.isFinite(record[key]) || record[key] <= 0)
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be a positive number or null.`
+      )
+  for (const key of ['foregroundColor', 'backgroundColor'])
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'string' || !/^#[0-9A-F]{6}$/.test(record[key] as string))
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be canonical #RRGGBB or null.`
+      )
+  if (record.linkUrl !== undefined && record.linkUrl !== null && typeof record.linkUrl !== 'string')
+    throw new Error(`Google Workspace command ${command} requires linkUrl to be a string or null.`)
+  return record as GoogleDocsTextStyle
+}
+
+function parseGoogleDocsParagraphStyle(value: unknown, command: string): GoogleDocsParagraphStyle {
+  const record = objectArg(value, `Google Workspace command ${command} style`)
+  rejectAdditionalProperties(
+    record,
+    ['namedStyle', 'alignment', 'lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt'],
+    command
+  )
+  if (!Object.keys(record).length)
+    throw new Error(`Google Workspace command ${command} requires a non-empty style.`)
+  if (
+    record.namedStyle !== undefined &&
+    record.namedStyle !== null &&
+    ![
+      'NORMAL_TEXT',
+      'TITLE',
+      'SUBTITLE',
+      'HEADING_1',
+      'HEADING_2',
+      'HEADING_3',
+      'HEADING_4',
+      'HEADING_5',
+      'HEADING_6'
+    ].includes(record.namedStyle as string)
+  )
+    throw new Error(`Google Workspace command ${command} requires a valid namedStyle.`)
+  if (
+    record.alignment !== undefined &&
+    record.alignment !== null &&
+    !['START', 'CENTER', 'END', 'JUSTIFIED'].includes(record.alignment as string)
+  )
+    throw new Error(`Google Workspace command ${command} requires a valid alignment.`)
+  for (const key of ['lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt'])
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'number' || !Number.isFinite(record[key]) || record[key] <= 0)
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be a positive number or null.`
+      )
+  return record as GoogleDocsParagraphStyle
 }
 
 function createGoogleDriveSearchCommand(): GoogleWorkspaceCommand {
@@ -376,12 +851,16 @@ function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
         documentId: input.documentId,
         signal: context.abort
       })
-      const artifactRef = await recordReadGoogleDocArtifact(context, result.document)
+      const artifactSync = await recordReadGoogleDocArtifact(context, result.document)
       const document = createGoogleDocDocumentPreview(result.document)
       return JSON.stringify({
-        artifactRef,
+        artifactRef: artifactSync.status === 'synced' ? artifactSync.artifactRef : null,
+        artifactSync,
         document,
-        ...createGoogleDocArtifactNextAction(artifactRef, document.preview.truncated)
+        ...createGoogleDocArtifactNextAction(
+          artifactSync.status === 'synced' ? artifactSync.artifactRef : null,
+          document.preview.truncated
+        )
       })
     },
     parseInput(value) {
@@ -395,7 +874,7 @@ function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
 function createGoogleArtifactsReadCommand(): GoogleWorkspaceCommand {
   return {
     description:
-      'Read a cached Google Docs artifact offline. Continue with nextCursor; refresh with google.docs.read when stale or missing. Supports first-tab paragraphs only; tables are unsupported.',
+      'Read a cached Google Docs artifact offline. Continue with nextCursor; refresh with google.docs.read when stale or missing. Supports first-tab rich text, lists, and simple table cells; merged or irregular tables and images are unsupported.',
     id: 'google.artifacts.read',
     inputSchema: {
       additionalProperties: false,
@@ -455,7 +934,37 @@ function createGoogleArtifactsReadCommand(): GoogleWorkspaceCommand {
       return JSON.stringify({
         artifactRef: cached.artifactRef,
         cachedAt: cached.document.cachedAt,
-        coverage: { firstTabOnly: true, paragraphsOnly: true, tablesUnsupported: true },
+        coverage:
+          cached.document.schemaVersion === 2
+            ? {
+                richText: true,
+                lists: true,
+                simpleTables: true,
+                mergedOrIrregularTables: false,
+                unsupportedTableStructures: {
+                  present: cached.document.body.blocks.some(
+                    (block) => block.location?.kind === 'unsupported-table'
+                  ),
+                  count: new Set(
+                    cached.document.body.blocks.flatMap((block) =>
+                      block.location?.kind === 'unsupported-table'
+                        ? [block.location.tableIndex]
+                        : []
+                    )
+                  ).size
+                },
+                images: false,
+                firstTabOnly: true
+              }
+            : {
+                richText: false,
+                lists: false,
+                simpleTables: false,
+                mergedOrIrregularTables: false,
+                unsupportedTableStructures: { present: false, count: 0 },
+                images: false,
+                firstTabOnly: true
+              },
         nextCursor: page.nextCursor,
         providerRevision: cached.document.revision,
         returnedBlocks: page.blocks,
@@ -732,14 +1241,18 @@ async function executeGoogleDocsEdit(input: {
     operation: input.operation,
     signal: input.context.abort
   })
-  const artifactRef = await recordReadGoogleDocArtifact(input.context, result.document)
+  const artifactSync = await recordReadGoogleDocArtifact(input.context, result.document)
 
   const document = createGoogleDocDocumentPreview(result.document)
   return JSON.stringify({
     edit: result.edit,
-    artifactRef,
+    artifactRef: artifactSync.status === 'synced' ? artifactSync.artifactRef : null,
+    artifactSync,
     document,
-    ...createGoogleDocArtifactNextAction(artifactRef, document.preview.truncated)
+    ...createGoogleDocArtifactNextAction(
+      artifactSync.status === 'synced' ? artifactSync.artifactRef : null,
+      document.preview.truncated
+    )
   })
 }
 
@@ -814,8 +1327,8 @@ function occurrenceArg(value: unknown): GoogleDocsTextOccurrence | undefined {
 async function recordReadGoogleDocArtifact(
   context: GoogleWorkspaceToolContext,
   document: GoogleDocDocumentArtifact
-): Promise<string | null> {
-  const persisted = await persistReadGoogleWorkspaceArtifact({
+): Promise<GoogleDocArtifactSync> {
+  const persisted = await persistReadGoogleDocArtifact({
     context,
     failureDetails: {
       docId: document.id,
@@ -828,7 +1341,23 @@ async function recordReadGoogleDocArtifact(
         projectDirectory
       })
   })
-  if (!persisted) return null
+  if (!persisted) {
+    return {
+      reason: nonEmptyString(context.directory) ? 'persist_failed' : 'project_context_missing',
+      status: 'unavailable'
+    }
+  }
+
+  const artifactRef = createGoogleDocArtifactRef(document.id)
+  if (!persisted.sessionId) {
+    return {
+      artifactRef,
+      cachedAt: persisted.cachedAt,
+      linked: false,
+      providerRevision: document.revision,
+      status: 'synced'
+    }
+  }
 
   try {
     await getOrCreateLinkedGoogleDoc({
@@ -842,27 +1371,26 @@ async function recordReadGoogleDocArtifact(
       messageId: persisted.messageId,
       sessionId: persisted.sessionId
     })
-    return createGoogleDocArtifactRef(document.id)
+    return {
+      artifactRef,
+      cachedAt: persisted.cachedAt,
+      linked: true,
+      providerRevision: document.revision,
+      status: 'synced'
+    }
   } catch {
-    const artifactCleanedUp = await cleanupCreatedGoogleWorkspaceArtifact({
-      artifactPath: persisted.artifactPath,
-      createdArtifact: persisted.created,
-      deleteArtifact: deleteGoogleDocDocumentArtifact,
-      failureDetails: {
-        docId: document.id,
-        reason: 'artifact_cleanup_failed',
-        sessionId: persisted.sessionId
-      },
-      failureMessage: 'Failed to clean up Google Doc artifact after record failure',
-      projectDirectory: persisted.projectDirectory
-    })
     console.warn('Failed to record linked Google Doc artifact', {
-      artifactCleanedUp,
       docId: document.id,
       reason: 'artifact_record_failed',
       sessionId: persisted.sessionId
     })
-    return null
+    return {
+      artifactRef,
+      cachedAt: persisted.cachedAt,
+      linked: false,
+      providerRevision: document.revision,
+      status: 'synced'
+    }
   }
 }
 
@@ -870,7 +1398,7 @@ async function recordReadGoogleSheetArtifact(
   context: GoogleWorkspaceToolContext,
   spreadsheet: GoogleSheetSpreadsheetArtifact
 ): Promise<void> {
-  const persisted = await persistReadGoogleWorkspaceArtifact({
+  const persisted = await persistReadGoogleSheetArtifact({
     context,
     failureDetails: {
       reason: 'artifact_persist_failed',
@@ -884,6 +1412,7 @@ async function recordReadGoogleSheetArtifact(
       })
   })
   if (!persisted) return
+  if (!persisted.sessionId) return
 
   try {
     await getOrCreateLinkedGoogleArtifact({
@@ -920,13 +1449,44 @@ async function recordReadGoogleSheetArtifact(
   }
 }
 
-async function persistReadGoogleWorkspaceArtifact(input: {
+async function cleanupCreatedGoogleWorkspaceArtifact({
+  artifactPath,
+  createdArtifact,
+  deleteArtifact,
+  failureDetails,
+  failureMessage,
+  projectDirectory
+}: {
+  artifactPath: string
+  createdArtifact: boolean
+  deleteArtifact: (input: {
+    artifactPath: string
+    projectDirectory: string
+  }) => Promise<{ deleted: boolean }>
+  failureDetails: Record<string, string>
+  failureMessage: string
+  projectDirectory: string
+}): Promise<boolean | null> {
+  if (!createdArtifact) return null
+  try {
+    return (await deleteArtifact({ artifactPath, projectDirectory })).deleted
+  } catch {
+    console.warn(failureMessage, failureDetails)
+    return false
+  }
+}
+
+async function persistReadGoogleDocArtifact(input: {
   context: GoogleWorkspaceToolContext
   failureDetails: Record<string, string>
   failureMessage: string
-  persist: (projectDirectory: string) => Promise<{ artifactPath: string; created: boolean }>
+  persist: (projectDirectory: string) => Promise<{
+    artifactPath: string
+    cachedAt: number
+    created: boolean
+  }>
 }): Promise<PersistedReadGoogleWorkspaceArtifact | null> {
-  const artifactContext = getGoogleWorkspaceArtifactSessionContext(input.context)
+  const artifactContext = getGoogleDocArtifactContext(input.context)
   if (!artifactContext) return null
 
   try {
@@ -941,44 +1501,46 @@ async function persistReadGoogleWorkspaceArtifact(input: {
   }
 }
 
-function getGoogleWorkspaceArtifactSessionContext(
+async function persistReadGoogleSheetArtifact(input: {
   context: GoogleWorkspaceToolContext
-): GoogleWorkspaceArtifactSessionContext | null {
+  failureDetails: Record<string, string>
+  failureMessage: string
+  persist: (projectDirectory: string) => Promise<{
+    artifactPath: string
+    cachedAt: number
+    created: boolean
+  }>
+}): Promise<PersistedReadGoogleWorkspaceArtifact | null> {
+  const artifactContext = getGoogleSheetArtifactContext(input.context)
+  if (!artifactContext) return null
+  try {
+    const persisted = await input.persist(artifactContext.projectDirectory)
+    return { ...artifactContext, ...persisted }
+  } catch {
+    console.warn(input.failureMessage, input.failureDetails)
+    return null
+  }
+}
+
+function getGoogleDocArtifactContext(
+  context: GoogleWorkspaceToolContext
+): GoogleWorkspaceArtifactContext | null {
   const projectDirectory = nonEmptyString(context.directory)
   const messageId = nonEmptyString(context.messageID)
   const sessionId = nonEmptyString(context.sessionID)
-  if (!projectDirectory || !sessionId) return null
+  if (!projectDirectory) return null
 
   return { messageId, projectDirectory, sessionId }
 }
 
-async function cleanupCreatedGoogleWorkspaceArtifact({
-  artifactPath,
-  createdArtifact,
-  deleteArtifact,
-  failureDetails,
-  failureMessage,
-  projectDirectory
-}: {
-  artifactPath: string
-  createdArtifact: boolean
-  deleteArtifact: DeletePersistedGoogleWorkspaceArtifact
-  failureDetails: Record<string, string>
-  failureMessage: string
-  projectDirectory: string
-}): Promise<boolean | null> {
-  if (!createdArtifact) return null
-
-  try {
-    const result = await deleteArtifact({
-      artifactPath,
-      projectDirectory
-    })
-    return result.deleted
-  } catch {
-    console.warn(failureMessage, failureDetails)
-    return false
-  }
+function getGoogleSheetArtifactContext(
+  context: GoogleWorkspaceToolContext
+): GoogleWorkspaceArtifactContext | null {
+  const projectDirectory = nonEmptyString(context.directory)
+  const messageId = nonEmptyString(context.messageID)
+  const sessionId = nonEmptyString(context.sessionID)
+  if (!projectDirectory || !sessionId) return null
+  return { messageId, projectDirectory, sessionId }
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -1053,10 +1615,10 @@ function createGoogleDocArtifactPage(
   maxCharacters: number,
   cursor: GoogleDocArtifactCursor
 ): {
-  blocks: Array<{ id: string; ordinal: number; text: string; type: 'paragraph' }>
+  blocks: GoogleDocDocumentArtifact['body']['blocks']
   nextCursor: string | null
 } {
-  const blocks: Array<{ id: string; ordinal: number; text: string; type: 'paragraph' }> = []
+  const blocks: GoogleDocDocumentArtifact['body']['blocks'] = []
   let blockIndex = cursor.block
   let character = cursor.character
   let remaining = maxCharacters
@@ -1076,7 +1638,13 @@ function createGoogleDocArtifactPage(
         'Google Docs artifact cursor is invalid. Restart google.artifacts.read without a cursor.'
       )
     const text = codePoints.slice(character, character + remaining).join('')
-    blocks.push({ ...block, text })
+    blocks.push({
+      ...block,
+      text,
+      ...(block.runs
+        ? { runs: sliceGoogleDocTextRuns(block.runs, character, Array.from(text).length) }
+        : {})
+    })
     remaining -= Array.from(text).length
     character += Array.from(text).length
     if (character < codePoints.length) break
@@ -1091,6 +1659,25 @@ function createGoogleDocArtifactPage(
           'utf8'
         ).toString('base64url')
   return { blocks, nextCursor }
+}
+
+function sliceGoogleDocTextRuns(
+  runs: NonNullable<GoogleDocDocumentArtifact['body']['blocks'][number]['runs']>,
+  start: number,
+  length: number
+) {
+  let offset = 0
+  let remaining = length
+  return runs.flatMap((run) => {
+    const points = Array.from(run.text)
+    const runStart = Math.max(0, start - offset)
+    const available = points.length - runStart
+    const take = Math.min(available, remaining)
+    offset += points.length
+    if (take <= 0 || remaining <= 0) return []
+    remaining -= take
+    return [{ ...run, text: points.slice(runStart, runStart + take).join('') }]
+  })
 }
 
 function createGoogleDocArtifactRef(id: string): string {

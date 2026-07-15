@@ -26,7 +26,7 @@ import { JsonConfigFile, writeJsonConfigFile } from '../config/json-config-file'
 
 export const OPENKHODAM_PROJECT_DIRECTORY_NAME = '.openkhodam'
 export const PROJECT_ARTIFACTS_CONFIG_VERSION = 1
-export const GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION = 1
+export const GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION = 2
 export const GOOGLE_SHEET_SPREADSHEET_ARTIFACT_SCHEMA_VERSION = 1
 export const PROJECT_ARTIFACTS_FILE_NAME = 'artifacts.json'
 export const PROJECT_ARTIFACTS_DIRECTORY_NAME = 'artifacts'
@@ -119,6 +119,7 @@ export type PersistGoogleDocDocumentArtifactInput = {
 
 export type PersistGoogleDocDocumentArtifactResult = {
   artifactPath: string
+  cachedAt: number
   created: boolean
 }
 
@@ -129,6 +130,7 @@ export type PersistGoogleSheetSpreadsheetArtifactInput = {
 
 export type PersistGoogleSheetSpreadsheetArtifactResult = {
   artifactPath: string
+  cachedAt: number
   created: boolean
 }
 
@@ -281,9 +283,18 @@ export class ProjectArtifactsFileStore {
   async persistGoogleDocDocumentArtifact(
     document: GoogleDocDocumentArtifact
   ): Promise<PersistGoogleDocDocumentArtifactResult> {
+    const normalizedDocument = normalizeGoogleDocDocumentArtifactForPersistence(document)
+    const cachedAt = this.now()
+    const persistedDocument = parsePersistedGoogleDocDocumentArtifact({
+      ...normalizedDocument,
+      schemaVersion: GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION,
+      cachedAt
+    })
     return this.persistGoogleWorkspaceArtifactFile(
-      document,
-      GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG
+      persistedDocument,
+      GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG,
+      cachedAt,
+      (artifact) => artifact
     )
   }
 
@@ -368,8 +379,17 @@ export class ProjectArtifactsFileStore {
     TSchemaVersion extends number
   >(
     artifact: TArtifact,
-    config: GoogleWorkspaceArtifactFileConfig<TArtifact, TSchemaVersion>
-  ): Promise<{ artifactPath: string; created: boolean }> {
+    config: GoogleWorkspaceArtifactFileConfig<TArtifact, TSchemaVersion>,
+    cachedAt = this.now(),
+    createPersistedArtifact: (
+      artifact: TArtifact,
+      schemaVersion: TSchemaVersion,
+      cachedAt: number
+    ) => TArtifact & {
+      schemaVersion: TSchemaVersion
+      cachedAt: number
+    } = createPersistedGoogleWorkspaceArtifact
+  ): Promise<{ artifactPath: string; cachedAt: number; created: boolean }> {
     const artifactId = normalizeRequiredString(
       config.getArtifactId(artifact),
       config.artifactIdFieldName
@@ -377,18 +397,14 @@ export class ProjectArtifactsFileStore {
     const fileName = encodeGoogleWorkspaceArtifactFileName(artifactId, config)
     const artifactPath = getGoogleWorkspaceArtifactRelativePath(config, fileName)
     const filePath = getGoogleWorkspaceArtifactFilePath(this.projectDirectory, config, fileName)
-    const persistedArtifact = createPersistedGoogleWorkspaceArtifact(
-      artifact,
-      config.schemaVersion,
-      this.now()
-    )
+    const persistedArtifact = createPersistedArtifact(artifact, config.schemaVersion, cachedAt)
 
     await this.read()
     this.prepareGoogleWorkspaceArtifactPathForWrite(filePath, config)
     const existingFileStat = lstatIfExists(filePath)
     await writeJsonConfigFile(filePath, persistedArtifact)
 
-    return { artifactPath, created: existingFileStat === null }
+    return { artifactPath, cachedAt, created: existingFileStat === null }
   }
 
   private async deleteGoogleWorkspaceArtifactFile<TArtifact extends object>(
@@ -979,20 +995,60 @@ function createPersistedGoogleWorkspaceArtifact<
   }
 }
 
+function normalizeGoogleDocDocumentArtifactForPersistence(
+  document: GoogleDocDocumentArtifact
+): GoogleDocDocumentArtifact {
+  if (!isRecord(document) || !isRecord(document.body) || !Array.isArray(document.body.blocks)) {
+    throw new Error('Google Docs artifact must have a document body.')
+  }
+
+  return {
+    ...document,
+    body: {
+      blocks: document.body.blocks.map((block, bodyIndex) => ({
+        ...block,
+        runs: block.runs ?? (block.text ? [{ text: block.text, style: {} }] : []),
+        location: block.location ?? { kind: 'body' as const, bodyIndex }
+      }))
+    }
+  }
+}
+
 function parsePersistedGoogleDocDocumentArtifact(
   value: unknown
 ): PersistedGoogleDocDocumentArtifact {
   if (!isRecord(value)) throw new Error('Google Docs artifact cache has an invalid payload.')
-  if (value.schemaVersion !== GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION) {
+  if (
+    value.schemaVersion !== 1 &&
+    value.schemaVersion !== GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION
+  ) {
     throw new Error(
       'Google Docs artifact cache has an unsupported schema version. Refresh it with google.docs.read.'
     )
   }
   if (value.type !== 'google.doc.document')
     throw new Error('Google Docs artifact cache has the wrong payload type.')
+  if (!isRecord(value.body))
+    throw new Error('Google Docs artifact cache has an invalid document ID or body.')
+  assertOnlyProperties(value.body, ['blocks'], 'body')
+  assertOnlyProperties(
+    value,
+    ['schemaVersion', 'cachedAt', 'type', 'id', 'title', 'revision', 'text', 'link', 'body'],
+    'payload'
+  )
+  if (value.schemaVersion === GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION) {
+    for (const key of ['title', 'revision', 'link'] as const) {
+      if (!(key in value) || (value[key] !== null && typeof value[key] !== 'string')) {
+        throw new Error('Google Docs artifact cache has an invalid v2 envelope.')
+      }
+    }
+  }
   const id = normalizeStoredString(value.id)
   const text = typeof value.text === 'string' ? value.text : null
-  const cachedAt = normalizeStoredTimestamp(value.cachedAt)
+  const cachedAt =
+    value.schemaVersion === GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION
+      ? normalizeStrictCachedAt(value.cachedAt)
+      : normalizeStoredTimestamp(value.cachedAt)
   if (
     !id ||
     text === null ||
@@ -1002,16 +1058,45 @@ function parsePersistedGoogleDocDocumentArtifact(
   ) {
     throw new Error('Google Docs artifact cache has an invalid document ID or body.')
   }
-  const blocks = value.body.blocks.map((block, index) => {
+  let previousBlockOrdinal = -1
+  const blocks = value.body.blocks.map((block) => {
     if (!isRecord(block) || block.type !== 'paragraph' || typeof block.text !== 'string')
       throw new Error('Google Docs artifact cache has an invalid paragraph block.')
+    assertOnlyProperties(
+      block,
+      ['id', 'ordinal', 'type', 'text', 'runs', 'paragraphStyle', 'list', 'location'],
+      'paragraph block'
+    )
     const blockId = normalizeStoredString(block.id)
     const blockOrdinal =
       typeof block.ordinal === 'number' && Number.isInteger(block.ordinal) ? block.ordinal : null
-    if (!blockId || (blockOrdinal !== index && blockOrdinal !== index + 1)) {
+    if (
+      !blockId ||
+      blockOrdinal === null ||
+      blockOrdinal < 0 ||
+      blockOrdinal <= previousBlockOrdinal
+    ) {
       throw new Error('Google Docs artifact cache has invalid paragraph block ordering.')
     }
-    return { id: blockId, ordinal: blockOrdinal, text: block.text, type: 'paragraph' as const }
+    previousBlockOrdinal = blockOrdinal
+    const normalized = {
+      id: blockId,
+      ordinal: blockOrdinal,
+      text: block.text,
+      type: 'paragraph' as const
+    }
+    if (value.schemaVersion === 1) return normalized
+    const runs = parseGoogleDocTextRuns(block.runs, block.text)
+    const paragraphStyle = parseGoogleDocParagraphStyle(block.paragraphStyle)
+    const list = parseGoogleDocListMetadata(block.list)
+    const location = parseGoogleDocLocation(block.location)
+    return {
+      ...normalized,
+      ...(runs ? { runs } : {}),
+      ...(paragraphStyle ? { paragraphStyle } : {}),
+      ...(list ? { list } : {}),
+      ...(location ? { location } : {})
+    }
   })
   const normalizedBlocks = blocks as GoogleDocDocumentArtifact['body']['blocks']
   if (
@@ -1030,10 +1115,210 @@ function parsePersistedGoogleDocDocumentArtifact(
     id,
     link: normalizeStoredString(value.link),
     revision: normalizeStoredString(value.revision),
-    schemaVersion: GOOGLE_DOC_DOCUMENT_ARTIFACT_SCHEMA_VERSION,
+    schemaVersion: value.schemaVersion,
     text,
     title: normalizeStoredString(value.title),
     type: 'google.doc.document'
+  }
+}
+
+function parseGoogleDocTextRuns(value: unknown, text: string) {
+  if (!Array.isArray(value))
+    throw new Error('Google Docs artifact cache has invalid rich text runs.')
+  const runs = value.map((run) => {
+    if (!isRecord(run) || typeof run.text !== 'string' || !isRecord(run.style))
+      throw new Error('Google Docs artifact cache has invalid rich text runs.')
+    assertOnlyProperties(run, ['text', 'style'], 'rich text run')
+    return { text: run.text, style: parseGoogleDocTextStyle(run.style) }
+  })
+  if (runs.map((run) => run.text).join('') !== text)
+    throw new Error('Google Docs artifact cache rich text is inconsistent.')
+  return runs
+}
+
+function parseGoogleDocTextStyle(value: Record<string, unknown>) {
+  const allowed = [
+    'bold',
+    'italic',
+    'underline',
+    'strikethrough',
+    'fontFamily',
+    'fontSizePt',
+    'foregroundColor',
+    'backgroundColor',
+    'linkUrl'
+  ]
+  if (Object.keys(value).some((key) => !allowed.includes(key)))
+    throw new Error('Google Docs artifact cache has invalid rich text style.')
+  for (const key of ['bold', 'italic', 'underline', 'strikethrough']) {
+    if (value[key] !== undefined && typeof value[key] !== 'boolean')
+      throw new Error('Google Docs artifact cache has invalid rich text style.')
+  }
+  for (const key of ['fontFamily', 'linkUrl']) {
+    if (
+      value[key] !== undefined &&
+      (typeof value[key] !== 'string' || !(value[key] as string).trim())
+    )
+      throw new Error('Google Docs artifact cache has invalid rich text style.')
+  }
+  for (const key of ['foregroundColor', 'backgroundColor']) {
+    if (
+      value[key] !== undefined &&
+      (typeof value[key] !== 'string' || !/^#[0-9A-F]{6}$/.test(value[key] as string))
+    )
+      throw new Error('Google Docs artifact cache has invalid rich text style.')
+  }
+  if (
+    value.fontSizePt !== undefined &&
+    (typeof value.fontSizePt !== 'number' ||
+      !Number.isFinite(value.fontSizePt) ||
+      value.fontSizePt <= 0)
+  )
+    throw new Error('Google Docs artifact cache has invalid rich text style.')
+  return value
+}
+
+function parseGoogleDocParagraphStyle(value: unknown) {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) throw new Error('Google Docs artifact cache has invalid paragraph style.')
+  const allowed = ['namedStyle', 'alignment', 'lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt']
+  if (Object.keys(value).some((key) => !allowed.includes(key)))
+    throw new Error('Google Docs artifact cache has invalid paragraph style.')
+  if (
+    value.namedStyle !== undefined &&
+    ![
+      'NORMAL_TEXT',
+      'TITLE',
+      'SUBTITLE',
+      'HEADING_1',
+      'HEADING_2',
+      'HEADING_3',
+      'HEADING_4',
+      'HEADING_5',
+      'HEADING_6'
+    ].includes(value.namedStyle as string)
+  )
+    throw new Error('Google Docs artifact cache has invalid paragraph style.')
+  if (
+    value.alignment !== undefined &&
+    !['START', 'CENTER', 'END', 'JUSTIFIED'].includes(value.alignment as string)
+  )
+    throw new Error('Google Docs artifact cache has invalid paragraph style.')
+  for (const key of ['lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt']) {
+    if (
+      value[key] !== undefined &&
+      (typeof value[key] !== 'number' ||
+        !Number.isFinite(value[key]) ||
+        (key === 'lineSpacingPercent' && (value[key] as number) <= 0) ||
+        (key !== 'lineSpacingPercent' && (value[key] as number) < 0))
+    )
+      throw new Error('Google Docs artifact cache has invalid paragraph style.')
+  }
+  return value
+}
+
+function normalizeStrictCachedAt(value: unknown): number | null {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 0
+  ) {
+    return null
+  }
+  return value
+}
+
+function parseGoogleDocListMetadata(value: unknown) {
+  if (value === undefined) return undefined
+  if (
+    !isRecord(value) ||
+    typeof value.listId !== 'string' ||
+    !value.listId ||
+    !Number.isInteger(value.nestingLevel) ||
+    (value.nestingLevel as number) < 0
+  )
+    throw new Error('Google Docs artifact cache has invalid list metadata.')
+  assertOnlyProperties(
+    value,
+    ['listId', 'nestingLevel', 'kind', 'glyphType', 'glyphSymbol'],
+    'list metadata'
+  )
+  if (!['bullet', 'numbered', 'checkbox', 'unknown'].includes(String(value.kind)))
+    throw new Error('Google Docs artifact cache has invalid list metadata.')
+  if (
+    (value.glyphType !== undefined && typeof value.glyphType !== 'string') ||
+    (value.glyphSymbol !== undefined && typeof value.glyphSymbol !== 'string')
+  )
+    throw new Error('Google Docs artifact cache has invalid list metadata.')
+  return value as GoogleDocDocumentArtifact['body']['blocks'][number]['list']
+}
+
+function parseGoogleDocLocation(value: unknown) {
+  if (
+    !isRecord(value) ||
+    (value.kind !== 'body' && value.kind !== 'table-cell' && value.kind !== 'unsupported-table')
+  )
+    throw new Error('Google Docs artifact cache has invalid paragraph location.')
+  if (value.kind === 'body') {
+    assertOnlyProperties(value, ['kind', 'bodyIndex'], 'paragraph location')
+    if (!Number.isInteger(value.bodyIndex) || (value.bodyIndex as number) < 0)
+      throw new Error('Google Docs artifact cache has invalid paragraph location.')
+  } else if (value.kind === 'table-cell') {
+    assertOnlyProperties(
+      value,
+      [
+        'kind',
+        'tableIndex',
+        'rowIndex',
+        'columnIndex',
+        'paragraphIndex',
+        'rowCount',
+        'columnCount'
+      ],
+      'paragraph location'
+    )
+    for (const key of [
+      'tableIndex',
+      'rowIndex',
+      'columnIndex',
+      'paragraphIndex',
+      'rowCount',
+      'columnCount'
+    ]) {
+      if (!Number.isInteger(value[key]) || (value[key] as number) < 0)
+        throw new Error('Google Docs artifact cache has invalid paragraph location.')
+    }
+    if ((value.rowCount as number) === 0 || (value.columnCount as number) === 0)
+      throw new Error('Google Docs artifact cache has invalid paragraph location.')
+    if (
+      (value.rowIndex as number) >= (value.rowCount as number) ||
+      (value.columnIndex as number) >= (value.columnCount as number)
+    )
+      throw new Error('Google Docs artifact cache has invalid paragraph location.')
+  } else {
+    assertOnlyProperties(
+      value,
+      ['kind', 'tableIndex', 'reason', 'rowIndex', 'columnIndex', 'paragraphIndex'],
+      'paragraph location'
+    )
+    if (value.reason !== 'merged-or-irregular')
+      throw new Error('Google Docs artifact cache has invalid paragraph location.')
+    for (const key of ['tableIndex', 'rowIndex', 'columnIndex', 'paragraphIndex']) {
+      if (!Number.isInteger(value[key]) || (value[key] as number) < 0)
+        throw new Error('Google Docs artifact cache has invalid paragraph location.')
+    }
+  }
+  return value as GoogleDocDocumentArtifact['body']['blocks'][number]['location']
+}
+
+function assertOnlyProperties(
+  value: Record<string, unknown>,
+  allowed: string[],
+  subject: string
+): void {
+  if (Object.keys(value).some((key) => !allowed.includes(key))) {
+    throw new Error(`Google Docs artifact cache has invalid ${subject}.`)
   }
 }
 

@@ -45,6 +45,13 @@ const MAX_DRIVE_SEARCH_LIMIT = 20
 const TOKEN_EXPIRY_SKEW_MS = 60 * 1000
 const GOOGLE_DOCS_READ_PREVIEW_BLOCK_LIMIT = 20
 const GOOGLE_DOCS_READ_PREVIEW_TEXT_LIMIT = 12_000
+const GOOGLE_DOCS_MAX_LIST_ITEMS = 100
+const GOOGLE_DOCS_MAX_LIST_ITEM_TEXT_LENGTH = 2_000
+const GOOGLE_DOCS_MAX_LIST_TEXT_LENGTH = 20_000
+const GOOGLE_DOCS_MAX_TABLE_ROWS = 100
+const GOOGLE_DOCS_MAX_TABLE_COLUMNS = 100
+const GOOGLE_DOCS_MAX_TABLE_CELL_TEXT_LENGTH = 2_000
+const GOOGLE_DOCS_MAX_TABLE_TEXT_LENGTH = 20_000
 const GOOGLE_SHEETS_DEFAULT_RANGE_A1 = 'A1:Z200'
 const GOOGLE_SHEETS_MAX_READ_RANGES = 5
 const GOOGLE_SHEETS_MAX_RANGE_ROWS = 200
@@ -59,7 +66,6 @@ const GOOGLE_SHEETS_VALUE_RENDER_OPTIONS = [
   'FORMULA'
 ] as const
 const GOOGLE_SHEETS_VALUE_INPUT_OPTIONS = ['USER_ENTERED', 'RAW'] as const
-
 type Fetch = typeof fetch
 
 type GoogleTokenRefreshResponse = {
@@ -99,6 +105,7 @@ type GoogleDocsDocumentResponse = GoogleDocsApiResponse & {
   documentId?: string
   revisionId?: string
   title?: string
+  lists?: Record<string, unknown>
 }
 
 type GoogleDocsBatchUpdateResponse = GoogleDocsApiResponse & {
@@ -286,8 +293,73 @@ export type GoogleDocsEditOperation =
       occurrence?: GoogleDocsTextOccurrence
       type: 'delete_text'
     }
+  | {
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      style: GoogleDocsTextStyle
+      type: 'format_text'
+    }
+  | {
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      style: GoogleDocsParagraphStyle
+      type: 'format_paragraph'
+    }
+  | {
+      items: string[]
+      listType: GoogleDocsListType
+      match?: string
+      occurrence?: GoogleDocsTextOccurrence
+      placement: GoogleDocsListPlacement
+      type: 'insert_list'
+    }
+  | {
+      match?: string
+      occurrence?: GoogleDocsTextOccurrence
+      placement: GoogleDocsListPlacement
+      rows: string[][]
+      type: 'insert_table'
+    }
+  | {
+      listType: GoogleDocsListType
+      match: string
+      occurrence?: GoogleDocsTextOccurrence
+      type: 'format_list'
+    }
 
 export type GoogleDocsTextOccurrence = 'first' | 'last' | number
+export type GoogleDocsListType = 'bullet' | 'numbered' | 'checkbox'
+export type GoogleDocsListPlacement = 'before' | 'after' | 'document_end'
+
+export type GoogleDocsTextStyle = {
+  backgroundColor?: string | null
+  bold?: boolean | null
+  fontFamily?: string | null
+  fontSizePt?: number | null
+  foregroundColor?: string | null
+  italic?: boolean | null
+  linkUrl?: string | null
+  strikethrough?: boolean | null
+  underline?: boolean | null
+}
+
+export type GoogleDocsParagraphStyle = {
+  alignment?: 'START' | 'CENTER' | 'END' | 'JUSTIFIED' | null
+  lineSpacingPercent?: number | null
+  namedStyle?:
+    | 'NORMAL_TEXT'
+    | 'TITLE'
+    | 'SUBTITLE'
+    | 'HEADING_1'
+    | 'HEADING_2'
+    | 'HEADING_3'
+    | 'HEADING_4'
+    | 'HEADING_5'
+    | 'HEADING_6'
+    | null
+  spaceAbovePt?: number | null
+  spaceBelowPt?: number | null
+}
 
 export type GoogleDocsEditDocumentResult = {
   document: GoogleDocDocumentArtifact
@@ -352,6 +424,40 @@ type ResolvedGoogleDocsEditOperation =
       occurrence: GoogleDocsTextOccurrence
       type: 'delete_text'
     }
+  | {
+      match: string
+      matchEndIndex: number
+      matchStartIndex: number
+      occurrence: GoogleDocsTextOccurrence
+      style: GoogleDocsTextStyle
+      type: 'format_text'
+    }
+  | {
+      match: string
+      occurrence: GoogleDocsTextOccurrence
+      paragraphEndIndex: number
+      paragraphStartIndex: number
+      style: GoogleDocsParagraphStyle
+      type: 'format_paragraph'
+    }
+  | {
+      insertionIndex: number
+      items: string[]
+      listType: GoogleDocsListType
+      listRangeEndIndex: number
+      listRangeStartIndex: number
+      placement: GoogleDocsListPlacement
+      text: string
+      type: 'insert_list'
+    }
+  | {
+      listType: GoogleDocsListType
+      match: string
+      occurrence: GoogleDocsTextOccurrence
+      paragraphEndIndex: number
+      paragraphStartIndex: number
+      type: 'format_list'
+    }
 
 type GoogleDocsBatchUpdateRequestBody = {
   requests: GoogleDocsBatchUpdateRequest[]
@@ -359,6 +465,13 @@ type GoogleDocsBatchUpdateRequestBody = {
 }
 
 type GoogleDocsBatchUpdateRequest =
+  | {
+      insertTable: {
+        columns: number
+        location: { index: number }
+        rows: number
+      }
+    }
   | {
       insertText: {
         location: { index: number }
@@ -373,8 +486,34 @@ type GoogleDocsBatchUpdateRequest =
         }
       }
     }
+  | {
+      updateTextStyle: {
+        fields: string
+        range: { endIndex: number; startIndex: number }
+        textStyle: Record<string, unknown>
+      }
+    }
+  | {
+      updateParagraphStyle: {
+        fields: string
+        paragraphStyle: Record<string, unknown>
+        range: { endIndex: number; startIndex: number }
+      }
+    }
+  | {
+      createParagraphBullets: {
+        bulletPreset:
+          | 'BULLET_DISC_CIRCLE_SQUARE'
+          | 'NUMBERED_DECIMAL_ALPHA_ROMAN'
+          | 'BULLET_CHECKBOX'
+        range: { endIndex: number; startIndex: number }
+      }
+    }
 
-type GoogleDocsTextMatchOperation = Exclude<GoogleDocsEditOperation, { type: 'append_text' }>
+type GoogleDocsTextMatchOperation = Exclude<
+  GoogleDocsEditOperation,
+  { type: 'append_text' } | { type: 'insert_list' } | { type: 'insert_table' }
+>
 
 type GoogleDocsTextMatchCandidate = {
   matchEndIndex: number | null
@@ -602,6 +741,16 @@ export async function editGoogleDocDocument({
     signal
   })
 
+  if (normalizedOperation.type === 'insert_table') {
+    return editGoogleDocInsertTable({
+      documentId: resolvedDocumentId,
+      fetch: fetchImpl,
+      operation: normalizedOperation,
+      signal,
+      token
+    })
+  }
+
   const current = await fetchGoogleDocDocument({
     documentId: resolvedDocumentId,
     fetch: fetchImpl,
@@ -611,7 +760,11 @@ export async function editGoogleDocDocument({
   const resolvedOperation = resolveGoogleDocsEditOperation(
     extractIndexedGoogleDocBodyBlocks(current.rawDocument),
     normalizedOperation,
-    getBodyEndInsertionIndex(current.rawDocument)
+    normalizedOperation.type === 'append_text' ||
+      (normalizedOperation.type === 'insert_list' &&
+        normalizedOperation.placement === 'document_end')
+      ? getBodyEndInsertionIndex(current.rawDocument)
+      : 0
   )
 
   const batchUpdateResponse = await fetchImpl(createDocsBatchUpdateUrl(resolvedDocumentId), {
@@ -681,7 +834,7 @@ export function createDocsDocumentUrl(documentId: string): URL {
   const url = new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}`)
   url.searchParams.set(
     'fields',
-    'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
+    'documentId,title,revisionId,lists(listProperties(nestingLevels(glyphType,glyphSymbol))),body(content(startIndex,endIndex,paragraph(bullet(listId,nestingLevel),paragraphStyle(namedStyleType,alignment,lineSpacing,spaceAbove,spaceBelow),elements(startIndex,endIndex,textRun(content,textStyle(bold,italic,underline,strikethrough,weightedFontFamily,fontSize,foregroundColor,backgroundColor,link))))),table(rows,columns,tableRows(tableCells(tableCellStyle(rowSpan,columnSpan),content(startIndex,endIndex,paragraph(bullet(listId,nestingLevel),paragraphStyle(namedStyleType,alignment,lineSpacing,spaceAbove,spaceBelow),elements(startIndex,endIndex,textRun(content,textStyle(bold,italic,underline,strikethrough,weightedFontFamily,fontSize,foregroundColor,backgroundColor,link)))))))))'
   )
   return url
 }
@@ -1068,15 +1221,169 @@ function normalizeGoogleDocsEditOperation(
     }
   }
 
+  if (operation.type === 'format_text') {
+    return {
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      style: normalizeGoogleDocsTextStyle(operation.style),
+      type: 'format_text'
+    }
+  }
+
+  if (operation.type === 'format_paragraph') {
+    return {
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      style: normalizeGoogleDocsParagraphStyle(operation.style),
+      type: 'format_paragraph'
+    }
+  }
+
+  if (operation.type === 'insert_list') {
+    return normalizeGoogleDocsInsertListOperation(operation)
+  }
+
+  if (operation.type === 'insert_table') {
+    return normalizeGoogleDocsInsertTableOperation(operation)
+  }
+
+  if (operation.type === 'format_list') {
+    return {
+      listType: normalizeGoogleDocsListType(operation.listType, operation.type),
+      match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+      occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+      type: 'format_list'
+    }
+  }
+
   throw new Error(
-    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, or delete_text.'
+    'Google Docs edit operation type must be append_text, insert_after_text, insert_before_text, replace_text, delete_text, format_text, format_paragraph, insert_list, insert_table, or format_list.'
   )
 }
 
-function normalizeGoogleDocsMatchText(
-  match: unknown,
-  operationType: GoogleDocsTextMatchOperation['type']
-): string {
+function googleDocsListPreset(
+  listType: GoogleDocsListType
+): 'BULLET_DISC_CIRCLE_SQUARE' | 'NUMBERED_DECIMAL_ALPHA_ROMAN' | 'BULLET_CHECKBOX' {
+  if (listType === 'bullet') return 'BULLET_DISC_CIRCLE_SQUARE'
+  if (listType === 'numbered') return 'NUMBERED_DECIMAL_ALPHA_ROMAN'
+  return 'BULLET_CHECKBOX'
+}
+
+function normalizeGoogleDocsInsertListOperation(
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_list' }>
+): GoogleDocsEditOperation {
+  const placement = normalizeGoogleDocsListPlacement(operation.placement)
+  const items = normalizeGoogleDocsListItems(operation.items)
+  const listType = normalizeGoogleDocsListType(operation.listType, operation.type)
+  if (placement === 'document_end') {
+    if (operation.match !== undefined || operation.occurrence !== undefined) {
+      throw new Error('Google Docs insert_list document_end does not accept match or occurrence.')
+    }
+    return { items, listType, placement, type: 'insert_list' }
+  }
+  return {
+    items,
+    listType,
+    match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+    occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+    placement,
+    type: 'insert_list'
+  }
+}
+
+function normalizeGoogleDocsInsertTableOperation(
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_table' }>
+): GoogleDocsEditOperation {
+  const placement = normalizeGoogleDocsListPlacement(operation.placement)
+  const rows = normalizeGoogleDocsTableRows(operation.rows)
+  if (placement === 'document_end') {
+    if (operation.match !== undefined || operation.occurrence !== undefined) {
+      throw new Error('Google Docs insert_table document_end does not accept match or occurrence.')
+    }
+    return { placement, rows, type: 'insert_table' }
+  }
+  return {
+    match: normalizeGoogleDocsMatchText(operation.match, operation.type),
+    occurrence: normalizeTextOccurrence(operation.occurrence, operation.type),
+    placement,
+    rows,
+    type: 'insert_table'
+  }
+}
+
+function normalizeGoogleDocsTableRows(value: unknown): string[][] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > GOOGLE_DOCS_MAX_TABLE_ROWS) {
+    throw new Error(
+      `Google Docs insert_table requires rows as a non-empty array of at most ${GOOGLE_DOCS_MAX_TABLE_ROWS} rows.`
+    )
+  }
+  let columnCount: number | null = null
+  let totalTextLength = 0
+  return value.map((row, rowIndex) => {
+    if (!Array.isArray(row) || row.length === 0 || row.length > GOOGLE_DOCS_MAX_TABLE_COLUMNS) {
+      throw new Error(
+        `Google Docs insert_table row ${rowIndex + 1} must be a non-empty array of at most ${GOOGLE_DOCS_MAX_TABLE_COLUMNS} strings.`
+      )
+    }
+    if (columnCount === null) columnCount = row.length
+    if (row.length !== columnCount)
+      throw new Error('Google Docs insert_table rows must be rectangular.')
+    return row.map((cell, columnIndex) => {
+      if (typeof cell !== 'string' || cell.length > GOOGLE_DOCS_MAX_TABLE_CELL_TEXT_LENGTH) {
+        throw new Error(
+          `Google Docs insert_table cell ${rowIndex + 1}:${columnIndex + 1} must be a string of at most ${GOOGLE_DOCS_MAX_TABLE_CELL_TEXT_LENGTH} characters.`
+        )
+      }
+      if (/[\r\n]/.test(cell)) {
+        throw new Error('Google Docs insert_table cells cannot contain CR/LF.')
+      }
+      totalTextLength += cell.length
+      if (totalTextLength > GOOGLE_DOCS_MAX_TABLE_TEXT_LENGTH) {
+        throw new Error(
+          `Google Docs insert_table total cell text must be at most ${GOOGLE_DOCS_MAX_TABLE_TEXT_LENGTH} characters.`
+        )
+      }
+      return cell
+    })
+  })
+}
+
+function normalizeGoogleDocsListItems(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > GOOGLE_DOCS_MAX_LIST_ITEMS) {
+    throw new Error(
+      `Google Docs insert_list requires items as a non-empty array of at most ${GOOGLE_DOCS_MAX_LIST_ITEMS} strings.`
+    )
+  }
+  const items = value.map((item, index) => {
+    if (typeof item !== 'string' || !item || item.length > GOOGLE_DOCS_MAX_LIST_ITEM_TEXT_LENGTH) {
+      throw new Error(
+        `Google Docs insert_list item ${index + 1} must be a non-empty string of at most ${GOOGLE_DOCS_MAX_LIST_ITEM_TEXT_LENGTH} characters.`
+      )
+    }
+    if (/[\r\n]/.test(item) || item.startsWith('\t')) {
+      throw new Error('Google Docs insert_list items cannot contain CR/LF or start with a tab.')
+    }
+    return item
+  })
+  if (items.join('\n').length > GOOGLE_DOCS_MAX_LIST_TEXT_LENGTH) {
+    throw new Error(
+      `Google Docs insert_list total item text must be at most ${GOOGLE_DOCS_MAX_LIST_TEXT_LENGTH} characters.`
+    )
+  }
+  return items
+}
+
+function normalizeGoogleDocsListType(value: unknown, operationType: string): GoogleDocsListType {
+  if (value === 'bullet' || value === 'numbered' || value === 'checkbox') return value
+  throw new Error(`Google Docs ${operationType} listType must be bullet, numbered, or checkbox.`)
+}
+
+function normalizeGoogleDocsListPlacement(value: unknown): GoogleDocsListPlacement {
+  if (value === 'before' || value === 'after' || value === 'document_end') return value
+  throw new Error('Google Docs insert_list placement must be before, after, or document_end.')
+}
+
+function normalizeGoogleDocsMatchText(match: unknown, operationType: string): string {
   const normalized = typeof match === 'string' ? match : ''
   if (!normalized) throw new Error(`Google Docs ${operationType} requires match text.`)
 
@@ -1098,7 +1405,7 @@ function normalizeGoogleDocsEditText(text: string): string {
 
 function normalizeTextOccurrence(
   occurrence: unknown,
-  operationType: GoogleDocsTextMatchOperation['type']
+  operationType: string
 ): GoogleDocsTextOccurrence {
   if (occurrence === undefined || occurrence === null || occurrence === '') return 'last'
   if (occurrence === 'first' || occurrence === 'last') return occurrence
@@ -1117,6 +1424,136 @@ function normalizeTextOccurrence(
   )
 }
 
+function normalizeGoogleDocsTextStyle(value: unknown): GoogleDocsTextStyle {
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    throw new Error('Google Docs format_text requires a non-empty style object.')
+  }
+  const allowed = [
+    'bold',
+    'italic',
+    'underline',
+    'strikethrough',
+    'fontFamily',
+    'fontSizePt',
+    'foregroundColor',
+    'backgroundColor',
+    'linkUrl'
+  ]
+  rejectGoogleDocsStyleProperties(value, allowed, 'format_text')
+  const style: GoogleDocsTextStyle = {}
+  for (const key of ['bold', 'italic', 'underline', 'strikethrough'] as const) {
+    if (value[key] !== undefined) {
+      if (value[key] !== null && typeof value[key] !== 'boolean') {
+        throw new Error(`Google Docs format_text style.${key} must be a boolean or null.`)
+      }
+      style[key] = value[key] as boolean | null
+    }
+  }
+  if (value.fontFamily !== undefined) {
+    if (value.fontFamily === null || typeof value.fontFamily === 'string') {
+      if (typeof value.fontFamily === 'string' && !value.fontFamily.trim()) {
+        throw new Error(
+          'Google Docs format_text style.fontFamily must be a non-empty string or null.'
+        )
+      }
+      style.fontFamily = value.fontFamily as string | null
+    } else throw new Error('Google Docs format_text style.fontFamily must be a string or null.')
+  }
+  if (value.fontSizePt !== undefined)
+    style.fontSizePt = normalizePositiveGoogleDocsStyleNumber(
+      value.fontSizePt,
+      'format_text',
+      'fontSizePt'
+    )
+  for (const key of ['foregroundColor', 'backgroundColor'] as const) {
+    if (value[key] !== undefined)
+      style[key] = normalizeGoogleDocsColor(value[key], 'format_text', key)
+  }
+  if (value.linkUrl !== undefined) {
+    if (value.linkUrl !== null && typeof value.linkUrl !== 'string') {
+      throw new Error('Google Docs format_text style.linkUrl must be a string or null.')
+    }
+    style.linkUrl = value.linkUrl
+  }
+  return style
+}
+
+function normalizeGoogleDocsParagraphStyle(value: unknown): GoogleDocsParagraphStyle {
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    throw new Error('Google Docs format_paragraph requires a non-empty style object.')
+  }
+  const allowed = ['namedStyle', 'alignment', 'lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt']
+  rejectGoogleDocsStyleProperties(value, allowed, 'format_paragraph')
+  const style: GoogleDocsParagraphStyle = {}
+  if (value.namedStyle !== undefined) {
+    const namedStyles = [
+      'NORMAL_TEXT',
+      'TITLE',
+      'SUBTITLE',
+      'HEADING_1',
+      'HEADING_2',
+      'HEADING_3',
+      'HEADING_4',
+      'HEADING_5',
+      'HEADING_6'
+    ]
+    if (
+      value.namedStyle !== null &&
+      (typeof value.namedStyle !== 'string' || !namedStyles.includes(value.namedStyle))
+    ) {
+      throw new Error(
+        'Google Docs format_paragraph style.namedStyle must be a valid named style or null.'
+      )
+    }
+    style.namedStyle = value.namedStyle as GoogleDocsParagraphStyle['namedStyle']
+  }
+  if (value.alignment !== undefined) {
+    const alignments = ['START', 'CENTER', 'END', 'JUSTIFIED']
+    if (
+      value.alignment !== null &&
+      (typeof value.alignment !== 'string' || !alignments.includes(value.alignment))
+    ) {
+      throw new Error(
+        'Google Docs format_paragraph style.alignment must be a valid alignment or null.'
+      )
+    }
+    style.alignment = value.alignment as GoogleDocsParagraphStyle['alignment']
+  }
+  for (const key of ['lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt'] as const) {
+    if (value[key] !== undefined)
+      style[key] = normalizePositiveGoogleDocsStyleNumber(value[key], 'format_paragraph', key)
+  }
+  return style
+}
+
+function rejectGoogleDocsStyleProperties(
+  value: Record<string, unknown>,
+  allowed: string[],
+  operation: string
+): void {
+  const additional = Object.keys(value).find((key) => !allowed.includes(key))
+  if (additional)
+    throw new Error(`Google Docs ${operation} style does not accept property ${additional}.`)
+}
+
+function normalizePositiveGoogleDocsStyleNumber(
+  value: unknown,
+  operation: string,
+  key: string
+): number | null {
+  if (value === null) return null
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+  throw new Error(`Google Docs ${operation} style.${key} must be a positive finite number or null.`)
+}
+
+function normalizeGoogleDocsColor(value: unknown, operation: string, key: string): string | null {
+  if (value === null) return null
+  if (typeof value === 'string' && /^#[0-9A-F]{6}$/.test(value)) return value
+  throw new Error(
+    `Google Docs ${operation} style.${key} must be a canonical #RRGGBB color or null.`
+  )
+}
+
 function createGoogleDocsBatchUpdateRequest(
   document: GoogleDocDocumentArtifact,
   operation: ResolvedGoogleDocsEditOperation
@@ -1130,6 +1567,204 @@ function createGoogleDocsBatchUpdateRequest(
   }
 
   return request
+}
+
+async function editGoogleDocInsertTable({
+  documentId,
+  fetch: fetchImpl,
+  operation,
+  signal,
+  token
+}: {
+  documentId: string
+  fetch: Fetch
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_table' }>
+  signal?: AbortSignal
+  token: GoogleWorkspaceTokenConfig
+}): Promise<GoogleDocsEditDocumentResult> {
+  const columnCount = operation.rows[0]!.length
+  const current = await fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
+  const insertionIndex = resolveGoogleDocsTableInsertionIndex(current.rawDocument, operation)
+  await writeGoogleDocsBatchUpdate({
+    body: createGoogleDocsTableInsertRequest(current.document, operation.rows, insertionIndex),
+    documentId,
+    fetch: fetchImpl,
+    signal,
+    token
+  })
+  const inserted = await fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
+  const cellIndexes = findInsertedGoogleDocsTableCellIndexes(
+    inserted.rawDocument,
+    insertionIndex + 1,
+    operation.rows.length,
+    columnCount
+  )
+  const populatedCells = cellIndexes
+    .map((index, position) => ({
+      index,
+      text: operation.rows[Math.floor(position / columnCount)]![position % columnCount]!
+    }))
+    .filter((cell) => cell.text.length > 0)
+    .sort((left, right) => right.index - left.index)
+  let updated = inserted
+  if (populatedCells.length) {
+    await writeGoogleDocsBatchUpdate({
+      body: createGoogleDocsCellPopulateRequest(inserted.document, populatedCells),
+      documentId,
+      fetch: fetchImpl,
+      signal,
+      token
+    })
+    updated = await fetchGoogleDocDocument({ documentId, fetch: fetchImpl, signal, token })
+  }
+  const insertedTextLength = operation.rows.flat().reduce((length, text) => length + text.length, 0)
+  return {
+    document: updated.document,
+    edit: {
+      deletedTextLength: 0,
+      documentId: updated.document.id || documentId,
+      insertedTextLength,
+      link: updated.document.link,
+      ok: true,
+      operation: 'insert_table',
+      revision:
+        updated.document.revision ?? inserted.document.revision ?? current.document.revision,
+      textLengthDelta: insertedTextLength,
+      title: updated.document.title
+    }
+  }
+}
+
+function resolveGoogleDocsTableInsertionIndex(
+  document: GoogleDocsDocumentResponse,
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_table' }>
+): number {
+  if (operation.placement === 'document_end') return getBodyEndInsertionIndex(document)
+  const indexedBlocks = extractIndexedGoogleDocBodyBlocks(document)
+  const matches = indexedBlocks.flatMap((block) =>
+    findBlockMatchCandidates(block, operation.match!)
+  )
+  if (!matches.length)
+    throw new Error('Google Docs insert_table could not find the requested match text.')
+  const match = selectTextMatch(matches, operation.occurrence ?? 'last', operation.type)
+  if (match.matchStartIndex === null || match.matchEndIndex === null) {
+    throw new Error('Google Docs insert_table matched text in an unsupported paragraph structure.')
+  }
+  const paragraph = findContainingGoogleDocsParagraph(
+    indexedBlocks,
+    match.matchStartIndex,
+    match.matchEndIndex
+  )
+  if (!paragraph)
+    throw new Error('Google Docs insert_table matched text in an unsupported paragraph structure.')
+  return operation.placement === 'before' ? paragraph.startIndex : paragraph.endIndex - 1
+}
+
+function createGoogleDocsTableInsertRequest(
+  document: GoogleDocDocumentArtifact,
+  rows: string[][],
+  insertionIndex: number
+): GoogleDocsBatchUpdateRequestBody {
+  const request: GoogleDocsBatchUpdateRequestBody = {
+    requests: [
+      {
+        insertTable: {
+          columns: rows[0]!.length,
+          location: { index: insertionIndex },
+          rows: rows.length
+        }
+      }
+    ]
+  }
+  if (document.revision) request.writeControl = { requiredRevisionId: document.revision }
+  return request
+}
+
+function createGoogleDocsCellPopulateRequest(
+  document: GoogleDocDocumentArtifact,
+  cells: Array<{ index: number; text: string }>
+): GoogleDocsBatchUpdateRequestBody {
+  const request: GoogleDocsBatchUpdateRequestBody = {
+    requests: cells.map((cell) => ({
+      insertText: { location: { index: cell.index }, text: cell.text }
+    }))
+  }
+  if (document.revision) request.writeControl = { requiredRevisionId: document.revision }
+  return request
+}
+
+async function writeGoogleDocsBatchUpdate({
+  body,
+  documentId,
+  fetch: fetchImpl,
+  signal,
+  token
+}: {
+  body: GoogleDocsBatchUpdateRequestBody
+  documentId: string
+  fetch: Fetch
+  signal?: AbortSignal
+  token: GoogleWorkspaceTokenConfig
+}): Promise<GoogleDocsBatchUpdateResponse> {
+  const response = await fetchImpl(createDocsBatchUpdateUrl(documentId), {
+    body: JSON.stringify(body),
+    headers: { authorization: `Bearer ${token.accessToken}`, 'content-type': 'application/json' },
+    method: 'POST',
+    signal
+  })
+  const payload = (await response.json().catch(() => ({}))) as GoogleDocsBatchUpdateResponse
+  if (!response.ok)
+    throwGoogleApiFailure('Google Docs documents.batchUpdate', response.status, payload)
+  return payload
+}
+
+function findInsertedGoogleDocsTableCellIndexes(
+  document: GoogleDocsDocumentResponse,
+  expectedStartIndex: number,
+  expectedRows: number,
+  expectedColumns: number
+): number[] {
+  const content = Array.isArray(document.body?.content) ? document.body.content : []
+  const table = content.find((block) => {
+    const entry = isRecord(block) ? block : null
+    return entry?.table && finiteNumberOrNull(entry.startIndex) === expectedStartIndex
+  })
+  if (!table || !isRecord(table)) {
+    throw new Error(
+      'Google Docs insert_table could not locate the inserted table at the expected structure index.'
+    )
+  }
+  const tableValue = table.table
+  if (
+    !isRecord(tableValue) ||
+    !Array.isArray(tableValue.tableRows) ||
+    tableValue.tableRows.length !== expectedRows
+  ) {
+    throw new Error('Google Docs insert_table returned a table with unexpected dimensions.')
+  }
+  const indexes: number[] = []
+  for (const row of tableValue.tableRows) {
+    if (
+      !isRecord(row) ||
+      !Array.isArray(row.tableCells) ||
+      row.tableCells.length !== expectedColumns
+    ) {
+      throw new Error('Google Docs insert_table returned a table with unexpected dimensions.')
+    }
+    for (const cell of row.tableCells) {
+      const cellContent = isRecord(cell) && Array.isArray(cell.content) ? cell.content : []
+      const paragraph = cellContent.find((entry) => isRecord(entry) && isRecord(entry.paragraph))
+      const index =
+        paragraph && isRecord(paragraph) ? finiteNumberOrNull(paragraph.startIndex) : null
+      if (index === null) {
+        throw new Error(
+          'Google Docs insert_table could not locate a first paragraph index for every table cell.'
+        )
+      }
+      indexes.push(index)
+    }
+  }
+  return indexes
 }
 
 function createGoogleDocsBatchUpdateRequests(
@@ -1154,6 +1789,65 @@ function createGoogleDocsBatchUpdateRequests(
     return [createDeleteContentRangeRequest(operation.matchStartIndex, operation.matchEndIndex)]
   }
 
+  if (operation.type === 'format_text') {
+    const compiled = compileGoogleDocsTextStyle(operation.style)
+    const fields = getGoogleDocsTextStyleFields(operation.style)
+    return [
+      {
+        updateTextStyle: {
+          fields: fields.join(','),
+          range: { endIndex: operation.matchEndIndex, startIndex: operation.matchStartIndex },
+          textStyle: compiled
+        }
+      }
+    ]
+  }
+
+  if (operation.type === 'format_paragraph') {
+    const paragraphStyle = compileGoogleDocsParagraphStyle(operation.style)
+    return [
+      {
+        updateParagraphStyle: {
+          fields: Object.keys(paragraphStyle.fields).join(','),
+          paragraphStyle: paragraphStyle.style,
+          range: {
+            endIndex: operation.paragraphEndIndex,
+            startIndex: operation.paragraphStartIndex
+          }
+        }
+      }
+    ]
+  }
+
+  if (operation.type === 'insert_list') {
+    return [
+      { insertText: { location: { index: operation.insertionIndex }, text: operation.text } },
+      {
+        createParagraphBullets: {
+          bulletPreset: googleDocsListPreset(operation.listType),
+          range: {
+            endIndex: operation.listRangeEndIndex,
+            startIndex: operation.listRangeStartIndex
+          }
+        }
+      }
+    ]
+  }
+
+  if (operation.type === 'format_list') {
+    return [
+      {
+        createParagraphBullets: {
+          bulletPreset: googleDocsListPreset(operation.listType),
+          range: {
+            endIndex: operation.paragraphEndIndex,
+            startIndex: operation.paragraphStartIndex
+          }
+        }
+      }
+    ]
+  }
+
   return [
     createDeleteContentRangeRequest(operation.matchStartIndex, operation.matchEndIndex),
     {
@@ -1163,6 +1857,85 @@ function createGoogleDocsBatchUpdateRequests(
       }
     }
   ]
+}
+
+function compileGoogleDocsTextStyle(style: GoogleDocsTextStyle): Record<string, unknown> {
+  const compiled: Record<string, unknown> = {}
+  if (style.bold !== undefined && style.bold !== null) compiled.bold = style.bold
+  if (style.italic !== undefined && style.italic !== null) compiled.italic = style.italic
+  if (style.underline !== undefined && style.underline !== null)
+    compiled.underline = style.underline
+  if (style.strikethrough !== undefined && style.strikethrough !== null)
+    compiled.strikethrough = style.strikethrough
+  if (style.fontFamily !== undefined && style.fontFamily !== null)
+    compiled.weightedFontFamily = { fontFamily: style.fontFamily }
+  if (style.fontSizePt !== undefined && style.fontSizePt !== null)
+    compiled.fontSize = { magnitude: style.fontSizePt, unit: 'PT' }
+  if (style.foregroundColor !== undefined && style.foregroundColor !== null)
+    compiled.foregroundColor = createGoogleDocsOptionalColor(style.foregroundColor)
+  if (style.backgroundColor !== undefined && style.backgroundColor !== null)
+    compiled.backgroundColor = createGoogleDocsOptionalColor(style.backgroundColor)
+  if (style.linkUrl !== undefined && style.linkUrl !== null) compiled.link = { url: style.linkUrl }
+  return compiled
+}
+
+function getGoogleDocsTextStyleFields(style: GoogleDocsTextStyle): string[] {
+  return [
+    style.bold !== undefined ? 'bold' : null,
+    style.italic !== undefined ? 'italic' : null,
+    style.underline !== undefined ? 'underline' : null,
+    style.strikethrough !== undefined ? 'strikethrough' : null,
+    style.fontFamily !== undefined ? 'weightedFontFamily' : null,
+    style.fontSizePt !== undefined ? 'fontSize' : null,
+    style.foregroundColor !== undefined ? 'foregroundColor' : null,
+    style.backgroundColor !== undefined ? 'backgroundColor' : null,
+    style.linkUrl !== undefined ? 'link' : null
+  ].filter((field): field is string => field !== null)
+}
+
+function compileGoogleDocsParagraphStyle(style: GoogleDocsParagraphStyle): {
+  fields: Record<string, true>
+  style: Record<string, unknown>
+} {
+  const fields: Record<string, true> = {}
+  const compiled: Record<string, unknown> = {}
+  if (style.namedStyle !== undefined) {
+    fields.namedStyleType = true
+    if (style.namedStyle !== null) compiled.namedStyleType = style.namedStyle
+  }
+  if (style.alignment !== undefined) {
+    fields.alignment = true
+    if (style.alignment !== null) compiled.alignment = style.alignment
+  }
+  if (style.lineSpacingPercent !== undefined) {
+    fields.lineSpacing = true
+    if (style.lineSpacingPercent !== null) compiled.lineSpacing = style.lineSpacingPercent
+  }
+  if (style.spaceAbovePt !== undefined) {
+    fields.spaceAbove = true
+    if (style.spaceAbovePt !== null)
+      compiled.spaceAbove = { magnitude: style.spaceAbovePt, unit: 'PT' }
+  }
+  if (style.spaceBelowPt !== undefined) {
+    fields.spaceBelow = true
+    if (style.spaceBelowPt !== null)
+      compiled.spaceBelow = { magnitude: style.spaceBelowPt, unit: 'PT' }
+  }
+  return { fields, style: compiled }
+}
+
+function createGoogleDocsOptionalColor(hex: string): {
+  color: { rgbColor: { blue: number; green: number; red: number } }
+} {
+  return {
+    color: {
+      rgbColor: {
+        red: parseInt(hex.slice(1, 3), 16) / 255,
+        green: parseInt(hex.slice(3, 5), 16) / 255,
+        blue: parseInt(hex.slice(5, 7), 16) / 255
+      }
+    }
+  }
 }
 
 function createDeleteContentRangeRequest(
@@ -1180,7 +1953,7 @@ function createDeleteContentRangeRequest(
 }
 
 function getResolvedInsertedTextLength(operation: ResolvedGoogleDocsEditOperation): number {
-  return 'text' in operation ? operation.text.length : 0
+  return 'text' in operation && typeof operation.text === 'string' ? operation.text.length : 0
 }
 
 function getResolvedDeletedTextLength(operation: ResolvedGoogleDocsEditOperation): number {
@@ -1919,7 +2692,11 @@ function toSafeGoogleDocDocument(
 ): GoogleDocDocumentArtifact {
   const id =
     typeof value.documentId === 'string' && value.documentId ? value.documentId : fallbackDocumentId
-  const text = extractGoogleDocText(value)
+  const blocks = extractGoogleDocBodyBlocks(value)
+  const text = blocks
+    .map((block) => block.text)
+    .join('')
+    .trimEnd()
   return {
     type: 'google.doc.document',
     id,
@@ -1928,53 +2705,243 @@ function toSafeGoogleDocDocument(
     text,
     link: createGoogleDocLink(id),
     body: {
-      blocks: extractGoogleDocBodyBlocks(value)
+      blocks
     }
   }
 }
 
-function extractGoogleDocText(document: GoogleDocsDocumentResponse): string {
+function extractGoogleDocBodyBlocks(document: GoogleDocsDocumentResponse): GoogleDocBodyBlock[] {
   const content = Array.isArray(document.body?.content) ? document.body.content : []
-  return content
-    .flatMap((block) => extractParagraphText(block))
-    .join('')
-    .trimEnd()
+  const blocks: GoogleDocBodyBlock[] = []
+  content.forEach((block, bodyIndex) => {
+    if (!block || typeof block !== 'object') return
+    const entry = block as Record<string, unknown>
+    const paragraph = entry.paragraph
+    if (paragraph && typeof paragraph === 'object') {
+      blocks.push(
+        createRichGoogleDocBlock(
+          paragraph,
+          document,
+          { kind: 'body', bodyIndex },
+          blocks.length + 1
+        )
+      )
+    }
+    const table = entry.table as Record<string, unknown> | undefined
+    const rows = table?.tableRows
+    if (!Array.isArray(rows)) return
+    const rowCount = positiveInteger(table?.rows)
+    const columnCount = positiveInteger(table?.columns)
+    const isSimpleTable =
+      rowCount !== null &&
+      columnCount !== null &&
+      rows.length === rowCount &&
+      rows.every((row) => {
+        const cells = (row as Record<string, unknown>)?.tableCells
+        return (
+          Array.isArray(cells) &&
+          cells.length === columnCount &&
+          cells.every((cell) => {
+            const value = cell as Record<string, unknown>
+            return (
+              ((value.tableCellStyle as Record<string, unknown> | undefined)?.rowSpan ===
+                undefined ||
+                (value.tableCellStyle as Record<string, unknown>).rowSpan === 1) &&
+              ((value.tableCellStyle as Record<string, unknown> | undefined)?.columnSpan ===
+                undefined ||
+                (value.tableCellStyle as Record<string, unknown>).columnSpan === 1)
+            )
+          })
+        )
+      })
+    rows.forEach((row, rowIndex) => {
+      const cells = (row as Record<string, unknown>)?.tableCells
+      if (!Array.isArray(cells)) return
+      cells.forEach((cell, columnIndex) => {
+        const cellContent = (cell as Record<string, unknown>)?.content
+        if (!Array.isArray(cellContent)) return
+        cellContent.forEach((cellBlock, paragraphIndex) => {
+          const cellParagraph = (cellBlock as Record<string, unknown>)?.paragraph
+          if (cellParagraph && typeof cellParagraph === 'object') {
+            blocks.push(
+              createRichGoogleDocBlock(
+                cellParagraph,
+                document,
+                isSimpleTable
+                  ? {
+                      kind: 'table-cell',
+                      tableIndex: bodyIndex,
+                      rowIndex,
+                      columnIndex,
+                      paragraphIndex,
+                      rowCount,
+                      columnCount
+                    }
+                  : {
+                      kind: 'unsupported-table',
+                      tableIndex: bodyIndex,
+                      reason: 'merged-or-irregular',
+                      rowIndex,
+                      columnIndex,
+                      paragraphIndex
+                    },
+                blocks.length + 1
+              )
+            )
+          }
+        })
+      })
+    })
+  })
+  return blocks
 }
 
-function extractParagraphText(value: unknown): string[] {
-  if (!value || typeof value !== 'object') return []
-  const paragraph = (value as Record<string, unknown>).paragraph
-  if (!paragraph || typeof paragraph !== 'object') return []
-  const elements = (paragraph as Record<string, unknown>).elements
-  if (!Array.isArray(elements)) return []
+function createRichGoogleDocBlock(
+  paragraph: object,
+  document: GoogleDocsDocumentResponse,
+  location: GoogleDocBodyBlock['location'],
+  ordinal: number
+): GoogleDocBodyBlock {
+  const entry = paragraph as Record<string, unknown>
+  const runs = extractRichGoogleDocTextRuns(entry)
+  const bullet = entry.bullet as Record<string, unknown> | undefined
+  const listId = typeof bullet?.listId === 'string' ? bullet.listId : null
+  const level = typeof bullet?.nestingLevel === 'number' ? bullet.nestingLevel : 0
+  const listProperties = listId
+    ? ((
+        (
+          (document.lists?.[listId] as Record<string, unknown> | undefined)?.listProperties as
+            | Record<string, unknown>
+            | undefined
+        )?.nestingLevels as unknown[] | undefined
+      )?.[level] as Record<string, unknown> | undefined)
+    : undefined
+  const glyphType =
+    typeof listProperties?.glyphType === 'string' ? listProperties.glyphType : undefined
+  const glyphSymbol =
+    typeof listProperties?.glyphSymbol === 'string' ? listProperties.glyphSymbol : undefined
+  return {
+    id: `paragraph-${ordinal}`,
+    ordinal,
+    type: 'paragraph',
+    text: runs.map((run) => run.text).join(''),
+    runs,
+    ...(Object.keys(extractGoogleDocParagraphStyle(entry.paragraphStyle)).length
+      ? { paragraphStyle: extractGoogleDocParagraphStyle(entry.paragraphStyle) }
+      : {}),
+    ...(listId
+      ? {
+          list: {
+            listId,
+            nestingLevel: level,
+            kind: classifyGoogleDocList(glyphType, glyphSymbol),
+            ...(glyphType ? { glyphType } : {}),
+            ...(glyphSymbol ? { glyphSymbol } : {})
+          }
+        }
+      : {}),
+    location
+  }
+}
+
+function extractRichGoogleDocTextRuns(paragraph: Record<string, unknown>) {
+  const elements = Array.isArray(paragraph.elements) ? paragraph.elements : []
   return elements.flatMap((element) => {
-    if (!element || typeof element !== 'object') return []
-    const textRun = (element as Record<string, unknown>).textRun
-    if (!textRun || typeof textRun !== 'object') return []
-    const text = (textRun as Record<string, unknown>).content
-    return typeof text === 'string' ? [text] : []
+    const textRun = (element as Record<string, unknown>)?.textRun as
+      | Record<string, unknown>
+      | undefined
+    if (!textRun || typeof textRun.content !== 'string') return []
+    const style = textRun.textStyle as Record<string, unknown> | undefined
+    const rgb = (color: unknown) => {
+      const c = (color as Record<string, unknown> | undefined)?.color as
+        | Record<string, unknown>
+        | undefined
+      const r = c?.rgbColor
+      if (!r || typeof r !== 'object' || Array.isArray(r)) return undefined
+      const channels = ['red', 'green', 'blue'].map((channel): number | null => {
+        const value = (r as Record<string, unknown>)[channel]
+        return value === undefined
+          ? 0
+          : typeof value === 'number' && Number.isFinite(value)
+            ? value
+            : null
+      })
+      return channels.every((channel): channel is number => channel !== null)
+        ? `#${channels
+            .map((n) =>
+              Math.round(n * 255)
+                .toString(16)
+                .padStart(2, '0')
+            )
+            .join('')
+            .toUpperCase()}`
+        : undefined
+    }
+    return [
+      {
+        text: textRun.content,
+        style: {
+          ...(typeof style?.bold === 'boolean' ? { bold: style.bold } : {}),
+          ...(typeof style?.italic === 'boolean' ? { italic: style.italic } : {}),
+          ...(typeof style?.underline === 'boolean' ? { underline: style.underline } : {}),
+          ...(typeof style?.strikethrough === 'boolean'
+            ? { strikethrough: style.strikethrough }
+            : {}),
+          ...(typeof (style?.weightedFontFamily as Record<string, unknown> | undefined)
+            ?.fontFamily === 'string'
+            ? { fontFamily: (style!.weightedFontFamily as Record<string, string>).fontFamily }
+            : {}),
+          ...(typeof (style?.fontSize as Record<string, unknown> | undefined)?.magnitude ===
+          'number'
+            ? { fontSizePt: (style!.fontSize as Record<string, number>).magnitude }
+            : {}),
+          ...(rgb(style?.foregroundColor) ? { foregroundColor: rgb(style?.foregroundColor) } : {}),
+          ...(rgb(style?.backgroundColor) ? { backgroundColor: rgb(style?.backgroundColor) } : {}),
+          ...(typeof (style?.link as Record<string, unknown> | undefined)?.url === 'string'
+            ? { linkUrl: (style!.link as Record<string, string>).url }
+            : {})
+        }
+      }
+    ]
   })
 }
 
-function extractGoogleDocBodyBlocks(document: GoogleDocsDocumentResponse): GoogleDocBodyBlock[] {
-  const content = Array.isArray(document.body?.content) ? document.body.content : []
-  return content
-    .flatMap((block) => {
-      if (!block || typeof block !== 'object') return []
+function extractGoogleDocParagraphStyle(value: unknown) {
+  const style = value as Record<string, unknown> | undefined
+  const dimension = (field: string) =>
+    (style?.[field] as Record<string, unknown> | undefined)?.magnitude
+  return {
+    ...(typeof style?.namedStyleType === 'string' ? { namedStyle: style.namedStyleType } : {}),
+    ...(typeof style?.alignment === 'string' ? { alignment: style.alignment } : {}),
+    ...(typeof style?.lineSpacing === 'number' ? { lineSpacingPercent: style.lineSpacing } : {}),
+    ...(typeof dimension('spaceAbove') === 'number'
+      ? { spaceAbovePt: dimension('spaceAbove') as number }
+      : {}),
+    ...(typeof dimension('spaceBelow') === 'number'
+      ? { spaceBelowPt: dimension('spaceBelow') as number }
+      : {})
+  }
+}
 
-      const entry = block as Record<string, unknown>
-      const paragraph = entry.paragraph
-      if (!paragraph || typeof paragraph !== 'object') return []
+function classifyGoogleDocList(
+  glyphType?: string,
+  glyphSymbol?: string
+): 'bullet' | 'numbered' | 'checkbox' | 'unknown' {
+  if (
+    ['DECIMAL', 'ZERO_DECIMAL', 'ALPHA', 'UPPER_ALPHA', 'ROMAN', 'UPPER_ROMAN'].includes(
+      glyphType ?? ''
+    )
+  )
+    return 'numbered'
+  if (glyphSymbol === '☐' || glyphSymbol === '☑' || glyphSymbol === '✓' || glyphSymbol === '❏')
+    return 'checkbox'
+  if (glyphType === 'BULLET' || (typeof glyphSymbol === 'string' && glyphSymbol.length > 0))
+    return 'bullet'
+  return 'unknown'
+}
 
-      const textRuns = extractParagraphTextRuns(paragraph)
-      const text = textRuns.map((run) => run.text).join('')
-      return [{ type: 'paragraph' as const, text }]
-    })
-    .map((block, index) => ({
-      ...block,
-      id: `body-block-${index + 1}`,
-      ordinal: index + 1
-    }))
+function positiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
 }
 
 function extractIndexedGoogleDocBodyBlocks(
@@ -2018,12 +2985,36 @@ function limitGoogleDocBodyBlocksForPreview(blocks: GoogleDocBodyBlock[]): Googl
 
     previewBlocks.push({
       ...block,
-      text: block.text.slice(0, remainingTextLength)
+      text: Array.from(block.text).slice(0, remainingTextLength).join(''),
+      ...(block.runs
+        ? {
+            runs: sliceGoogleDocTextRunsForPreview(block.runs, 0, remainingTextLength)
+          }
+        : {})
     })
     break
   }
 
   return previewBlocks
+}
+
+function sliceGoogleDocTextRunsForPreview(
+  runs: NonNullable<GoogleDocBodyBlock['runs']>,
+  start: number,
+  length: number
+): NonNullable<GoogleDocBodyBlock['runs']> {
+  let offset = 0
+  let remaining = length
+  return runs.flatMap((run) => {
+    const points = Array.from(run.text)
+    const runStart = Math.max(0, start - offset)
+    const available = points.length - runStart
+    const take = Math.min(available, remaining)
+    offset += points.length
+    if (take <= 0 || remaining <= 0) return []
+    remaining -= take
+    return [{ ...run, text: points.slice(runStart, runStart + take).join('') }]
+  })
 }
 
 function extractParagraphTextRuns(value: unknown): Array<{
@@ -2069,7 +3060,76 @@ function resolveGoogleDocsEditOperation(
     }
   }
 
+  if (operation.type === 'insert_list' && operation.placement === 'document_end') {
+    const text = `\n${operation.items.join('\n')}`
+    return {
+      insertionIndex: appendInsertionIndex,
+      items: operation.items,
+      listRangeEndIndex: appendInsertionIndex + text.length + 1,
+      listRangeStartIndex: appendInsertionIndex + 1,
+      listType: operation.listType,
+      placement: operation.placement,
+      text,
+      type: 'insert_list'
+    }
+  }
+
+  if (operation.type === 'insert_list') {
+    return resolveGoogleDocsInsertListMatchOperation(indexedBlocks, operation)
+  }
+  if (operation.type === 'insert_table') {
+    throw new Error('Google Docs insert_table must be resolved through its staged write flow.')
+  }
   return resolveTextMatchOperation(indexedBlocks, operation)
+}
+
+function resolveGoogleDocsInsertListMatchOperation(
+  indexedBlocks: IndexedGoogleDocBodyBlock[],
+  operation: Extract<GoogleDocsEditOperation, { type: 'insert_list' }>
+): ResolvedGoogleDocsEditOperation {
+  if (operation.placement === 'document_end' || !operation.match) {
+    throw new Error('Google Docs insert_list document_end must be resolved at the body end.')
+  }
+  const matches = indexedBlocks.flatMap((block) =>
+    findBlockMatchCandidates(block, operation.match!)
+  )
+  const occurrence = operation.occurrence ?? 'last'
+  const match = selectTextMatch(matches, occurrence, operation.type)
+  if (match.matchStartIndex === null || match.matchEndIndex === null) {
+    throw new Error('Google Docs insert_list matched text in an unsupported paragraph structure.')
+  }
+  const paragraph = findContainingGoogleDocsParagraph(
+    indexedBlocks,
+    match.matchStartIndex,
+    match.matchEndIndex
+  )
+  if (!paragraph)
+    throw new Error('Google Docs insert_list matched text in an unsupported paragraph structure.')
+  const insertedText = operation.items.join('\n')
+  if (operation.placement === 'before') {
+    const text = `${insertedText}\n`
+    return {
+      insertionIndex: paragraph.startIndex,
+      items: operation.items,
+      listRangeEndIndex: paragraph.startIndex + text.length,
+      listRangeStartIndex: paragraph.startIndex,
+      listType: operation.listType,
+      placement: operation.placement,
+      text,
+      type: 'insert_list'
+    }
+  }
+  const text = `\n${insertedText}`
+  return {
+    insertionIndex: paragraph.endIndex - 1,
+    items: operation.items,
+    listRangeEndIndex: paragraph.endIndex + text.length,
+    listRangeStartIndex: paragraph.endIndex,
+    listType: operation.listType,
+    placement: operation.placement,
+    text,
+    type: 'insert_list'
+  }
 }
 
 function resolveTextMatchOperation(
@@ -2089,11 +3149,58 @@ function resolveTextMatchOperation(
     )
   }
 
+  const matchStartIndex = match.matchStartIndex
+  const matchEndIndex = match.matchEndIndex
+
   const resolvedMatch = {
     match: operation.match,
-    matchEndIndex: match.matchEndIndex,
-    matchStartIndex: match.matchStartIndex,
+    matchEndIndex,
+    matchStartIndex,
     occurrence
+  }
+
+  if (operation.type === 'format_text') {
+    return { ...resolvedMatch, style: operation.style, type: 'format_text' }
+  }
+
+  if (operation.type === 'format_paragraph') {
+    const paragraph = findContainingGoogleDocsParagraph(
+      indexedBlocks,
+      matchStartIndex,
+      matchEndIndex
+    )
+    if (!paragraph) {
+      throw new Error(
+        'Google Docs format_paragraph matched text in an unsupported paragraph structure.'
+      )
+    }
+    return {
+      match: operation.match,
+      occurrence,
+      paragraphEndIndex: paragraph.endIndex,
+      paragraphStartIndex: paragraph.startIndex,
+      style: operation.style,
+      type: 'format_paragraph'
+    }
+  }
+
+  if (operation.type === 'format_list') {
+    const paragraph = findContainingGoogleDocsParagraph(
+      indexedBlocks,
+      matchStartIndex,
+      matchEndIndex
+    )
+    if (!paragraph) {
+      throw new Error('Google Docs format_list matched text in an unsupported paragraph structure.')
+    }
+    return {
+      listType: operation.listType,
+      match: operation.match,
+      occurrence,
+      paragraphEndIndex: paragraph.endIndex,
+      paragraphStartIndex: paragraph.startIndex,
+      type: 'format_list'
+    }
   }
 
   if (operation.type === 'insert_after_text') {
@@ -2126,6 +3233,22 @@ function resolveTextMatchOperation(
     ...resolvedMatch,
     type: 'delete_text'
   }
+}
+
+function findContainingGoogleDocsParagraph(
+  indexedBlocks: IndexedGoogleDocBodyBlock[],
+  matchStartIndex: number,
+  matchEndIndex: number
+): { endIndex: number; startIndex: number } | null {
+  const paragraph = indexedBlocks.find(
+    (block) =>
+      block.startIndex !== null &&
+      block.endIndex !== null &&
+      matchStartIndex >= block.startIndex &&
+      matchEndIndex <= block.endIndex
+  )
+  if (!paragraph || paragraph.startIndex === null || paragraph.endIndex === null) return null
+  return { endIndex: paragraph.endIndex, startIndex: paragraph.startIndex }
 }
 
 function findBlockMatchCandidates(
@@ -2167,7 +3290,7 @@ function getContiguousTextStartIndex(block: IndexedGoogleDocBodyBlock): number |
 function selectTextMatch<T>(
   matches: T[],
   occurrence: GoogleDocsTextOccurrence,
-  operationType: GoogleDocsTextMatchOperation['type']
+  operationType: string
 ): T {
   const match =
     occurrence === 'first'
