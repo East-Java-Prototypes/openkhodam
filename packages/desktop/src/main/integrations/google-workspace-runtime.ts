@@ -98,6 +98,7 @@ type GoogleDocsDocumentResponse = GoogleDocsApiResponse & {
     content?: unknown[]
   }
   documentId?: string
+  lists?: Record<string, unknown>
   revisionId?: string
   title?: string
 }
@@ -691,12 +692,7 @@ export function createDriveFilesUrl(query: string, limit: number): URL {
 }
 
 export function createDocsDocumentUrl(documentId: string): URL {
-  const url = new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}`)
-  url.searchParams.set(
-    'fields',
-    'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
-  )
-  return url
+  return new URL(`${GOOGLE_DOCS_DOCUMENTS_URL}/${encodeURIComponent(documentId)}`)
 }
 
 export function createDocsBatchUpdateUrl(documentId: string): URL {
@@ -2011,7 +2007,16 @@ function toSafeGoogleDocDocument(
 ): GoogleDocDocumentArtifact {
   const id =
     typeof value.documentId === 'string' && value.documentId ? value.documentId : fallbackDocumentId
-  const text = extractGoogleDocText(value)
+  const blocks = extractGoogleDocBodyBlocks(value)
+  const text = blocks
+    .map((block) => block.text)
+    .join('')
+    .trimEnd()
+  const unsupportedTableCount = new Set(
+    blocks.flatMap((block) =>
+      block.location?.kind === 'unsupportedTable' ? [block.location.tableIndex] : []
+    )
+  ).size
   return {
     type: 'google.doc.document',
     id,
@@ -2020,54 +2025,224 @@ function toSafeGoogleDocDocument(
     text,
     link: createGoogleDocLink(id),
     body: {
-      blocks: extractGoogleDocBodyBlocks(value)
+      blocks
+    },
+    coverage: {
+      richText: true,
+      headings: true,
+      lists: true,
+      checkboxes: true,
+      simpleTables: true,
+      mergedOrIrregularTables: false,
+      images: false,
+      extraTabs: false,
+      firstTabOnly: true,
+      unsupportedTablePresent: unsupportedTableCount > 0,
+      unsupportedTableCount
     }
   }
 }
 
-function extractGoogleDocText(document: GoogleDocsDocumentResponse): string {
-  const content = Array.isArray(document.body?.content) ? document.body.content : []
-  return content
-    .flatMap((block) => extractParagraphText(block))
-    .join('')
-    .trimEnd()
-}
-
-function extractParagraphText(value: unknown): string[] {
-  if (!value || typeof value !== 'object') return []
-  const paragraph = (value as Record<string, unknown>).paragraph
-  if (!paragraph || typeof paragraph !== 'object') return []
-  const elements = (paragraph as Record<string, unknown>).elements
-  if (!Array.isArray(elements)) return []
-  return elements.flatMap((element) => {
-    if (!element || typeof element !== 'object') return []
-    const textRun = (element as Record<string, unknown>).textRun
-    if (!textRun || typeof textRun !== 'object') return []
-    const text = (textRun as Record<string, unknown>).content
-    return typeof text === 'string' ? [text] : []
-  })
-}
-
 function extractGoogleDocBodyBlocks(document: GoogleDocsDocumentResponse): GoogleDocBodyBlock[] {
   const content = Array.isArray(document.body?.content) ? document.body.content : []
-  return content.flatMap((block, index) => {
-    if (!block || typeof block !== 'object') return []
+  const blocks: GoogleDocBodyBlock[] = []
+  let tableIndex = 0
+  for (const entry of content) {
+    if (!isRecord(entry)) continue
+    if (isRecord(entry.paragraph)) {
+      blocks.push(
+        createGoogleDocStructuredBlock(
+          entry.paragraph,
+          blocks.length + 1,
+          {
+            kind: 'body',
+            startIndex: finiteNumberOrNull(entry.startIndex),
+            endIndex: finiteNumberOrNull(entry.endIndex)
+          },
+          document
+        )
+      )
+      continue
+    }
+    if (!isRecord(entry.table)) continue
+    tableIndex += 1
+    const table = entry.table
+    const rows = Array.isArray(table.tableRows) ? table.tableRows : []
+    const rowCount = finiteNumberOrNull(table.rows)
+    const columnCount = finiteNumberOrNull(table.columns)
+    const simple =
+      rowCount !== null &&
+      columnCount !== null &&
+      rows.length === rowCount &&
+      rows.every(
+        (row) =>
+          isRecord(row) &&
+          Array.isArray(row.tableCells) &&
+          row.tableCells.length === columnCount &&
+          row.tableCells.every((cell) => isRecord(cell) && isSimpleGoogleDocTableCell(cell))
+      )
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex]
+      if (!isRecord(row) || !Array.isArray(row.tableCells)) continue
+      for (let columnIndex = 0; columnIndex < row.tableCells.length; columnIndex += 1) {
+        const cell = row.tableCells[columnIndex]
+        if (!isRecord(cell)) continue
+        const cellContent = Array.isArray(cell.content) ? cell.content : []
+        for (const cellEntry of cellContent) {
+          if (!isRecord(cellEntry) || !isRecord(cellEntry.paragraph)) continue
+          blocks.push(
+            createGoogleDocStructuredBlock(
+              cellEntry.paragraph,
+              blocks.length + 1,
+              simple
+                ? {
+                    kind: 'tableCell',
+                    tableIndex,
+                    rowIndex,
+                    columnIndex,
+                    rowSpan: 1,
+                    columnSpan: 1
+                  }
+                : { kind: 'unsupportedTable', tableIndex, reason: 'mergedOrIrregular' },
+              document
+            )
+          )
+        }
+      }
+    }
+  }
+  return blocks
+}
 
-    const entry = block as Record<string, unknown>
-    const paragraph = entry.paragraph
-    if (!paragraph || typeof paragraph !== 'object') return []
+function isSimpleGoogleDocTableCell(cell: Record<string, unknown>): boolean {
+  const style = isRecord(cell.tableCellStyle) ? cell.tableCellStyle : {}
+  const rowSpan = finiteNumberOrNull(style.rowSpan) ?? 1
+  const columnSpan = finiteNumberOrNull(style.columnSpan) ?? 1
+  return rowSpan === 1 && columnSpan === 1
+}
 
-    const textRuns = extractParagraphTextRuns(paragraph)
-    const text = textRuns.map((run) => run.text).join('')
+function createGoogleDocStructuredBlock(
+  paragraph: Record<string, unknown>,
+  ordinal: number,
+  location: GoogleDocBodyBlock['location'],
+  document: GoogleDocsDocumentResponse
+): GoogleDocBodyBlock {
+  const runs = extractGoogleDocStructuredRuns(paragraph)
+  const bullet = isRecord(paragraph.bullet) ? paragraph.bullet : null
+  return {
+    id: `body-block-${ordinal}`,
+    ordinal,
+    type: 'paragraph',
+    text: runs.map((run) => run.text).join(''),
+    runs,
+    paragraphStyle: extractGoogleDocParagraphStyle(paragraph.paragraphStyle),
+    ...(bullet ? { list: extractGoogleDocListMetadata(bullet, document.lists) } : {}),
+    ...(location ? { location } : {})
+  }
+}
+
+function extractGoogleDocStructuredRuns(
+  paragraph: Record<string, unknown>
+): NonNullable<GoogleDocBodyBlock['runs']> {
+  const elements = Array.isArray(paragraph.elements) ? paragraph.elements : []
+  return elements.flatMap((element) => {
+    if (
+      !isRecord(element) ||
+      !isRecord(element.textRun) ||
+      typeof element.textRun.content !== 'string'
+    )
+      return []
+    const style = isRecord(element.textRun.textStyle) ? element.textRun.textStyle : {}
     return [
       {
-        id: `body-block-${index + 1}`,
-        ordinal: index + 1,
-        type: 'paragraph' as const,
-        text
+        text: element.textRun.content,
+        bold: style.bold === true,
+        italic: style.italic === true,
+        underline: style.underline === true,
+        strikethrough: style.strikethrough === true,
+        fontFamily:
+          isRecord(style.weightedFontFamily) &&
+          typeof style.weightedFontFamily.fontFamily === 'string'
+            ? style.weightedFontFamily.fontFamily
+            : null,
+        fontSize: isRecord(style.fontSize) ? finiteNumberOrNull(style.fontSize.magnitude) : null,
+        foregroundColor: extractGoogleDocColor(style.foregroundColor),
+        backgroundColor: extractGoogleDocColor(style.backgroundColor),
+        link: isRecord(style.link) && typeof style.link.url === 'string' ? style.link.url : null
       }
     ]
   })
+}
+
+function extractGoogleDocColor(value: unknown): string | null {
+  const rgb =
+    isRecord(value) && isRecord(value.color) && isRecord(value.color.rgbColor)
+      ? value.color.rgbColor
+      : null
+  if (!rgb) return null
+  const channel = (name: string) =>
+    Math.round(Math.max(0, Math.min(1, typeof rgb[name] === 'number' ? rgb[name] : 0)) * 255)
+      .toString(16)
+      .padStart(2, '0')
+      .toUpperCase()
+  return `#${channel('red')}${channel('green')}${channel('blue')}`
+}
+
+function extractGoogleDocParagraphStyle(
+  value: unknown
+): NonNullable<GoogleDocBodyBlock['paragraphStyle']> {
+  const style = isRecord(value) ? value : {}
+  const magnitude = (name: string) =>
+    isRecord(style[name]) ? Math.max(0, finiteNumberOrNull(style[name].magnitude) ?? 0) : null
+  return {
+    namedStyleType: typeof style.namedStyleType === 'string' ? style.namedStyleType : null,
+    alignment: typeof style.alignment === 'string' ? style.alignment : null,
+    lineSpacing: finiteNumberOrNull(style.lineSpacing),
+    spaceAbove: magnitude('spaceAbove'),
+    spaceBelow: magnitude('spaceBelow')
+  }
+}
+
+function extractGoogleDocListMetadata(
+  bullet: Record<string, unknown>,
+  lists: Record<string, unknown> | undefined
+): NonNullable<GoogleDocBodyBlock['list']> {
+  const id = typeof bullet.listId === 'string' ? bullet.listId : ''
+  const nestingLevel = Math.max(0, finiteNumberOrNull(bullet.nestingLevel) ?? 0)
+  const list = id && isRecord(lists?.[id]) ? lists[id] : null
+  const listProperties = list && isRecord(list.listProperties) ? list.listProperties : null
+  const nestingLevels =
+    listProperties && Array.isArray(listProperties.nestingLevels)
+      ? listProperties.nestingLevels
+      : []
+  const glyph = isRecord(nestingLevels[nestingLevel]) ? nestingLevels[nestingLevel] : {}
+  const glyphType = typeof glyph.glyphType === 'string' ? glyph.glyphType : null
+  const glyphSymbol = typeof glyph.glyphSymbol === 'string' ? glyph.glyphSymbol : null
+  const marker = glyphSymbol ?? glyphType ?? ''
+  const checked = /^(☑|✓)$/u.test(marker) ? true : /^(☐|❏)$/u.test(marker) ? false : undefined
+  const kind =
+    checked !== undefined
+      ? 'checkbox'
+      : isGoogleDocsNumberedGlyphType(glyphType)
+        ? 'numbered'
+        : glyphSymbol !== null
+          ? 'bullet'
+          : 'unknown'
+  return {
+    id,
+    nestingLevel,
+    kind,
+    glyphType,
+    glyphSymbol,
+    ...(checked === undefined ? {} : { checked })
+  }
+}
+
+function isGoogleDocsNumberedGlyphType(glyphType: string | null): boolean {
+  if (!glyphType) return false
+  return /(?:^|_)(?:ZERO_)?DECIMAL(?:_ZERO)?$|(?:^|_)ALPHA$|(?:^|_)UPPER_ALPHA$|(?:^|_)ROMAN$|(?:^|_)UPPER_ROMAN$/u.test(
+    glyphType
+  )
 }
 
 function extractIndexedGoogleDocBodyBlocks(
@@ -2111,7 +2286,7 @@ function limitGoogleDocBodyBlocksForPreview(blocks: GoogleDocBodyBlock[]): Googl
 
     previewBlocks.push({
       ...block,
-      text: block.text.slice(0, remainingTextLength)
+      ...sliceGoogleDocBlock(block, 0, remainingTextLength)
     })
     break
   }
@@ -2149,7 +2324,10 @@ function pageGoogleDocBodyBlocks(
 
     const count = Math.min(available, remainingCharacters)
     const text = characters.slice(0, count).join('')
-    page.push({ ...block, text })
+    page.push({
+      ...block,
+      ...sliceGoogleDocBlock(block, characterIndex, characterIndex + text.length)
+    })
     remainingCharacters -= count
     if (count < available) {
       return { blocks: page, next: { block: blockIndex, character: characterIndex + text.length } }
@@ -2202,12 +2380,15 @@ function getGoogleDocNormalizedText(blocks: GoogleDocBodyBlock[]): string {
 }
 
 function createGoogleDocSeekIdentity(document: GoogleDocDocumentArtifact): string {
-  return document.revision ?? stableGoogleDocTextIdentity(document.body.blocks)
+  return document.revision ?? stableGoogleDocTextIdentity(document.body.blocks, document.coverage)
 }
 
-function stableGoogleDocTextIdentity(blocks: GoogleDocBodyBlock[]): string {
+function stableGoogleDocTextIdentity(
+  blocks: GoogleDocBodyBlock[],
+  coverage: GoogleDocDocumentArtifact['coverage']
+): string {
   const hash = createHash('sha256')
-  for (const block of blocks) hash.update(`${block.id}\u0000${block.text}\u0001`, 'utf8')
+  hash.update(JSON.stringify({ blocks, coverage }), 'utf8')
   return `content-${hash.digest('base64url')}`
 }
 
@@ -2218,7 +2399,7 @@ function createGoogleDocSeek(input: {
   identity: string
   textOffset: number
 }): string {
-  return Buffer.from(JSON.stringify({ v: 3, ...input }), 'utf8').toString('base64url')
+  return Buffer.from(JSON.stringify({ v: 4, ...input }), 'utf8').toString('base64url')
 }
 
 function parseGoogleDocSeek(
@@ -2244,7 +2425,7 @@ function parseGoogleDocSeek(
   const expectedKeys = ['block', 'character', 'documentId', 'identity', 'textOffset', 'v']
   if (
     Object.keys(token).sort().join(',') !== expectedKeys.join(',') ||
-    token.v !== 3 ||
+    token.v !== 4 ||
     !Number.isInteger(token.block) ||
     !Number.isInteger(token.character) ||
     !Number.isInteger(token.textOffset) ||
@@ -2277,6 +2458,27 @@ function parseGoogleDocSeek(
     )
   }
   return cursor
+}
+
+function sliceGoogleDocBlock(
+  block: GoogleDocBodyBlock,
+  start: number,
+  end: number
+): Pick<GoogleDocBodyBlock, 'text' | 'runs'> {
+  const text = block.text.slice(start, end)
+  if (!block.runs) return { text }
+  const runs: NonNullable<GoogleDocBodyBlock['runs']> = []
+  let offset = 0
+  for (const run of block.runs) {
+    const runStart = offset
+    const runEnd = offset + run.text.length
+    offset = runEnd
+    const sliceStart = Math.max(start, runStart)
+    const sliceEnd = Math.min(end, runEnd)
+    if (sliceStart >= sliceEnd) continue
+    runs.push({ ...run, text: run.text.slice(sliceStart - runStart, sliceEnd - runStart) })
+  }
+  return { text, runs }
 }
 
 function extractParagraphTextRuns(value: unknown): Array<{
