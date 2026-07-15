@@ -5,6 +5,7 @@ import type {
 } from '../integrations/google-workspace-runtime'
 import {
   createGoogleDocDocumentPreview,
+  createGoogleDocDocumentSeekPreview,
   createGoogleSheetSpreadsheetPreview,
   editGoogleDocDocument,
   editGoogleSheetSpreadsheet,
@@ -336,29 +337,76 @@ function createGoogleDriveSearchCommand(): GoogleWorkspaceCommand {
 
 function createGoogleDocsReadCommand(): GoogleWorkspaceCommand {
   return {
-    description: 'Read a Google Docs document and return a bounded artifact preview.',
+    description:
+      'Read a Google Docs document and return a bounded artifact preview. Pass the exact nextSeek returned by a prior read of the same document to continue; seek is an opaque resume token, not text search.',
     id: 'google.docs.read',
     inputSchema: {
       additionalProperties: false,
       properties: {
-        documentId: { description: 'The Google Docs document ID to read.', type: 'string' }
+        documentId: { description: 'The Google Docs document ID to read.', type: 'string' },
+        maxBlocks: {
+          default: 20,
+          description: 'Optional maximum paragraph blocks per page, from 1 to 100.',
+          maximum: 100,
+          minimum: 1,
+          type: 'number'
+        },
+        maxCharacters: {
+          default: 12000,
+          description: 'Optional maximum Unicode code points per page, from 1 to 12000.',
+          maximum: 12000,
+          minimum: 1,
+          type: 'number'
+        },
+        seek: {
+          description:
+            'Opaque resume token returned as nextSeek by google.docs.read. Pass it back exactly with the same documentId; do not use it for text search.',
+          type: 'string'
+        }
       },
       required: ['documentId'],
       type: 'object'
     },
     async execute(parsedInput, context) {
-      const input = parsedInput as { documentId: string }
+      const input = parsedInput as {
+        documentId: string
+        maxBlocks?: number
+        maxCharacters?: number
+        seek?: string
+      }
       const result = await readGoogleDocDocument({
         documentId: input.documentId,
         signal: context.abort
       })
+      const page = createGoogleDocDocumentSeekPreview(result.document, input)
       await recordReadGoogleDocArtifact(context, result.document)
-      return JSON.stringify({ document: createGoogleDocDocumentPreview(result.document) })
+      return JSON.stringify({ document: page.document, nextSeek: page.nextSeek })
     },
     parseInput(value) {
       const record = objectArg(value, 'Google Workspace command google.docs.read input')
-      rejectAdditionalProperties(record, ['documentId'], 'google.docs.read')
-      return { documentId: requiredStringArg(record.documentId, 'google.docs.read', 'documentId') }
+      rejectAdditionalProperties(
+        record,
+        ['documentId', 'maxBlocks', 'maxCharacters', 'seek'],
+        'google.docs.read'
+      )
+      return {
+        documentId: requiredStringArg(record.documentId, 'google.docs.read', 'documentId'),
+        maxBlocks: optionalBoundedIntegerArg(
+          record.maxBlocks,
+          'google.docs.read',
+          'maxBlocks',
+          1,
+          100
+        ),
+        maxCharacters: optionalBoundedIntegerArg(
+          record.maxCharacters,
+          'google.docs.read',
+          'maxCharacters',
+          1,
+          12_000
+        ),
+        seek: optionalStringArg(record.seek, 'google.docs.read', 'seek')
+      }
     }
   }
 }
@@ -812,4 +860,30 @@ function nonEmptyString(value: unknown): string | null {
 
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+function optionalStringArg(value: unknown, command: string, property: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !value) {
+    throw new Error(
+      `Google Workspace command ${command} requires ${property} to be a non-empty string.`
+    )
+  }
+  return value
+}
+
+function optionalBoundedIntegerArg(
+  value: unknown,
+  command: string,
+  property: string,
+  minimum: number,
+  maximum: number
+): number | undefined {
+  if (value === undefined) return undefined
+  if (!Number.isInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+    throw new Error(
+      `Google Workspace command ${command} requires ${property} to be an integer from ${minimum} to ${maximum}.`
+    )
+  }
+  return value as number
 }

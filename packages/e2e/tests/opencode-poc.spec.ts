@@ -1496,7 +1496,8 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
           totalBlockCount: 2,
           includedBlockCount: 2
         }
-      }
+      },
+      nextSeek: null
     })
 
     const outputText = JSON.stringify(output)
@@ -3630,7 +3631,7 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
       discovery.commands.map((command) => Object.keys(command.inputSchema.properties ?? {}))
     ).toEqual([
       ['query', 'limit'],
-      ['documentId'],
+      ['documentId', 'maxBlocks', 'maxCharacters', 'seek'],
       ['documentId', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
@@ -4088,6 +4089,466 @@ test('logs sanitized Google Docs batchUpdate failures after direct append_text e
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
     await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('paginates live Google Docs reads with stateless seek tokens', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-seek-'))
+  const configPath = join(tempRoot, 'config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documentId = 'seek-doc'
+  const blocks = ['Alpha\n', '', '😀Bravo\n', 'oversized paragraph\n', 'Charlie\n']
+  let calls = 0
+
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'seek-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    if (url.hostname !== 'docs.googleapis.com') throw new Error(`Unexpected fetch URL: ${url}`)
+    calls += 1
+    expect(url.searchParams.get('fields')).toBe(
+      'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
+    )
+    return new Response(
+      JSON.stringify({
+        body: { content: createGoogleDocParagraphs(blocks) },
+        documentId,
+        revisionId: 'seek-revision',
+        title: 'Seek Doc'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const discovery = JSON.parse(
+      await plugin.tool.google_workspace_list_commands.execute({ query: 'google.docs.read' }, {})
+    ) as {
+      commands: Array<{
+        inputSchema: { properties: Record<string, unknown>; required: string[] }
+      }>
+    }
+    expect(discovery.commands).toHaveLength(1)
+    expect(discovery.commands[0]?.inputSchema.required).toEqual(['documentId'])
+    expect(Object.keys(discovery.commands[0]?.inputSchema.properties ?? {})).toEqual([
+      'documentId',
+      'maxBlocks',
+      'maxCharacters',
+      'seek'
+    ])
+    const read = async (input: Record<string, unknown>, context: Record<string, unknown> = {}) =>
+      JSON.parse(
+        await executeGoogleWorkspaceCommand(plugin, 'google.docs.read', input, context)
+      ) as {
+        document: {
+          body: { blocks: Array<{ text: string }> }
+          preview: { includedBlockCount: number; totalBlockCount: number }
+          text: string
+        }
+        nextSeek: string | null
+      }
+    const pages: string[] = []
+    const artifactRecords: unknown[] = []
+    const sessionRecords: unknown[] = []
+    const context = {
+      recordArtifact: async (artifact: unknown) => artifactRecords.push(artifact),
+      recordSessionArtifact: async (artifact: unknown) => sessionRecords.push(artifact)
+    }
+    let output = await read({ documentId, maxBlocks: 1, maxCharacters: 2 }, context)
+    while (true) {
+      pages.push(...output.document.body.blocks.map((block) => block.text))
+      if (!output.nextSeek) break
+      output = await read(
+        { documentId, maxBlocks: 1, maxCharacters: 2, seek: output.nextSeek },
+        context
+      )
+    }
+    expect(pages.join('')).toBe(blocks.join(''))
+    expect(calls).toBe(pages.length)
+    expect(output.document.preview).toMatchObject({ totalBlockCount: 5 })
+
+    const first = await read({ documentId, maxBlocks: 1, maxCharacters: 1 }, context)
+    await expect(read({ documentId, seek: 'not-a-token' })).rejects.toThrow('malformed')
+    const crossDocumentSeek = Buffer.from(first.nextSeek!, 'base64url')
+      .toString('utf8')
+      .replace('seek-doc', 'other-doc')
+    await expect(
+      read({ documentId, maxBlocks: 1, seek: Buffer.from(crossDocumentSeek).toString('base64url') })
+    ).rejects.toThrow('different document')
+    const token = JSON.parse(Buffer.from(first.nextSeek!, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >
+    for (const invalidToken of [
+      Buffer.from(JSON.stringify({ ...token, unexpected: true })).toString('base64url'),
+      Buffer.from(JSON.stringify({ ...token, textOffset: undefined })).toString('base64url'),
+      Buffer.from(JSON.stringify({ ...token, block: 99 })).toString('base64url')
+    ]) {
+      await expect(
+        executeGoogleWorkspaceCommand(
+          plugin,
+          'google.docs.read',
+          { documentId, maxBlocks: 1, seek: invalidToken },
+          context
+        )
+      ).rejects.toThrow(/malformed|cursor is invalid/)
+    }
+    expect(artifactRecords).toEqual([])
+    expect(sessionRecords).toEqual([])
+    await expect(read({ documentId, maxBlocks: 0 })).rejects.toThrow('integer from 1 to 100')
+    await expect(read({ documentId, maxCharacters: 12_001 })).rejects.toThrow(
+      'integer from 1 to 12000'
+    )
+    for (const invalid of [0, 101, 1.5, '1', null]) {
+      await expect(read({ documentId, maxBlocks: invalid })).rejects.toThrow(
+        'integer from 1 to 100'
+      )
+    }
+    for (const invalid of [0, 12_001, 1.5, '1', null]) {
+      await expect(read({ documentId, maxCharacters: invalid })).rejects.toThrow(
+        'integer from 1 to 12000'
+      )
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejects stale Google Docs seek tokens and handles empty live documents', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-seek-boundaries-'))
+  const configPath = join(tempRoot, 'config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  let revision = 'before'
+  let empty = false
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'seek-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        body: { content: empty ? [] : createGoogleDocParagraphs(['abcdef']) },
+        documentId: 'boundary-doc',
+        revisionId: revision,
+        title: 'Boundary Doc'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )) as typeof fetch
+
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const execute = (input: Record<string, unknown>) =>
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId: 'boundary-doc', ...input },
+        {}
+      )
+    const first = JSON.parse(await execute({ maxCharacters: 2 })) as { nextSeek: string }
+    revision = 'after'
+    await expect(execute({ maxCharacters: 2, seek: first.nextSeek })).rejects.toThrow(
+      'stale because the document changed'
+    )
+    empty = true
+    // An omitted seek stays on the legacy preview path, including empty documents.
+    const emptyPage = JSON.parse(await execute({})) as {
+      document: { body: { blocks: unknown[] }; text: string }
+      nextSeek: string | null
+    }
+    expect(emptyPage.document.body.blocks).toEqual([])
+    expect(emptyPage.document.text).toBe('')
+    expect(emptyPage.nextSeek).toBeNull()
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('preserves the legacy emoji preview boundary for the first Google Docs seek page', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-emoji-preview-'))
+  const configPath = join(tempRoot, 'config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const emoji = '😀'.repeat(6_001) + 'x'
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        body: { content: createGoogleDocParagraphs([emoji]) },
+        documentId: 'emoji-doc',
+        revisionId: 'emoji-rev'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const output = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId: 'emoji-doc' },
+        {}
+      )
+    ) as { document: { body: { blocks: Array<{ text: string }> }; text: string }; nextSeek: string }
+    // Golden master behavior: the legacy preview budgets UTF-16 string units via slice().
+    const fullText = emoji
+    const legacyText = fullText.slice(0, 12_000).trimEnd()
+    expect(output.document).toEqual({
+      body: {
+        blocks: [
+          { id: 'body-block-1', ordinal: 1, text: fullText.slice(0, 12_000), type: 'paragraph' }
+        ]
+      },
+      id: 'emoji-doc',
+      link: 'https://docs.google.com/document/d/emoji-doc/edit',
+      preview: {
+        includedBlockCount: 1,
+        totalBlockCount: 1,
+        totalTextLength: fullText.length,
+        truncated: legacyText.length < fullText.length
+      },
+      revision: 'emoji-rev',
+      text: legacyText,
+      title: null,
+      type: 'google.doc.document'
+    })
+    expect(output.nextSeek).toBeTruthy()
+    const token = JSON.parse(Buffer.from(output.nextSeek, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >
+    expect(token.textOffset).toBe(legacyText.length)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('reconstructs normalized Google Docs text across seek pages and legacy surrogate boundaries', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-seek-regressions-'))
+  const configPath = join(tempRoot, 'config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documents = new Map([
+    ['newline-doc', Array.from({ length: 21 }, () => 'A\n')],
+    ['surrogate-doc', [`A`.repeat(11_999) + '😀tail']]
+  ])
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'token',
+      expiresAt: Date.now() + 3_600_000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const documentId = readFetchedGoogleDocsDocumentId(String(input))
+    const blocks = documents.get(documentId)
+    if (!blocks) throw new Error(`Unexpected document: ${documentId}`)
+    return new Response(
+      JSON.stringify({
+        body: { content: createGoogleDocParagraphs(blocks) },
+        documentId,
+        revisionId: 'regression-rev'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const read = async (input: Record<string, unknown>) =>
+      JSON.parse(await executeGoogleWorkspaceCommand(plugin, 'google.docs.read', input, {})) as {
+        document: { text: string; body: { blocks: Array<{ text: string }> } }
+        nextSeek: string | null
+      }
+    const normalized = documents.get('newline-doc')!.join('').trimEnd()
+    let page = await read({ documentId: 'newline-doc', maxBlocks: 1, maxCharacters: 1 })
+    const texts: string[] = []
+    const raw: string[] = []
+    while (true) {
+      texts.push(page.document.text)
+      raw.push(...page.document.body.blocks.map((block) => block.text))
+      if (!page.nextSeek) break
+      page = await read({
+        documentId: 'newline-doc',
+        maxBlocks: 1,
+        maxCharacters: 1,
+        seek: page.nextSeek
+      })
+    }
+    expect(texts.join('')).toBe(normalized)
+    expect(raw.join('')).toBe(documents.get('newline-doc')!.join(''))
+
+    const legacy = await read({ documentId: 'surrogate-doc' })
+    const full = documents.get('surrogate-doc')![0]!
+    expect(legacy.document.body.blocks[0]!.text).toBe(full.slice(0, 12_000))
+    expect(legacy.document.body.blocks[0]!.text.endsWith('\ud83d')).toBe(true)
+    const token = JSON.parse(Buffer.from(legacy.nextSeek!, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >
+    expect(token).toMatchObject({ v: 3, character: 12_000, textOffset: 12_000 })
+    expect(token).not.toHaveProperty('carry')
+    const continuation = await read({ documentId: 'surrogate-doc', seek: legacy.nextSeek })
+    expect(legacy.document.text + continuation.document.text).toBe(full)
+    expect(
+      legacy.document.body.blocks.map((block) => block.text).join('') +
+        continuation.document.body.blocks.map((block) => block.text).join('')
+    ).toBe(full)
+
+    const invalidCross = Buffer.from(
+      JSON.stringify({ ...token, block: 99, documentId: 'other-doc' })
+    ).toString('base64url')
+    await expect(read({ documentId: 'surrogate-doc', seek: invalidCross })).rejects.toThrow(
+      'cursor is invalid'
+    )
+    for (const malformed of [
+      Buffer.from(JSON.stringify({ ...token, carry: 0 })).toString('base64url'),
+      Buffer.from(JSON.stringify({ ...token, textOffset: '0' })).toString('base64url'),
+      Buffer.from(JSON.stringify({ ...token, textOffset: -1 })).toString('base64url')
+    ])
+      await expect(read({ documentId: 'surrogate-doc', seek: malformed })).rejects.toThrow(
+        'malformed'
+      )
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejected Google Docs seeks do not mutate persisted artifact state', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-seek-filesystem-'))
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(tempRoot, 'config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documentId = 'filesystem-seek-doc'
+  let revision = 'before'
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'token',
+      expiresAt: Date.now() + 3_600_000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        body: { content: createGoogleDocParagraphs(['first block\n', 'second block\n']) },
+        documentId,
+        revisionId: revision,
+        title: 'Filesystem Seek Doc'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const context = {
+      directory: projectPath,
+      sessionID: 'seek-session',
+      worktree: projectPath,
+      messageID: 'seek-message'
+    }
+    const read = async (input: Record<string, unknown>) =>
+      JSON.parse(
+        await executeGoogleWorkspaceCommand(
+          plugin,
+          'google.docs.read',
+          { documentId, ...input },
+          context
+        )
+      ) as { nextSeek: string }
+    const baseline = await read({ maxBlocks: 1, maxCharacters: 1 })
+    const artifactPath = expectedGoogleDocArtifactAbsolutePath(projectPath, documentId)
+    const indexPath = join(projectPath, '.openkhodam', 'artifacts.json')
+    const snapshot = async () => ({
+      artifact: await readFile(artifactPath, 'utf8'),
+      index: await readFile(indexPath, 'utf8'),
+      files: (await readFile(indexPath, 'utf8')) && [artifactPath, indexPath]
+    })
+    const before = await snapshot()
+    const token = JSON.parse(
+      Buffer.from(baseline.nextSeek, 'base64url').toString('utf8')
+    ) as Record<string, unknown>
+    const attempts: Array<[string, RegExp]> = [
+      ['not-a-token', /malformed/],
+      [
+        Buffer.from(JSON.stringify({ ...token, documentId: 'other-doc' })).toString('base64url'),
+        /different document/
+      ],
+      [
+        Buffer.from(JSON.stringify({ ...token, block: 99 })).toString('base64url'),
+        /cursor is invalid/
+      ]
+    ]
+    for (const [seek, error] of attempts) {
+      await expect(read({ seek })).rejects.toThrow(error)
+      expect(await snapshot()).toEqual(before)
+    }
+    revision = 'after'
+    await expect(read({ seek: baseline.nextSeek })).rejects.toThrow(
+      'stale because the document changed'
+    )
+    expect(await snapshot()).toEqual(before)
+    revision = 'before'
+    await expect(read({ seek: baseline.nextSeek })).resolves.toMatchObject({ nextSeek: null })
+    expect(JSON.parse(await readFile(indexPath, 'utf8')).sessions['seek-session']).toHaveLength(1)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
   }
 })
 
