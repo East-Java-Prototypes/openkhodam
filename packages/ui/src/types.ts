@@ -104,6 +104,66 @@ export type GoogleDocBodyBlock = {
   ordinal: number
   type: 'paragraph'
   text: string
+  runs?: GoogleDocTextRun[]
+  paragraphStyle?: GoogleDocParagraphStyle
+  list?: GoogleDocListMetadata
+  location?: GoogleDocBlockLocation
+}
+
+export type GoogleDocTextRun = {
+  text: string
+  bold: boolean
+  italic: boolean
+  underline: boolean
+  strikethrough: boolean
+  fontFamily: string | null
+  fontSize: number | null
+  foregroundColor: string | null
+  backgroundColor: string | null
+  link: string | null
+}
+
+export type GoogleDocParagraphStyle = {
+  namedStyleType: string | null
+  alignment: string | null
+  lineSpacing: number | null
+  spaceAbove: number | null
+  spaceBelow: number | null
+}
+
+export type GoogleDocListMetadata = {
+  id: string
+  nestingLevel: number
+  kind: 'bullet' | 'numbered' | 'checkbox' | 'unknown'
+  glyphType: string | null
+  glyphSymbol: string | null
+  checked?: boolean
+}
+
+export type GoogleDocBlockLocation =
+  | { kind: 'body'; startIndex: number | null; endIndex: number | null }
+  | {
+      kind: 'tableCell'
+      tableIndex: number
+      rowIndex: number
+      columnIndex: number
+      rowSpan: number
+      columnSpan: number
+    }
+  | { kind: 'unsupportedTable'; tableIndex: number; reason: 'mergedOrIrregular' }
+
+export type GoogleDocCoverage = {
+  richText: true
+  headings: true
+  lists: true
+  checkboxes: true
+  simpleTables: true
+  mergedOrIrregularTables: false
+  images: false
+  extraTabs: false
+  firstTabOnly: true
+  unsupportedTablePresent: boolean
+  unsupportedTableCount: number
 }
 
 export type GoogleDocDocumentArtifact = {
@@ -116,6 +176,7 @@ export type GoogleDocDocumentArtifact = {
   body: {
     blocks: GoogleDocBodyBlock[]
   }
+  coverage?: GoogleDocCoverage
 }
 
 export type GoogleDocDocumentPreviewMetadata = {

@@ -870,14 +870,26 @@ test('persists Google Workspace artifact files with stable product paths', async
       artifactPath: expectedGoogleSheetArtifactPath(spreadsheetId),
       created: true
     })
-    expect(
-      JSON.parse(
-        await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
-      )
-    ).toMatchObject({
-      id: documentId,
-      schemaVersion: 1,
+    const persistedDocArtifact = JSON.parse(
+      await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
+    )
+    expect(persistedDocArtifact).toEqual({
+      body: {
+        blocks: [
+          {
+            id: 'body-block-1',
+            ordinal: 1,
+            text: 'Hello shared Docs\n',
+            type: 'paragraph'
+          }
+        ]
+      },
       cachedAt: 12_345,
+      id: documentId,
+      link: `https://docs.google.com/document/d/${encodeURIComponent(documentId)}/edit`,
+      revision: 'rev-1',
+      schemaVersion: 1,
+      text: 'Hello shared Docs',
       title: 'Shared Docs Artifact',
       type: 'google.doc.document'
     })
@@ -1463,10 +1475,9 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     expect(tokenParams.get('refresh_token')).toBe('refresh-token')
     expect(docsAuthorization).toBe('Bearer new-docs-access-token')
     expect(docsUrl?.pathname).toBe('/v1/documents/doc-1')
-    expect(docsUrl?.searchParams.get('fields')).toBe(
-      'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
-    )
-    expect(output).toEqual({
+    expect(docsUrl?.searchParams.has('fields')).toBe(false)
+    expect(docsUrl?.searchParams.has('includeTabsContent')).toBe(false)
+    expect(output).toMatchObject({
       document: {
         type: 'google.doc.document',
         id: 'doc-1',
@@ -1499,6 +1510,21 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
       },
       nextSeek: null
     })
+    expect(output.document).toMatchObject({
+      coverage: {
+        richText: true,
+        headings: true,
+        lists: true,
+        checkboxes: true,
+        simpleTables: true,
+        mergedOrIrregularTables: false,
+        images: false,
+        extraTabs: false,
+        firstTabOnly: true,
+        unsupportedTablePresent: false,
+        unsupportedTableCount: 0
+      }
+    })
 
     const outputText = JSON.stringify(output)
     expect(outputText).not.toContain('expired-docs-access-token')
@@ -1506,15 +1532,17 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
     expect(outputText).not.toContain('refresh-token')
     expect(outputText).not.toContain('should-not-leak')
     expect(outputText).not.toContain('owner@example.com')
-    expect(outputText).not.toContain('startIndex')
-    expect(outputText).not.toContain('endIndex')
     expect(outputText).not.toContain('textStartIndex')
     expect(outputText).not.toContain('textEndIndex')
     expect(outputText).not.toContain('markdown')
-    expect(outputText).not.toContain('101')
-    expect(outputText).not.toContain('112')
-    expect(outputText).not.toContain('212')
-    expect(outputText).not.toContain('224')
+    expect(output.document).toMatchObject({
+      body: {
+        blocks: [
+          { location: { kind: 'body', startIndex: 101, endIndex: 112 } },
+          { location: { kind: 'body', startIndex: 212, endIndex: 224 } }
+        ]
+      }
+    })
 
     const persisted = JSON.parse(await readFile(configPath, 'utf8')) as OpenKhodamConfigFixture
     expect(persisted.integrations.googleWorkspace.token?.accessToken).toBe('new-docs-access-token')
@@ -2756,10 +2784,15 @@ test('writes semantic Google Docs insert edits directly and returns a bounded re
     const outputText = JSON.stringify(output)
     expect(outputText).not.toContain('edit-access-token')
     expect(outputText).not.toContain('refresh-token')
-    expect(outputText).not.toContain('startIndex')
-    expect(outputText).not.toContain('endIndex')
     expect(outputText).not.toContain('markdown')
-    expect(outputText).not.toContain('38')
+    expect(output.document).toMatchObject({
+      body: {
+        blocks: [
+          { location: { kind: 'body', startIndex: null, endIndex: null } },
+          { location: { kind: 'body', startIndex: null, endIndex: null } }
+        ]
+      }
+    })
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
@@ -4118,9 +4151,8 @@ test('paginates live Google Docs reads with stateless seek tokens', async () => 
     const url = new URL(String(input))
     if (url.hostname !== 'docs.googleapis.com') throw new Error(`Unexpected fetch URL: ${url}`)
     calls += 1
-    expect(url.searchParams.get('fields')).toBe(
-      'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
-    )
+    expect(url.searchParams.has('fields')).toBe(false)
+    expect(url.searchParams.has('includeTabsContent')).toBe(false)
     return new Response(
       JSON.stringify({
         body: { content: createGoogleDocParagraphs(blocks) },
@@ -4331,7 +4363,7 @@ test('preserves the legacy emoji preview boundary for the first Google Docs seek
     // Golden master behavior: the legacy preview budgets UTF-16 string units via slice().
     const fullText = emoji
     const legacyText = fullText.slice(0, 12_000).trimEnd()
-    expect(output.document).toEqual({
+    expect(output.document).toMatchObject({
       body: {
         blocks: [
           { id: 'body-block-1', ordinal: 1, text: fullText.slice(0, 12_000), type: 'paragraph' }
@@ -4349,6 +4381,29 @@ test('preserves the legacy emoji preview boundary for the first Google Docs seek
       text: legacyText,
       title: null,
       type: 'google.doc.document'
+    })
+    expect(output.document).toMatchObject({
+      coverage: {
+        richText: true,
+        headings: true,
+        lists: true,
+        checkboxes: true,
+        simpleTables: true,
+        mergedOrIrregularTables: false,
+        images: false,
+        extraTabs: false,
+        firstTabOnly: true,
+        unsupportedTablePresent: false,
+        unsupportedTableCount: 0
+      },
+      body: {
+        blocks: [
+          expect.objectContaining({
+            runs: [expect.objectContaining({ text: fullText.slice(0, 12_000) })],
+            paragraphStyle: expect.any(Object)
+          })
+        ]
+      }
     })
     expect(output.nextSeek).toBeTruthy()
     const token = JSON.parse(Buffer.from(output.nextSeek, 'base64url').toString('utf8')) as Record<
@@ -4431,7 +4486,7 @@ test('reconstructs normalized Google Docs text across seek pages and legacy surr
       string,
       unknown
     >
-    expect(token).toMatchObject({ v: 3, character: 12_000, textOffset: 12_000 })
+    expect(token).toMatchObject({ v: 4, character: 12_000, textOffset: 12_000 })
     expect(token).not.toHaveProperty('carry')
     const continuation = await read({ documentId: 'surrogate-doc', seek: legacy.nextSeek })
     expect(legacy.document.text + continuation.document.text).toBe(full)
@@ -4454,6 +4509,302 @@ test('reconstructs normalized Google Docs text across seek pages and legacy surr
       await expect(read({ documentId: 'surrogate-doc', seek: malformed })).rejects.toThrow(
         'malformed'
       )
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('reads provider-shaped structured Docs content live without response masks', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-structured-'))
+  const configPath = join(tempRoot, 'config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documentId = 'structured-doc'
+  let styleVariant = 0
+  let listVariant = 0
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'token',
+      expiresAt: Date.now() + 3_600_000,
+      idToken: null,
+      refreshToken: 'refresh',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  const paragraph = (content: string, extras: Record<string, unknown> = {}) => ({
+    paragraph: {
+      elements: [{ textRun: { content, textStyle: extras.textStyle ?? {} } }],
+      ...extras
+    },
+    startIndex: 1,
+    endIndex: content.length + 1
+  })
+  const providerDocument = () => ({
+    documentId,
+    title: 'Structured',
+    lists: {
+      bullets: { listProperties: { nestingLevels: [{ glyphSymbol: '●' }, { glyphSymbol: '●' }] } },
+      numbers: {
+        listProperties: {
+          nestingLevels: [
+            { glyphType: 'BULLET' },
+            { glyphType: 'BULLET' },
+            { glyphType: listVariant === 0 ? 'DECIMAL' : 'UPPER_ROMAN' }
+          ]
+        }
+      },
+      checks: { listProperties: { nestingLevels: [{ glyphSymbol: '☑' }] } },
+      unchecked: { listProperties: { nestingLevels: [{ glyphSymbol: '☐' }] } },
+      unknown: { listProperties: { nestingLevels: [{ glyphType: 'UNSUPPORTED_GLYPH' }] } }
+    },
+    body: {
+      content: [
+        paragraph('A😀B\n', {
+          textStyle: {
+            bold: styleVariant === 0,
+            italic: false,
+            underline: true,
+            strikethrough: false,
+            weightedFontFamily: { fontFamily: 'Arial' },
+            fontSize: { magnitude: 12 },
+            foregroundColor: { color: { rgbColor: { red: 1 } } },
+            backgroundColor: { color: { rgbColor: {} } },
+            link: { url: 'https://example.test' }
+          },
+          paragraphStyle: {
+            namedStyleType: 'TITLE',
+            alignment: 'CENTER',
+            lineSpacing: 115,
+            spaceAbove: { magnitude: 0 },
+            spaceBelow: { magnitude: 0 }
+          }
+        }),
+        paragraph('bullet\n', {
+          bullet: { listId: 'bullets', nestingLevel: 1 }
+        }),
+        paragraph('number\n', {
+          bullet: { listId: 'numbers', nestingLevel: 2 }
+        }),
+        paragraph('checked\n', {
+          bullet: { listId: 'checks', nestingLevel: 0 }
+        }),
+        paragraph('unchecked\n', {
+          bullet: { listId: 'unchecked', nestingLevel: 0 }
+        }),
+        paragraph('unknown\n', { bullet: { listId: 'unknown', nestingLevel: 0 } }),
+        {
+          table: {
+            rows: 1,
+            columns: 2,
+            tableRows: [
+              {
+                tableCells: [
+                  {
+                    tableCellStyle: { rowSpan: 1, columnSpan: 1 },
+                    content: [paragraph('cell-1\n')]
+                  },
+                  {
+                    tableCellStyle: { rowSpan: 1, columnSpan: 1 },
+                    content: [paragraph('cell-2\n')]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          table: {
+            rows: 1,
+            columns: 2,
+            tableRows: [
+              {
+                tableCells: [
+                  {
+                    tableCellStyle: { rowSpan: 2, columnSpan: 1 },
+                    content: [paragraph('merged\n')]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  })
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    expect(url.searchParams.has('fields')).toBe(false)
+    expect(url.searchParams.has('includeTabsContent')).toBe(false)
+    return new Response(JSON.stringify(providerDocument()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    })
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const read = async (input: Record<string, unknown>) =>
+      JSON.parse(
+        await executeGoogleWorkspaceCommand(
+          plugin,
+          'google.docs.read',
+          { documentId, ...input },
+          {}
+        )
+      ) as {
+        document: {
+          text: string
+          body: {
+            blocks: Array<
+              Record<string, unknown> & { text: string; runs?: Array<{ text: string }> }
+            >
+          }
+          coverage: Record<string, unknown>
+        }
+        nextSeek: string | null
+      }
+    const first = await read({ maxBlocks: 1, maxCharacters: 2 })
+    expect(first.document.body.blocks[0]?.runs?.map((run) => run.text).join('')).toBe(
+      first.document.body.blocks[0]?.text
+    )
+    expect(first.document.body.blocks[0]).toMatchObject({
+      text: 'A😀',
+      runs: [
+        {
+          bold: true,
+          italic: false,
+          underline: true,
+          strikethrough: false,
+          fontFamily: 'Arial',
+          fontSize: 12,
+          foregroundColor: '#FF0000',
+          backgroundColor: '#000000',
+          link: 'https://example.test'
+        }
+      ],
+      paragraphStyle: {
+        namedStyleType: 'TITLE',
+        alignment: 'CENTER',
+        lineSpacing: 115,
+        spaceAbove: 0,
+        spaceBelow: 0
+      }
+    })
+    const pages = [first]
+    while (pages.at(-1)?.nextSeek)
+      pages.push(await read({ maxBlocks: 1, maxCharacters: 2, seek: pages.at(-1)!.nextSeek }))
+    const blocks = pages.flatMap((page) => page.document.body.blocks)
+    expect(blocks.map((block) => block.text).join('')).toBe(
+      'A😀B\nbullet\nnumber\nchecked\nunchecked\nunknown\ncell-1\ncell-2\nmerged\n'
+    )
+    for (const block of blocks)
+      if (block.runs) expect(block.runs.map((run) => run.text).join('')).toBe(block.text)
+    const reconstructed = new Map<
+      string,
+      { text: string; runs: string; source: Record<string, unknown> }
+    >()
+    for (const block of blocks) {
+      const location = JSON.stringify(block.location)
+      const key = `${block.id}:${location}`
+      const current = reconstructed.get(key) ?? { text: '', runs: '', source: block }
+      current.text += block.text
+      current.runs += block.runs?.map((run) => run.text).join('') ?? ''
+      reconstructed.set(key, current)
+    }
+    for (const value of reconstructed.values()) expect(value.runs).toBe(value.text)
+    const completeBlocks = [...reconstructed.values()].map(({ source, text }) => ({
+      ...source,
+      text
+    }))
+    expect(completeBlocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          list: {
+            id: 'bullets',
+            kind: 'bullet',
+            nestingLevel: 1,
+            glyphType: null,
+            glyphSymbol: '●'
+          }
+        }),
+        expect.objectContaining({
+          list: {
+            id: 'numbers',
+            kind: 'numbered',
+            nestingLevel: 2,
+            glyphType: 'DECIMAL',
+            glyphSymbol: null
+          }
+        }),
+        expect.objectContaining({
+          list: {
+            id: 'checks',
+            kind: 'checkbox',
+            nestingLevel: 0,
+            glyphType: null,
+            glyphSymbol: '☑',
+            checked: true
+          }
+        }),
+        expect.objectContaining({
+          list: {
+            id: 'unchecked',
+            kind: 'checkbox',
+            nestingLevel: 0,
+            glyphType: null,
+            glyphSymbol: '☐',
+            checked: false
+          }
+        }),
+        expect.objectContaining({
+          list: {
+            id: 'unknown',
+            kind: 'unknown',
+            nestingLevel: 0,
+            glyphType: 'UNSUPPORTED_GLYPH',
+            glyphSymbol: null
+          }
+        }),
+        expect.objectContaining({
+          text: 'cell-1\n',
+          location: {
+            kind: 'tableCell',
+            tableIndex: 1,
+            rowIndex: 0,
+            columnIndex: 0,
+            rowSpan: 1,
+            columnSpan: 1
+          }
+        }),
+        expect.objectContaining({
+          text: 'merged\n',
+          location: { kind: 'unsupportedTable', tableIndex: 2, reason: 'mergedOrIrregular' }
+        })
+      ])
+    )
+    expect(first.document.coverage).toMatchObject({
+      richText: true,
+      headings: true,
+      lists: true,
+      checkboxes: true,
+      simpleTables: true,
+      mergedOrIrregularTables: false,
+      firstTabOnly: true,
+      unsupportedTablePresent: true,
+      unsupportedTableCount: 1
+    })
+    const token = pages[0].nextSeek!
+    styleVariant = 1
+    await expect(read({ seek: token })).rejects.toThrow('stale')
+    expect(styleVariant).toBe(1)
+    const fresh = await read({ maxBlocks: 1, maxCharacters: 2 })
+    listVariant = 1
+    await expect(read({ seek: fresh.nextSeek! })).rejects.toThrow('stale')
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)

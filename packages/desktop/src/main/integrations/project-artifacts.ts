@@ -270,7 +270,7 @@ export class ProjectArtifactsFileStore {
     document: GoogleDocDocumentArtifact
   ): Promise<PersistGoogleDocDocumentArtifactResult> {
     return this.persistGoogleWorkspaceArtifactFile(
-      document,
+      toPersistedGoogleDocDocumentArtifact(document),
       GOOGLE_DOC_DOCUMENT_ARTIFACT_FILE_CONFIG
     )
   }
@@ -414,6 +414,27 @@ export class ProjectArtifactsFileStore {
   ): void {
     this.validateProjectDirectory()
     validateGoogleWorkspaceArtifactPath(this.projectDirectory, filePath, config)
+  }
+}
+
+function toPersistedGoogleDocDocumentArtifact(
+  document: GoogleDocDocumentArtifact
+): GoogleDocDocumentArtifact {
+  return {
+    type: document.type,
+    id: document.id,
+    title: document.title,
+    revision: document.revision,
+    text: document.text,
+    link: document.link,
+    body: {
+      blocks: document.body.blocks.map(({ id, ordinal, type, text }) => ({
+        id,
+        ordinal,
+        type,
+        text
+      }))
+    }
   }
 }
 
