@@ -4,6 +4,7 @@ import { ExternalLinkIcon, EyeIcon } from 'lucide-react'
 
 import { buttonVariants } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
 type LinkedGoogleArtifactDisplay = {
@@ -27,9 +28,13 @@ const linkedGoogleArtifactDisplays: Record<LinkedGoogleArtifactType, LinkedGoogl
   }
 
 export function ChatActionPane({
-  linkedGoogleArtifacts
+  linkedGoogleArtifacts,
+  selectedTab,
+  onSelectedTabChange
 }: {
   linkedGoogleArtifacts: LinkedGoogleArtifact[]
+  selectedTab: 'artifacts'
+  onSelectedTabChange: (tab: 'artifacts') => void
 }): JSX.Element {
   return (
     <aside
@@ -37,19 +42,36 @@ export function ChatActionPane({
       role="complementary"
       aria-label="Action pane"
     >
-      {linkedGoogleArtifacts.length > 0 ? (
-        <LinkedGoogleArtifactList linkedGoogleArtifacts={linkedGoogleArtifacts} />
-      ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
-          <div className="border border-dashed bg-background/60 p-4 text-sm text-muted-foreground">
-            <p className="font-medium text-foreground">No linked Google Workspace artifacts yet.</p>
-            <p className="mt-2 leading-6">
-              Google Docs and Sheets linked to this chat will appear here after OpenKhodam reads
-              them.
-            </p>
-          </div>
-        </div>
-      )}
+      <Tabs
+        value={selectedTab}
+        onValueChange={onSelectedTabChange}
+        className="h-full min-h-0 flex-1 gap-0 overflow-hidden"
+      >
+        <TabsList variant="line" className="w-full shrink-0 border-b px-2">
+          <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
+        </TabsList>
+        <TabsContent
+          value="artifacts"
+          keepMounted
+          className="flex min-h-0 flex-1 flex-col data-hidden:hidden"
+        >
+          {linkedGoogleArtifacts.length > 0 ? (
+            <LinkedGoogleArtifactList linkedGoogleArtifacts={linkedGoogleArtifacts} />
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+              <div className="border border-dashed bg-background/60 p-4 text-sm text-muted-foreground">
+                <p className="font-medium text-foreground">
+                  No linked Google Workspace artifacts yet.
+                </p>
+                <p className="mt-2 leading-6">
+                  Google Docs and Sheets linked to this chat will appear here after OpenKhodam reads
+                  them.
+                </p>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </aside>
   )
 }
