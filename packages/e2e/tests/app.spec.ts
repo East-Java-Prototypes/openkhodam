@@ -1273,11 +1273,21 @@ test('scrolls overflowing linked artifacts within the action pane', async ({
     await expectOpenedProjectRouteResolved(appWindow)
     await sessionChatLink(appWindow).filter({ hasText: 'Structured fixture chat' }).click()
 
+    const artifactsButton = artifactsShortcut(appWindow)
     const actionPane = chatActionPane(appWindow)
-    const artifactPanel = actionPane.getByRole('tabpanel')
+    await expect(artifactsButton).toBeVisible()
+    if ((await artifactsButton.getAttribute('aria-pressed')) !== 'true') {
+      await artifactsButton.click()
+    }
+    await expect(actionPane).toBeVisible()
+    const artifactsTab = actionPane.getByRole('tab', { name: 'Artifacts', exact: true })
+    await expect(artifactsTab).toHaveAttribute('aria-selected', 'true')
+    const artifactPanel = actionPane.getByRole('tabpanel', { name: 'Artifacts' })
     const artifactList = actionPane.getByRole('region', {
       name: 'Linked Google Workspace artifacts'
     })
+    await expect(artifactPanel).toBeVisible()
+    await expect(artifactList).toBeVisible()
     const artifactPanelBox = await elementBox(artifactPanel, 'artifacts tab panel')
     const artifactListBox = await elementBox(artifactList, 'overflowing artifact list')
     expect(artifactListBox.height).toBeLessThanOrEqual(artifactPanelBox.height + 1)
