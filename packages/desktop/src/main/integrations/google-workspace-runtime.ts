@@ -1958,24 +1958,23 @@ function extractParagraphText(value: unknown): string[] {
 
 function extractGoogleDocBodyBlocks(document: GoogleDocsDocumentResponse): GoogleDocBodyBlock[] {
   const content = Array.isArray(document.body?.content) ? document.body.content : []
-  return content.flatMap((block, index) => {
-    if (!block || typeof block !== 'object') return []
+  return content
+    .flatMap((block) => {
+      if (!block || typeof block !== 'object') return []
 
-    const entry = block as Record<string, unknown>
-    const paragraph = entry.paragraph
-    if (!paragraph || typeof paragraph !== 'object') return []
+      const entry = block as Record<string, unknown>
+      const paragraph = entry.paragraph
+      if (!paragraph || typeof paragraph !== 'object') return []
 
-    const textRuns = extractParagraphTextRuns(paragraph)
-    const text = textRuns.map((run) => run.text).join('')
-    return [
-      {
-        id: `body-block-${index + 1}`,
-        ordinal: index + 1,
-        type: 'paragraph' as const,
-        text
-      }
-    ]
-  })
+      const textRuns = extractParagraphTextRuns(paragraph)
+      const text = textRuns.map((run) => run.text).join('')
+      return [{ type: 'paragraph' as const, text }]
+    })
+    .map((block, index) => ({
+      ...block,
+      id: `body-block-${index + 1}`,
+      ordinal: index + 1
+    }))
 }
 
 function extractIndexedGoogleDocBodyBlocks(

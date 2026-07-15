@@ -8,6 +8,7 @@ import type { OpenCodeConnection, OpenCodeSidecarStatus } from '@openkhodam/ui/t
 
 import { OPENKHODAM_CONFIG_FILE_NAME } from './integrations/openkhodam-config'
 import { resolveOpenKhodamPluginPaths } from './opencode-plugin-path'
+import { resolveOpenKhodamSkillPath } from './opencode-skill-path'
 import { createSidecarEnv } from './opencode-sidecar-env'
 import { writeRuntimeOpenCodeConfig } from './opencode-runtime-config'
 
@@ -122,9 +123,16 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
     const openKhodamConfigPath = join(userDataPath, OPENKHODAM_CONFIG_FILE_NAME)
 
     let runtimeConfigPath: string
+    let managedSkillPath: string
     try {
       // Write the managed runtime config before the sidecar worker starts so
-      // OpenCode only sees the bundled plugins through OPENCODE_CONFIG.
+      // OpenCode only sees the bundled plugins and skills through OPENCODE_CONFIG.
+      managedSkillPath = resolveOpenKhodamSkillPath({
+        baseDir: __dirname,
+        dev: Boolean(process.env.ELECTRON_RENDERER_URL),
+        packaged: app.isPackaged,
+        resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+      })
       runtimeConfigPath = await writeRuntimeOpenCodeConfig(
         userDataPath,
         resolveOpenKhodamPluginPaths({
@@ -132,7 +140,8 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
           dev: Boolean(process.env.ELECTRON_RENDERER_URL),
           packaged: app.isPackaged,
           resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
-        })
+        }),
+        managedSkillPath
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -185,6 +194,7 @@ export function createOpenCodeSidecar(): OpenCodeSidecar {
         password,
         profileDir,
         runtimeConfigPath,
+        managedSkillPath,
         username
       }),
       serviceName,

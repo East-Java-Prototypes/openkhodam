@@ -198,6 +198,7 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
   const appConfigPath = join(userDataPath, 'openkhodam-config.json')
   const configStore = new OpenKhodamConfigFileStore(appConfigPath)
   const pluginPaths = ['/tmp/openkhodam-poc.mjs', '/tmp/google-workspace.mjs']
+  const skillPath = '/tmp/opencode-skills'
 
   try {
     await expect(configStore.read()).resolves.toEqual({
@@ -250,16 +251,106 @@ test('keeps app-owned and generated runtime config paths and payloads stable', a
     expect(typeof appConfig.integrations.googleWorkspace.updatedAt).toBe('number')
     expect((await stat(appConfigPath)).mode & 0o777).toBe(0o600)
 
-    const runtimeConfigPath = await writeRuntimeOpenCodeConfig(userDataPath, pluginPaths)
+    const runtimeConfigPath = await writeRuntimeOpenCodeConfig(userDataPath, pluginPaths, skillPath)
     expect(runtimeConfigPath).toBe(
       join(userDataPath, 'opencode-sidecar', 'runtime-opencode-config.json')
     )
     expect(JSON.parse(await readFile(runtimeConfigPath, 'utf8'))).toEqual(
-      createRuntimeOpenCodeConfig(pluginPaths)
+      createRuntimeOpenCodeConfig(pluginPaths, skillPath)
     )
     expect((await stat(runtimeConfigPath)).mode & 0o777).toBe(0o600)
   } finally {
     await rm(userDataPath, { recursive: true, force: true })
+  }
+})
+
+test('resolves the bundled Google Workspace artifact skill in development, built, and packaged modes', async () => {
+  const { resolveOpenKhodamSkillPath } = loadDesktopModule<{
+    resolveOpenKhodamSkillPath: (options: {
+      baseDir?: string
+      dev?: boolean
+      packaged?: boolean
+      resourcesPath?: string
+    }) => string
+  }>('../../desktop/src/main/opencode-skill-path')
+  const desktopDirectory = '/app/packages/desktop'
+
+  expect(resolveOpenKhodamSkillPath({ baseDir: desktopDirectory, dev: true })).toBe(
+    join(desktopDirectory, 'src', 'main', 'opencode-skills')
+  )
+  expect(resolveOpenKhodamSkillPath({ baseDir: join(desktopDirectory, 'out', 'main') })).toBe(
+    join(desktopDirectory, 'out', 'opencode-skills')
+  )
+  expect(
+    resolveOpenKhodamSkillPath({
+      packaged: true,
+      resourcesPath: '/app/resources'
+    })
+  ).toBe('/app/resources/opencode-skills')
+})
+
+test('bundles a valid Google Workspace artifact workflow skill', async () => {
+  const skillPath = join(
+    process.cwd(),
+    '..',
+    'desktop',
+    'src',
+    'main',
+    'opencode-skills',
+    'google-workspace-artifact-workflow',
+    'SKILL.md'
+  )
+  const skill = await readFile(skillPath, 'utf8')
+
+  expect(skill).toContain('name: google-workspace-artifact-workflow')
+  expect(skill).toContain('description:')
+  expect(skill).toContain('google.docs.read')
+  expect(skill).toContain('google.artifacts.read')
+  expect(skill).toContain('artifactRef')
+  expect(skill).toContain('nextCursor')
+  expect(skill).toContain('discard old cursors')
+  expect(skill).toContain('stale, missing, or invalid')
+  expect(skill).toContain('first tab')
+  expect(skill).toContain('paragraph')
+  expect(skill).toContain('tables are unsupported')
+})
+
+test('build emits the bundled Google Workspace artifact skill tree', async () => {
+  const sourceSkillPath = join(
+    process.cwd(),
+    '..',
+    'desktop',
+    'src',
+    'main',
+    'opencode-skills',
+    'google-workspace-artifact-workflow',
+    'SKILL.md'
+  )
+  const builtSkillPath = join(
+    process.cwd(),
+    '..',
+    'desktop',
+    'out',
+    'opencode-skills',
+    'google-workspace-artifact-workflow',
+    'SKILL.md'
+  )
+
+  expect(await readFile(builtSkillPath, 'utf8')).toBe(await readFile(sourceSkillPath, 'utf8'))
+})
+
+test('Google Workspace config hook retains project skill paths and appends the managed path once', async () => {
+  const originalManagedSkillPath = process.env.OPENKHODAM_MANAGED_SKILL_PATH
+  process.env.OPENKHODAM_MANAGED_SKILL_PATH = '/managed/skills'
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const config = { skills: { paths: ['/project/skills', '/managed/skills'] } }
+
+    plugin.config(config)
+
+    expect(config.skills.paths).toEqual(['/project/skills', '/managed/skills'])
+  } finally {
+    restoreEnv('OPENKHODAM_MANAGED_SKILL_PATH', originalManagedSkillPath)
   }
 })
 
@@ -543,7 +634,7 @@ test('gets or creates linked Google Docs while updating message provenance when 
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-get-or-create-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
-  const store = new ProjectArtifactsFileStore(projectPath)
+  const store = new ProjectArtifactsFileStore(projectPath, { now: () => 1234 })
 
   try {
     const created = await getOrCreateLinkedGoogleDoc({
@@ -955,7 +1046,7 @@ test('normalizes invalid linked-doc artifact records defensively', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-normalize-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
-  const store = new ProjectArtifactsFileStore(projectPath)
+  const store = new ProjectArtifactsFileStore(projectPath, { now: () => 1234 })
 
   try {
     await mkdir(dirname(store.filePath), { recursive: true })
@@ -1080,7 +1171,7 @@ test('rejects secret-bearing linked-doc URLs without persisting them', async () 
   const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-project-artifacts-secrets-'))
   const projectPath = join(tempRoot, 'project')
   await mkdir(projectPath, { recursive: true })
-  const store = new ProjectArtifactsFileStore(projectPath)
+  const store = new ProjectArtifactsFileStore(projectPath, { now: () => 1234 })
 
   try {
     for (const url of [
@@ -1467,6 +1558,7 @@ test('loads the Google Workspace ESM plugin and reads Google Docs artifacts safe
       'documentId,title,revisionId,body(content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))'
     )
     expect(output).toEqual({
+      artifactRef: null,
       document: {
         type: 'google.doc.document',
         id: 'doc-1',
@@ -1540,7 +1632,7 @@ test('registers exactly generic Google Workspace tools and discovers strict Shee
     'google_workspace_execute_command'
   ])
   const commands = await listGoogleWorkspaceCommands(plugin)
-  expect(commands.commands).toHaveLength(11)
+  expect(commands.commands).toHaveLength(12)
   const byId = new Map(commands.commands.map((command) => [command.id, command.inputSchema]))
   expect(byId.get('google.sheets.read')).toMatchObject({
     additionalProperties: false,
@@ -3603,19 +3695,30 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
         inputSchema: { properties?: Record<string, unknown>; required: string[] }
       }>
     }
-    expect(discovery.commands).toHaveLength(11)
+    expect(discovery.commands).toHaveLength(12)
     expect(discovery.commands.map((command) => command.id)).toEqual([
       'google.drive.search_files',
       'google.docs.read',
+      'google.artifacts.read',
       ...cases.map((item) => item.command),
       'google.sheets.read',
       'google.sheets.set_values',
       'google.sheets.append_rows',
       'google.sheets.clear_range'
     ])
+    expect(
+      discovery.commands.find((command) => command.id === 'google.docs.read')?.description
+    ).toContain('google.artifacts.read')
+    expect(
+      discovery.commands.find((command) => command.id === 'google.docs.append_text')?.description
+    ).toContain('artifactRef')
+    expect(
+      discovery.commands.find((command) => command.id === 'google.artifacts.read')?.description
+    ).toContain('nextCursor')
     expect(discovery.commands.map((command) => command.inputSchema.required)).toEqual([
       [],
       ['documentId'],
+      ['artifactRef'],
       ['documentId', 'text'],
       ['documentId', 'match', 'text'],
       ['documentId', 'match', 'text'],
@@ -3631,6 +3734,7 @@ test('discovers and executes Google Docs workspace commands with legacy-compatib
     ).toEqual([
       ['query', 'limit'],
       ['documentId'],
+      ['artifactRef', 'cursor', 'maxBlocks', 'maxCharacters'],
       ['documentId', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
       ['documentId', 'match', 'occurrence', 'text'],
@@ -4295,6 +4399,582 @@ test('bounds Google Docs read previews while persisting the full normalized arti
   } finally {
     globalThis.fetch = originalFetch
     restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('persists Google Docs reads and serves complete offline pagination without provider calls', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-artifact-read-'))
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(tempRoot, 'user-data', 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documentId = 'offline-doc'
+  const blocks = [
+    ...Array.from({ length: 25 }, (_, index) => `block-${index + 1}\n`),
+    'x'.repeat(17)
+  ]
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'offline-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  let providerCalls = 0
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    providerCalls += 1
+    const fetchedId = readFetchedGoogleDocsDocumentId(String(input))
+    if (fetchedId !== documentId) throw new Error(`Unexpected fetch URL: ${String(input)}`)
+    return new Response(
+      JSON.stringify({
+        body: { content: createGoogleDocParagraphs(blocks) },
+        documentId,
+        revisionId: 'offline-rev',
+        title: 'Offline'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const online = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId },
+        { directory: projectPath, sessionID: 'offline-session' }
+      )
+    ) as {
+      artifactRef: string
+      document: { preview: { truncated: boolean } }
+      nextAction?: { artifactRef: string; command: string; reason: string }
+    }
+    expect(online.artifactRef).toBe(
+      `google-docs:v1:${Buffer.from(documentId, 'utf8').toString('base64url')}`
+    )
+    expect(online.document.preview.truncated).toBe(true)
+    expect(online.nextAction).toEqual({
+      artifactRef: online.artifactRef,
+      command: 'google.artifacts.read',
+      reason: 'The document preview is truncated; read the cached artifact for more content.'
+    })
+    expect(providerCalls).toBe(1)
+    const stored = JSON.parse(
+      await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
+    ) as { body: { blocks: Array<{ text: string }> }; text: string }
+    expect(stored.body.blocks.map((block) => block.text).join('')).toBe(blocks.join(''))
+    expect(stored.text).toBe(blocks.join('').trimEnd())
+
+    globalThis.fetch = (async () => {
+      providerCalls += 1
+      throw new Error('offline read must not fetch')
+    }) as typeof fetch
+
+    const artifactRef = online.artifactRef
+    let cursor: string | undefined
+    let reconstructed = ''
+    let pages = 0
+    do {
+      const page = JSON.parse(
+        await executeGoogleWorkspaceCommand(
+          plugin,
+          'google.artifacts.read',
+          { artifactRef, cursor, maxBlocks: 3, maxCharacters: 8 },
+          { directory: projectPath }
+        )
+      ) as {
+        coverage: unknown
+        nextCursor: string | null
+        nextAction?: { artifactRef: string; command: string; cursor: string; reason: string }
+        returnedBlocks: Array<{ id: string; ordinal: number; text: string }>
+        totalTextLength: number
+      }
+      expect(page.coverage).toEqual({
+        firstTabOnly: true,
+        paragraphsOnly: true,
+        tablesUnsupported: true
+      })
+      if (page.nextCursor) {
+        expect(page.nextAction).toEqual({
+          artifactRef,
+          command: 'google.artifacts.read',
+          cursor: page.nextCursor,
+          reason: 'More cached artifact content remains; continue with this cursor.'
+        })
+      } else {
+        expect(page.nextAction).toBeUndefined()
+      }
+      expect(page.totalTextLength).toBe(
+        stored.body.blocks.reduce((total, block) => total + Array.from(block.text).length, 0)
+      )
+      reconstructed += page.returnedBlocks.map((block) => block.text).join('')
+      cursor = page.nextCursor ?? undefined
+      pages += 1
+    } while (cursor)
+    expect(pages).toBeGreaterThan(25)
+    expect(reconstructed).toBe(blocks.join(''))
+    expect(reconstructed).toBe(stored.body.blocks.map((block) => block.text).join(''))
+    expect(Array.from(reconstructed)).toHaveLength(
+      stored.body.blocks.reduce((total, block) => total + Array.from(block.text).length, 0)
+    )
+
+    const first = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef, maxCharacters: 5 },
+        { directory: projectPath }
+      )
+    ) as { nextCursor: string; returnedBlocks: Array<{ text: string }> }
+    const second = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef, cursor: first.nextCursor, maxCharacters: 5 },
+        { directory: projectPath }
+      )
+    ) as { returnedBlocks: Array<{ text: string }> }
+    expect(
+      first.returnedBlocks.map((block) => block.text).join('') +
+        second.returnedBlocks.map((block) => block.text).join('')
+    ).toBe('block-1\nbl')
+
+    await expect(
+      executeGoogleWorkspaceCommand(plugin, 'google.artifacts.read', { artifactRef }, {})
+    ).rejects.toThrow('requires project context')
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef, cursor: 'bad' },
+        { directory: projectPath }
+      )
+    ).rejects.toThrow('cursor is invalid')
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: '../bad' },
+        { directory: projectPath }
+      )
+    ).rejects.toThrow('artifact reference is malformed')
+    expect(providerCalls).toBe(1)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('persists contiguous paragraph blocks when provider content skips structural elements', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-artifact-ordinals-'))
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(tempRoot, 'user-data', 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documentId = 'structural-elements-doc'
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'ordinal-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  let providerCalls = 0
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    providerCalls += 1
+    if (readFetchedGoogleDocsDocumentId(String(input)) !== documentId) {
+      throw new Error(`Unexpected fetch URL: ${String(input)}`)
+    }
+    return new Response(
+      JSON.stringify({
+        body: {
+          content: [
+            createGoogleDocParagraphs(['First paragraph\n'])[0],
+            { sectionBreak: { sectionStyle: {} }, startIndex: 17, endIndex: 18 },
+            { table: { tableRows: [] }, startIndex: 18, endIndex: 19 },
+            { tableOfContents: { content: [] }, startIndex: 19, endIndex: 20 },
+            createGoogleDocParagraphs(['Second paragraph\n'])[0]
+          ]
+        },
+        documentId,
+        revisionId: 'structural-rev',
+        title: 'Structural elements'
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const online = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.read',
+        { documentId },
+        { directory: projectPath, sessionID: 'structural-session' }
+      )
+    ) as { artifactRef: string }
+    const stored = JSON.parse(
+      await readFile(expectedGoogleDocArtifactAbsolutePath(projectPath, documentId), 'utf8')
+    ) as { body: { blocks: Array<{ id: string; ordinal: number; text: string }> } }
+    expect(stored.body.blocks).toEqual([
+      { id: 'body-block-1', ordinal: 1, type: 'paragraph', text: 'First paragraph\n' },
+      { id: 'body-block-2', ordinal: 2, type: 'paragraph', text: 'Second paragraph\n' }
+    ])
+
+    globalThis.fetch = (async () => {
+      providerCalls += 1
+      throw new Error('offline artifact read must not fetch')
+    }) as typeof fetch
+    const first = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: online.artifactRef, maxBlocks: 1 },
+        { directory: projectPath }
+      )
+    ) as { nextCursor: string; returnedBlocks: Array<{ text: string }> }
+    const second = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: online.artifactRef, cursor: first.nextCursor },
+        { directory: projectPath }
+      )
+    ) as { returnedBlocks: Array<{ text: string }> }
+    expect(first.returnedBlocks.map((block) => block.text).join('')).toBe('First paragraph\n')
+    expect(second.returnedBlocks.map((block) => block.text).join('')).toBe('Second paragraph\n')
+    expect(providerCalls).toBe(1)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('returns offline artifacts after an existing Google Docs edit command persists the refreshed document', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-edit-offline-'))
+  const projectPath = join(tempRoot, 'project')
+  const configPath = join(tempRoot, 'user-data', 'openkhodam-config.json')
+  const originalFetch = globalThis.fetch
+  const originalConfigPath = process.env.OPENKHODAM_CONFIG_PATH
+  const documentId = 'edit-offline-doc'
+  const events: string[] = []
+  await mkdir(projectPath, { recursive: true })
+  await writeOpenKhodamConfig(configPath, {
+    account: { email: 'fake@example.com', name: 'Fake User' },
+    scopes: ['email', googleDocsDocumentsScope, 'openid', 'profile'],
+    token: {
+      accessToken: 'edit-offline-access-token',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      idToken: null,
+      refreshToken: 'refresh-token',
+      tokenType: 'Bearer'
+    },
+    updatedAt: Date.now()
+  })
+  process.env.OPENKHODAM_CONFIG_PATH = configPath
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes(':batchUpdate')) {
+      events.push('batchUpdate')
+      return new Response(JSON.stringify({ documentId }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    if (readFetchedGoogleDocsDocumentId(url) === documentId) {
+      events.push('documents.get')
+      return new Response(
+        JSON.stringify({
+          body: {
+            content: [
+              {
+                endIndex: 22,
+                paragraph: {
+                  elements: [{ endIndex: 22, textRun: { content: 'Persisted after edit\n' } }]
+                },
+                startIndex: 1
+              }
+            ]
+          },
+          documentId,
+          revisionId: 'after-edit',
+          title: 'Edited offline document'
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`)
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const edited = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.docs.append_text',
+        { documentId, text: ' Added' },
+        { directory: projectPath, sessionID: 'edit-offline-session' }
+      )
+    ) as {
+      artifactRef: string
+      document: { preview: { truncated: boolean } }
+      nextAction?: { artifactRef: string; command: string; reason: string }
+    }
+    expect(events).toEqual(['documents.get', 'batchUpdate', 'documents.get'])
+    expect(edited.artifactRef).toBe(
+      `google-docs:v1:${Buffer.from(documentId, 'utf8').toString('base64url')}`
+    )
+    expect(edited.document.preview.truncated).toBe(false)
+    expect(edited.nextAction).toBeUndefined()
+
+    globalThis.fetch = (async () => {
+      throw new Error('offline artifact read must not fetch after edit')
+    }) as typeof fetch
+    const offline = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: edited.artifactRef },
+        { directory: projectPath }
+      )
+    ) as { returnedBlocks: Array<{ text: string }> }
+    expect(offline.returnedBlocks.map((block) => block.text).join('')).toBe(
+      'Persisted after edit\n'
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv('OPENKHODAM_CONFIG_PATH', originalConfigPath)
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('validates Google Docs offline artifact cursor and cache failure contracts without network access', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-offline-errors-'))
+  const projectPath = join(tempRoot, 'project')
+  const originalFetch = globalThis.fetch
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
+  )
+  const ref = (id: string) => `google-docs:v1:${Buffer.from(id, 'utf8').toString('base64url')}`
+  const valid = (id: string, blocks: string[]) => ({
+    type: 'google.doc.document' as const,
+    id,
+    title: id,
+    revision: 'rev',
+    link: null,
+    text: blocks.join('').trimEnd(),
+    body: {
+      blocks: blocks.map((text, index) => ({
+        id: `body-block-${index + 1}`,
+        ordinal: index,
+        type: 'paragraph' as const,
+        text
+      }))
+    }
+  })
+  await mkdir(projectPath, { recursive: true })
+  const store = new ProjectArtifactsFileStore(projectPath, { now: () => 1234 })
+  await store.persistGoogleDocDocumentArtifact(valid('cursor-doc', ['A😀B', '', 'C']))
+  await store.persistGoogleDocDocumentArtifact(valid('other-doc', ['Other']))
+  await store.persistGoogleDocDocumentArtifact(valid('empty-doc', []))
+  globalThis.fetch = (async () => {
+    throw new Error('offline success and failure paths must not fetch')
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    const first = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: ref('cursor-doc'), maxCharacters: 2 },
+        { directory: projectPath }
+      )
+    ) as { nextCursor: string; returnedBlocks: Array<{ text: string }> }
+    expect(first.returnedBlocks.map((block) => block.text).join('')).toBe('A😀')
+    const second = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: ref('cursor-doc'), cursor: first.nextCursor, maxCharacters: 2 },
+        { directory: projectPath }
+      )
+    ) as { returnedBlocks: Array<{ id: string; ordinal: number; text: string }> }
+    expect(second.returnedBlocks).toEqual([
+      { id: 'body-block-1', ordinal: 0, type: 'paragraph', text: 'B' },
+      { id: 'body-block-2', ordinal: 1, type: 'paragraph', text: '' },
+      { id: 'body-block-3', ordinal: 2, type: 'paragraph', text: 'C' }
+    ])
+    const empty = JSON.parse(
+      await executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: ref('empty-doc') },
+        { directory: projectPath }
+      )
+    ) as { nextCursor: string | null; returnedBlocks: unknown[]; totalTextLength: number }
+    expect(empty).toMatchObject({ nextCursor: null, returnedBlocks: [], totalTextLength: 0 })
+
+    const cursor = first.nextCursor
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: ref('other-doc'), cursor },
+        { directory: projectPath }
+      )
+    ).rejects.toThrow('cursor is stale')
+    const beforeRefresh = await store.readGoogleDocDocumentArtifact(ref('cursor-doc'))
+    await store.persistGoogleDocDocumentArtifact(valid('cursor-doc', ['Changed']))
+    const afterRefresh = await store.readGoogleDocDocumentArtifact(ref('cursor-doc'))
+    expect(beforeRefresh.document.cachedAt).toBe(afterRefresh.document.cachedAt)
+    expect(beforeRefresh.snapshotId).not.toBe(afterRefresh.snapshotId)
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: ref('cursor-doc'), cursor },
+        { directory: projectPath }
+      )
+    ).rejects.toThrow('cursor is stale')
+
+    for (const decoded of [
+      { artifactRef: ref('cursor-doc'), snapshotId: 'x', block: 9, character: 0 },
+      { artifactRef: ref('cursor-doc'), snapshotId: 'x', block: 0, character: 7 },
+      { artifactRef: ref('cursor-doc'), snapshotId: 'x', block: 0, character: 99 }
+    ]) {
+      const current = await store.readGoogleDocDocumentArtifact(ref('cursor-doc'))
+      decoded.snapshotId = current.snapshotId
+      await expect(
+        executeGoogleWorkspaceCommand(
+          plugin,
+          'google.artifacts.read',
+          {
+            artifactRef: ref('cursor-doc'),
+            cursor: Buffer.from(JSON.stringify(decoded), 'utf8').toString('base64url')
+          },
+          { directory: projectPath }
+        )
+      ).rejects.toThrow('cursor is invalid')
+    }
+
+    const cachePath = expectedGoogleDocArtifactAbsolutePath(projectPath, 'cursor-doc')
+    const originalPayload = await readFile(cachePath, 'utf8')
+    const cases: Array<[string, unknown, RegExp]> = [
+      ['corrupt JSON', '{', /cache is corrupt/],
+      [
+        'unsupported schema',
+        { ...JSON.parse(originalPayload), schemaVersion: 2 },
+        /unsupported schema/
+      ],
+      [
+        'wrong type',
+        { ...JSON.parse(originalPayload), type: 'google.sheet.spreadsheet' },
+        /wrong payload type/
+      ],
+      ['missing ID', { ...JSON.parse(originalPayload), id: '' }, /invalid document ID or body/],
+      [
+        'mismatched ID',
+        { ...JSON.parse(originalPayload), id: 'different' },
+        /reference does not match/
+      ],
+      [
+        'inconsistent text',
+        { ...JSON.parse(originalPayload), text: 'wrong' },
+        /text is inconsistent/
+      ]
+    ]
+    for (const [, payload, expected] of cases) {
+      await writeFile(
+        cachePath,
+        typeof payload === 'string' ? payload : JSON.stringify(payload),
+        'utf8'
+      )
+      await expect(
+        executeGoogleWorkspaceCommand(
+          plugin,
+          'google.artifacts.read',
+          { artifactRef: ref('cursor-doc') },
+          { directory: projectPath }
+        )
+      ).rejects.toThrow(expected)
+    }
+    await writeFile(cachePath, originalPayload, 'utf8')
+    await rm(cachePath)
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef: ref('cursor-doc') },
+        { directory: projectPath }
+      )
+    ).rejects.toThrow('cache is missing')
+  } finally {
+    globalThis.fetch = originalFetch
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejects symlinked Google Docs artifact cache paths during offline reads', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openkhodam-google-docs-offline-symlink-'))
+  const projectPath = join(tempRoot, 'project')
+  const outsidePath = join(tempRoot, 'outside')
+  const originalFetch = globalThis.fetch
+  const { ProjectArtifactsFileStore } = loadDesktopModule<ProjectArtifactsModule>(
+    '../../desktop/src/main/integrations/project-artifacts'
+  )
+  const documentId = 'symlink-doc'
+  const artifactRef = `google-docs:v1:${Buffer.from(documentId, 'utf8').toString('base64url')}`
+  await mkdir(projectPath, { recursive: true })
+  await mkdir(outsidePath, { recursive: true })
+  const store = new ProjectArtifactsFileStore(projectPath)
+  await store.persistGoogleDocDocumentArtifact({
+    type: 'google.doc.document',
+    id: documentId,
+    title: 'Symlink test',
+    revision: 'rev',
+    link: null,
+    text: 'outside secret',
+    body: {
+      blocks: [{ id: 'body-block-1', ordinal: 0, type: 'paragraph', text: 'outside secret' }]
+    }
+  })
+  const artifactPath = expectedGoogleDocArtifactAbsolutePath(projectPath, documentId)
+  const outsideArtifactPath = join(outsidePath, 'artifact.json')
+  await writeFile(outsideArtifactPath, await readFile(artifactPath, 'utf8'), 'utf8')
+  await rm(artifactPath)
+  await symlink(outsideArtifactPath, artifactPath, 'file')
+  globalThis.fetch = (async () => {
+    throw new Error('offline symlink rejection must not fetch')
+  }) as typeof fetch
+  try {
+    const plugin = await loadGoogleWorkspacePlugin()
+    await expect(
+      executeGoogleWorkspaceCommand(
+        plugin,
+        'google.artifacts.read',
+        { artifactRef },
+        { directory: projectPath }
+      )
+    ).rejects.toThrow(/must not be a symlink/)
+    await expect(readFile(outsideArtifactPath, 'utf8')).resolves.toContain('outside secret')
+  } finally {
+    globalThis.fetch = originalFetch
     await rm(tempRoot, { recursive: true, force: true })
   }
 })
