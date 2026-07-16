@@ -4,12 +4,15 @@ import type {
   GoogleSheetSpreadsheetArtifact
 } from '../integrations/google-workspace-runtime'
 import {
-  createGoogleDocDocumentPreview,
   createGoogleDocDocumentSeekPreview,
   createGoogleSheetSpreadsheetPreview,
   editGoogleDocDocument,
   editGoogleSheetSpreadsheet,
   type GoogleDocsEditOperation,
+  type GoogleDocsListPlacement,
+  type GoogleDocsListType,
+  type GoogleDocsParagraphStyle,
+  type GoogleDocsTextStyle,
   type GoogleDocsTextOccurrence,
   type GoogleSheetsEditOperation,
   type GoogleSheetsValueInputOption,
@@ -207,6 +210,30 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
     operationType: 'delete_text',
     required: ['documentId', 'match']
   }),
+  createGoogleDocsFormatCommand({
+    description: 'Format a matching text occurrence in a Google Docs document.',
+    id: 'google.docs.format_text',
+    operationType: 'format_text'
+  }),
+  createGoogleDocsFormatCommand({
+    description:
+      'Format the paragraph containing a matching text occurrence in a Google Docs document.',
+    id: 'google.docs.format_paragraph',
+    operationType: 'format_paragraph'
+  }),
+  createGoogleDocsListCommand({
+    description:
+      'Insert isolated native list paragraphs before, after, or at the end of a Google Docs document.',
+    id: 'google.docs.insert_list',
+    operationType: 'insert_list'
+  }),
+  createGoogleDocsTableCommand(),
+  createGoogleDocsListCommand({
+    description:
+      'Format only the paragraph containing a matching text occurrence as a native Google Docs list.',
+    id: 'google.docs.format_list',
+    operationType: 'format_list'
+  }),
   createGoogleSheetsReadCommand(),
   createGoogleSheetsEditCommand({
     description: 'Set 2D values in a Google Sheets A1 range.',
@@ -226,6 +253,243 @@ const GOOGLE_WORKSPACE_COMMANDS: GoogleWorkspaceCommand[] = [
     operationType: 'clear_range'
   })
 ]
+
+function createGoogleDocsTableCommand(): GoogleWorkspaceCommand {
+  const id = 'google.docs.insert_table'
+  return {
+    description:
+      'Insert a simple native Google Docs table before, after, or at the end of a Google Docs document.',
+    id,
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        documentId: { description: 'The Google Docs document ID to edit.', type: 'string' },
+        match: { description: 'Text in the paragraph to target.', type: 'string' },
+        occurrence: {
+          description:
+            'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+          type: ['number', 'string']
+        },
+        placement: { enum: ['before', 'after', 'document_end'], type: 'string' },
+        rows: {
+          items: {
+            items: { maxLength: 2000, type: 'string' },
+            maxItems: 100,
+            minItems: 1,
+            type: 'array'
+          },
+          maxItems: 100,
+          minItems: 1,
+          type: 'array'
+        }
+      },
+      required: ['documentId', 'placement', 'rows'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${id} input`)
+      rejectAdditionalProperties(
+        record,
+        ['documentId', 'match', 'occurrence', 'placement', 'rows'],
+        id,
+        options?.rejectUndefinedProperties
+      )
+      const documentId = requiredStringArg(record.documentId, id, 'documentId')
+      const placement = listPlacementArg(record.placement, id)
+      const hasMatch = record.match !== undefined
+      const hasOccurrence = record.occurrence !== undefined
+      if (placement === 'document_end' && (hasMatch || hasOccurrence)) {
+        throw new Error(
+          `Google Workspace command ${id} does not accept match or occurrence for document_end.`
+        )
+      }
+      if (placement !== 'document_end' && !hasMatch) {
+        throw new Error(`Google Workspace command ${id} requires match for ${placement}.`)
+      }
+      if (!Array.isArray(record.rows) || record.rows.length === 0 || record.rows.length > 100) {
+        throw new Error(
+          `Google Workspace command ${id} requires rows as a non-empty array of at most 100 rows.`
+        )
+      }
+      const rows = record.rows as unknown[]
+      let columnCount: number | null = null
+      let totalLength = 0
+      for (const row of rows) {
+        if (!Array.isArray(row) || row.length === 0 || row.length > 100) {
+          throw new Error(
+            `Google Workspace command ${id} requires non-empty rows of at most 100 strings.`
+          )
+        }
+        if (columnCount === null) columnCount = row.length
+        if (row.length !== columnCount)
+          throw new Error(`Google Workspace command ${id} requires rectangular rows.`)
+        for (const cell of row) {
+          if (typeof cell !== 'string' || cell.length > 2000 || /[\r\n]/.test(cell)) {
+            throw new Error(
+              `Google Workspace command ${id} requires single-line string cells of at most 2000 characters.`
+            )
+          }
+          totalLength += cell.length
+        }
+      }
+      if (totalLength > 20_000)
+        throw new Error(
+          `Google Workspace command ${id} cell text must be at most 20000 characters.`
+        )
+      return {
+        documentId,
+        operation: {
+          ...(placement === 'document_end'
+            ? {}
+            : {
+                match: requiredStringArg(record.match, id, 'match'),
+                occurrence: occurrenceArg(record.occurrence)
+              }),
+          placement,
+          rows: rows as string[][],
+          type: 'insert_table'
+        }
+      }
+    }
+  }
+}
+
+function createGoogleDocsListCommand(input: {
+  description: string
+  id: string
+  operationType: 'insert_list' | 'format_list'
+}): GoogleWorkspaceCommand {
+  const isInsert = input.operationType === 'insert_list'
+  const properties: Record<string, unknown> = {
+    documentId: { description: 'The Google Docs document ID to edit.', type: 'string' },
+    listType: { enum: ['bullet', 'numbered', 'checkbox'], type: 'string' },
+    match: { description: 'Text in the paragraph to target.', type: 'string' },
+    occurrence: {
+      description: 'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+      type: ['number', 'string']
+    }
+  }
+  if (isInsert) {
+    properties.items = {
+      items: { maxLength: 2000, minLength: 1, type: 'string' },
+      maxItems: 100,
+      minItems: 1,
+      type: 'array'
+    }
+    properties.placement = { enum: ['before', 'after', 'document_end'], type: 'string' }
+  }
+  const allowed = Object.keys(properties)
+  return {
+    ...input,
+    inputSchema: {
+      additionalProperties: false,
+      properties,
+      required: isInsert
+        ? ['documentId', 'items', 'listType', 'placement']
+        : ['documentId', 'match', 'listType'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${input.id} input`)
+      rejectAdditionalProperties(record, allowed, input.id, options?.rejectUndefinedProperties)
+      const documentId = requiredStringArg(record.documentId, input.id, 'documentId')
+      const listType = listTypeArg(record.listType, input.id)
+      const occurrence = occurrenceArg(record.occurrence)
+      if (!isInsert) {
+        return {
+          documentId,
+          operation: {
+            listType,
+            match: requiredStringArg(record.match, input.id, 'match'),
+            occurrence,
+            type: 'format_list'
+          }
+        }
+      }
+      const placement = listPlacementArg(record.placement, input.id)
+      const hasMatch = record.match !== undefined
+      const hasOccurrence = record.occurrence !== undefined
+      if (placement === 'document_end' && (hasMatch || hasOccurrence)) {
+        throw new Error(
+          `Google Workspace command ${input.id} does not accept match or occurrence for document_end.`
+        )
+      }
+      if (placement !== 'document_end' && !hasMatch) {
+        throw new Error(`Google Workspace command ${input.id} requires match for ${placement}.`)
+      }
+      return {
+        documentId,
+        operation: {
+          items: listItemsArg(record.items, input.id),
+          listType,
+          ...(placement === 'document_end'
+            ? {}
+            : { match: requiredStringArg(record.match, input.id, 'match'), occurrence }),
+          placement,
+          type: 'insert_list'
+        }
+      }
+    }
+  }
+}
+
+function listTypeArg(value: unknown, command: string): GoogleDocsListType {
+  if (value === 'bullet' || value === 'numbered' || value === 'checkbox') return value
+  throw new Error(
+    `Google Workspace command ${command} requires listType to be bullet, numbered, or checkbox.`
+  )
+}
+
+function listPlacementArg(value: unknown, command: string): GoogleDocsListPlacement {
+  if (value === 'before' || value === 'after' || value === 'document_end') return value
+  throw new Error(
+    `Google Workspace command ${command} requires placement to be before, after, or document_end.`
+  )
+}
+
+function listItemsArg(value: unknown, command: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
+    throw new Error(
+      `Google Workspace command ${command} requires items as a non-empty array of at most 100 strings.`
+    )
+  }
+  if (
+    value.some(
+      (item) =>
+        typeof item !== 'string' ||
+        !item ||
+        item.length > 2000 ||
+        /[\r\n]/.test(item) ||
+        item.startsWith('\t')
+    )
+  ) {
+    throw new Error(
+      `Google Workspace command ${command} requires non-empty single-line items that do not start with a tab.`
+    )
+  }
+  if ((value as string[]).join('\n').length > 20_000) {
+    throw new Error(
+      `Google Workspace command ${command} item text must be at most 20000 characters.`
+    )
+  }
+  return value as string[]
+}
 
 function createGoogleDocsCommand(input: {
   description: string
@@ -280,6 +544,220 @@ function createGoogleDocsCommand(input: {
       }
     }
   }
+}
+
+function createGoogleDocsFormatCommand(input: {
+  description: string
+  id: string
+  operationType: 'format_text' | 'format_paragraph'
+}): GoogleWorkspaceCommand {
+  const styleSchema =
+    input.operationType === 'format_text'
+      ? googleDocsTextStyleSchema()
+      : googleDocsParagraphStyleSchema()
+  return {
+    ...input,
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        documentId: { description: 'The Google Docs document ID to edit.', type: 'string' },
+        match: { description: 'Text to find for match-based formatting.', type: 'string' },
+        occurrence: {
+          description:
+            'Optional match occurrence: first, last, or a 1-based number. Defaults to last.',
+          type: ['number', 'string']
+        },
+        style: styleSchema
+      },
+      required: ['documentId', 'match', 'style'],
+      type: 'object'
+    },
+    async execute(parsedInput, context) {
+      const parsed = parsedInput as { documentId: string; operation: GoogleDocsEditOperation }
+      return executeGoogleDocsEdit({
+        context,
+        documentId: parsed.documentId,
+        operation: parsed.operation
+      })
+    },
+    parseInput(value, options) {
+      const record = objectArg(value, `Google Workspace command ${input.id} input`)
+      rejectAdditionalProperties(
+        record,
+        ['documentId', 'match', 'occurrence', 'style'],
+        input.id,
+        options?.rejectUndefinedProperties
+      )
+      const documentId = requiredStringArg(record.documentId, input.id, 'documentId')
+      const match = requiredStringArg(record.match, input.id, 'match')
+      const occurrence = occurrenceArg(record.occurrence)
+      const style =
+        input.operationType === 'format_text'
+          ? parseGoogleDocsTextStyle(record.style, input.id)
+          : parseGoogleDocsParagraphStyle(record.style, input.id)
+      return {
+        documentId,
+        operation: {
+          match,
+          occurrence,
+          style,
+          type: input.operationType
+        } as GoogleDocsEditOperation
+      }
+    }
+  }
+}
+
+function googleDocsTextStyleSchema(): Record<string, unknown> {
+  return {
+    additionalProperties: false,
+    minProperties: 1,
+    properties: {
+      bold: { type: ['boolean', 'null'] },
+      italic: { type: ['boolean', 'null'] },
+      underline: { type: ['boolean', 'null'] },
+      strikethrough: { type: ['boolean', 'null'] },
+      fontFamily: { type: ['string', 'null'] },
+      fontSizePt: { exclusiveMinimum: 0, type: ['number', 'null'] },
+      foregroundColor: { pattern: '^#[0-9A-F]{6}$', type: ['string', 'null'] },
+      backgroundColor: { pattern: '^#[0-9A-F]{6}$', type: ['string', 'null'] },
+      linkUrl: { type: ['string', 'null'] }
+    },
+    type: 'object'
+  }
+}
+
+function googleDocsParagraphStyleSchema(): Record<string, unknown> {
+  return {
+    additionalProperties: false,
+    minProperties: 1,
+    properties: {
+      namedStyle: {
+        enum: [
+          'NORMAL_TEXT',
+          'TITLE',
+          'SUBTITLE',
+          'HEADING_1',
+          'HEADING_2',
+          'HEADING_3',
+          'HEADING_4',
+          'HEADING_5',
+          'HEADING_6',
+          null
+        ]
+      },
+      alignment: { enum: ['START', 'CENTER', 'END', 'JUSTIFIED', null] },
+      lineSpacingPercent: { exclusiveMinimum: 0, type: ['number', 'null'] },
+      spaceAbovePt: { minimum: 0, type: ['number', 'null'] },
+      spaceBelowPt: { minimum: 0, type: ['number', 'null'] }
+    },
+    type: 'object'
+  }
+}
+
+function parseGoogleDocsTextStyle(value: unknown, command: string): GoogleDocsTextStyle {
+  const record = objectArg(value, `Google Workspace command ${command} style`)
+  rejectAdditionalProperties(
+    record,
+    [
+      'bold',
+      'italic',
+      'underline',
+      'strikethrough',
+      'fontFamily',
+      'fontSizePt',
+      'foregroundColor',
+      'backgroundColor',
+      'linkUrl'
+    ],
+    command
+  )
+  if (!Object.keys(record).length)
+    throw new Error(`Google Workspace command ${command} requires a non-empty style.`)
+  for (const key of ['bold', 'italic', 'underline', 'strikethrough'])
+    if (record[key] !== undefined && record[key] !== null && typeof record[key] !== 'boolean')
+      throw new Error(`Google Workspace command ${command} requires ${key} to be boolean or null.`)
+  if (
+    record.fontFamily !== undefined &&
+    record.fontFamily !== null &&
+    (typeof record.fontFamily !== 'string' || !record.fontFamily.trim())
+  )
+    throw new Error(
+      `Google Workspace command ${command} requires fontFamily to be a non-empty string or null.`
+    )
+  for (const key of ['fontSizePt'] as const)
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'number' || !Number.isFinite(record[key]) || record[key] <= 0)
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be a positive number or null.`
+      )
+  for (const key of ['foregroundColor', 'backgroundColor'])
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'string' || !/^#[0-9A-F]{6}$/.test(record[key] as string))
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be canonical #RRGGBB or null.`
+      )
+  if (record.linkUrl !== undefined && record.linkUrl !== null && typeof record.linkUrl !== 'string')
+    throw new Error(`Google Workspace command ${command} requires linkUrl to be a string or null.`)
+  return record as GoogleDocsTextStyle
+}
+
+function parseGoogleDocsParagraphStyle(value: unknown, command: string): GoogleDocsParagraphStyle {
+  const record = objectArg(value, `Google Workspace command ${command} style`)
+  rejectAdditionalProperties(
+    record,
+    ['namedStyle', 'alignment', 'lineSpacingPercent', 'spaceAbovePt', 'spaceBelowPt'],
+    command
+  )
+  if (!Object.keys(record).length)
+    throw new Error(`Google Workspace command ${command} requires a non-empty style.`)
+  if (
+    record.namedStyle !== undefined &&
+    record.namedStyle !== null &&
+    ![
+      'NORMAL_TEXT',
+      'TITLE',
+      'SUBTITLE',
+      'HEADING_1',
+      'HEADING_2',
+      'HEADING_3',
+      'HEADING_4',
+      'HEADING_5',
+      'HEADING_6'
+    ].includes(record.namedStyle as string)
+  )
+    throw new Error(`Google Workspace command ${command} requires a valid namedStyle.`)
+  if (
+    record.alignment !== undefined &&
+    record.alignment !== null &&
+    !['START', 'CENTER', 'END', 'JUSTIFIED'].includes(record.alignment as string)
+  )
+    throw new Error(`Google Workspace command ${command} requires a valid alignment.`)
+  for (const key of ['lineSpacingPercent'] as const)
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'number' || !Number.isFinite(record[key]) || record[key] <= 0)
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be a positive number or null.`
+      )
+  for (const key of ['spaceAbovePt', 'spaceBelowPt'] as const)
+    if (
+      record[key] !== undefined &&
+      record[key] !== null &&
+      (typeof record[key] !== 'number' || !Number.isFinite(record[key]) || record[key] < 0)
+    )
+      throw new Error(
+        `Google Workspace command ${command} requires ${key} to be a non-negative number or null.`
+      )
+  return record as GoogleDocsParagraphStyle
 }
 
 function createGoogleDriveSearchCommand(): GoogleWorkspaceCommand {
@@ -638,10 +1116,15 @@ async function executeGoogleDocsEdit(input: {
     signal: input.context.abort
   })
   await recordReadGoogleDocArtifact(input.context, result.document)
+  const page = createGoogleDocDocumentSeekPreview(result.document, {
+    documentId: result.document.id || input.documentId
+  })
 
   return JSON.stringify({
     edit: result.edit,
-    document: createGoogleDocDocumentPreview(result.document)
+    document: page.document,
+    coverage: result.document.coverage,
+    nextSeek: page.nextSeek
   })
 }
 
